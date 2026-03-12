@@ -3,7 +3,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from jobs import job_store
 from pipeline import run_pipeline
@@ -20,33 +20,33 @@ app.add_middleware(
 )
 
 
-# --- Models ---
-
 class CharacterDef(BaseModel):
-    id: str                                    # Unique ID (user defined, e.g. "char_1")
-    description: str                           # "60 year old male politician, navy suit"
-    style: Optional[str] = "western_cartoon"  # western_cartoon | anime | pixar | comic | chibi | retro | custom
-    photo_url: Optional[str] = None           # User uploaded reference photo (optional)
+    id: str
+    description: str
+    style: Optional[str] = "western_cartoon"
+    photo_url: Optional[str] = None
 
 
 class SceneCharacter(BaseModel):
-    character_id: str                          # References CharacterDef.id
-    role: str = "silent"                       # "speaking" | "silent"
-    dialogue: Optional[str] = None            # Only if role=speaking
-    voice_id: Optional[str] = None            # Only if role=speaking
-    framing: Optional[str] = "full_body"      # full_body | half_body | close_up
+    character_id: str
+    role: str = "silent"
+    dialogue: Optional[str] = None
+    voice_id: Optional[str] = None
+    framing: Optional[str] = "full_body"
 
 
 class Scene(BaseModel):
-    scene_text: str                            # "A politician gives a speech at a podium"
-    characters: List[SceneCharacter]           # Max 14, max 2 speaking
-    aspect_ratio: Optional[str] = "16:9"      # 16:9 | 9:16 | 1:1
-    pre_dialogue_action: Optional[str] = None # "Character slams fist on table, stands up"
+    scene_text: str
+    characters: List[SceneCharacter]
+    aspect_ratio: Optional[str] = "16:9"
+    pre_dialogue_action: Optional[str] = None
 
 
 class GenerateRequest(BaseModel):
-    characters: List[CharacterDef]            # Global character definitions
-    scenes: List[Scene]                       # One or more scenes
+    characters: List[CharacterDef]
+    scenes: List[Scene]
+    resolution: Optional[Literal["480p", "720p", "1080p"]] = "720p"
+    lipsync: Optional[bool] = False  # Premium feature, extra credits
 
 
 class TTSTestRequest(BaseModel):
@@ -54,19 +54,21 @@ class TTSTestRequest(BaseModel):
     voice_id: str
 
 
-# --- Endpoints ---
-
 @app.get("/")
 async def root():
     return {
         "status": "AnimAI v3 online",
-        "pipeline": "Claude -> Gemini -> Gemini -> ElevenLabs -> Seedance -> LipSync -> FFmpeg -> R2"
+        "features": {
+            "resolutions": ["480p", "720p", "1080p"],
+            "lipsync": "optional premium feature",
+            "max_characters_per_scene": 14,
+            "max_speaking_per_scene": 2
+        }
     }
 
 
 @app.post("/generate")
 async def generate(req: GenerateRequest):
-    # Validate max 2 speaking per scene
     for i, scene in enumerate(req.scenes):
         speaking = [c for c in scene.characters if c.role == "speaking"]
         if len(speaking) > 2:
@@ -94,7 +96,9 @@ async def generate(req: GenerateRequest):
         "scenes": scenes_status,
         "final_video_url": None,
         "error": None,
-        "traceback": None
+        "traceback": None,
+        "resolution": req.resolution,
+        "lipsync": req.lipsync
     }
 
     asyncio.create_task(run_pipeline(job_id, req.model_dump()))
@@ -114,6 +118,8 @@ async def get_status(job_id: str):
         "message": job["message"],
         "scenes": job.get("scenes", []),
         "final_video_url": job.get("final_video_url"),
+        "resolution": job.get("resolution"),
+        "lipsync": job.get("lipsync"),
         "error": job.get("error"),
         "traceback": job.get("traceback")
     }
