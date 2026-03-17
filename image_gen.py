@@ -53,7 +53,7 @@ async def generate_character_image(character_prompt: str, photo_url: str = None)
 
     input_params = {
         "prompt": character_prompt,
-        "aspect_ratio": "1:1",
+        "aspect_ratio": "3:4",
         "output_format": "png"
     }
 
