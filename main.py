@@ -9,8 +9,10 @@ from jobs import job_store
 from pipeline import run_pipeline
 from tts import get_voices, generate_speech
 from lipsync import upload_audio_to_r2
+from image_gen import generate_character_image
+from prompt_generator import get_style_prompt
 
-app = FastAPI(title="AnimAI API v3")
+app = FastAPI(title="Animave API v3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,7 +48,7 @@ class GenerateRequest(BaseModel):
     characters: List[CharacterDef]
     scenes: List[Scene]
     resolution: Optional[Literal["480p", "720p", "1080p"]] = "720p"
-    lipsync: Optional[bool] = False  # Premium feature, extra credits
+    lipsync: Optional[bool] = False
 
 
 class TTSTestRequest(BaseModel):
@@ -54,10 +56,16 @@ class TTSTestRequest(BaseModel):
     voice_id: str
 
 
+class GenerateCharacterRequest(BaseModel):
+    description: str
+    style: Optional[str] = "western_cartoon"
+    photo_url: Optional[str] = None
+
+
 @app.get("/")
 async def root():
     return {
-        "status": "AnimAI v3 online",
+        "status": "Animave API v3 online",
         "features": {
             "resolutions": ["480p", "720p", "1080p"],
             "lipsync": "optional premium feature",
@@ -65,6 +73,28 @@ async def root():
             "max_speaking_per_scene": 2
         }
     }
+
+
+@app.post("/generate-character")
+async def generate_character(req: GenerateCharacterRequest):
+    """Generate a single character image and return its URL."""
+    try:
+        style_prompt = get_style_prompt(req.style or "western_cartoon")
+        full_prompt = (
+            f"{req.description}, full body, clean white background, "
+            f"{style_prompt}, high quality digital illustration"
+        )
+        char_url = await generate_character_image(
+            character_prompt=full_prompt,
+            photo_url=req.photo_url
+        )
+        return {
+            "success": True,
+            "character_image_url": char_url,
+            "character_id": f"char-{uuid.uuid4().hex[:8]}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
 
 
 @app.post("/generate")
