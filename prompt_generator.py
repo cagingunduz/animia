@@ -3,7 +3,7 @@ import anthropic
 
 STYLE_PROMPTS = {
     "western_cartoon": "2D western cartoon illustration, bold thick black outlines, flat cel-shaded colors, limited color palette, clean vector-like art style, inspired by Archer FX animated series, no photorealism, no 3D, no blur",
-    "anime":           "2D anime illustration, clean linework, vibrant colors, expressive eyes, detailed hair, inspired by modern anime series like Attack on Titan and Demon Slayer, cel-shaded, sharp edges, no photorealism",
+    "anime":           "2D anime illustration, clean linework, vibrant colors, expressive eyes, detailed hair, cel-shaded, sharp edges, no photorealism",
     "pixar":           "3D Pixar-style illustration, soft rounded shapes, warm lighting, expressive cartoon faces, smooth textures, inspired by Pixar movies, high quality 3D render",
     "comic":           "Marvel/DC comic book style, bold black ink outlines, dynamic poses, halftone shading, vivid primary colors, dramatic lighting, speech bubble ready",
     "chibi":           "Cute chibi cartoon style, oversized head, tiny body, big expressive eyes, pastel colors, simple clean lines, kawaii aesthetic",
