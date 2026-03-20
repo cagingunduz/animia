@@ -9,8 +9,8 @@ from jobs import job_store
 from pipeline import run_pipeline
 from tts import get_voices, generate_speech
 from lipsync import upload_audio_to_r2
-from image_gen import generate_character_image
-from prompt_generator import get_style_prompt
+from image_gen import generate_character_image, generate_scene_image
+from prompt_generator import get_style_prompt, generate_scene_prompts
 
 app = FastAPI(title="Animave API v3")
 
@@ -62,6 +62,21 @@ class GenerateCharacterRequest(BaseModel):
     photo_url: Optional[str] = None
 
 
+class GenerateSceneImageRequest(BaseModel):
+    scene_text: str
+    aspect_ratio: Optional[str] = "16:9"
+    characters: List[dict]  # [{id, description, style, char_url, role}]
+
+
+class GenerateSceneVideoRequest(BaseModel):
+    scene_image_url: str
+    scene_text: str
+    duration: Optional[int] = 5
+    resolution: Optional[Literal["480p", "720p", "1080p"]] = "720p"
+    characters: Optional[List[dict]] = []  # [{character_id, role, dialogue, voice_id}]
+    lipsync: Optional[bool] = False
+
+
 @app.get("/")
 async def root():
     return {
@@ -77,7 +92,6 @@ async def root():
 
 @app.post("/generate-character")
 async def generate_character(req: GenerateCharacterRequest):
-    """Generate a single character image and return its URL."""
     try:
         style_prompt = get_style_prompt(req.style or "western_cartoon")
         full_prompt = (
@@ -92,6 +106,94 @@ async def generate_character(req: GenerateCharacterRequest):
             "success": True,
             "character_image_url": char_url,
             "character_id": f"char-{uuid.uuid4().hex[:8]}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
+@app.post("/generate-scene-image")
+async def generate_scene_image_endpoint(req: GenerateSceneImageRequest):
+    """Generate a scene image with all characters placed in the scene."""
+    try:
+        # Build chars_for_prompt
+        chars_for_prompt = [
+            {
+                "id": c.get("id"),
+                "description": c.get("description", ""),
+                "style": c.get("style", "western_cartoon"),
+                "role": c.get("role", "silent"),
+                "framing": c.get("framing", "full_body")
+            }
+            for c in req.characters
+        ]
+
+        # Generate scene prompt via Claude
+        prompts = await generate_scene_prompts(
+            scene_text=req.scene_text,
+            characters=chars_for_prompt,
+            aspect_ratio=req.aspect_ratio or "16:9"
+        )
+
+        # Get character image URLs
+        char_urls = [c.get("char_url") for c in req.characters if c.get("char_url")]
+
+        # Generate scene image via Gemini
+        scene_image_url = await generate_scene_image(
+            scene_prompt=prompts["scene_prompt"],
+            character_urls=char_urls,
+            aspect_ratio=req.aspect_ratio or "16:9"
+        )
+
+        return {
+            "success": True,
+            "scene_image_url": scene_image_url,
+            "scene_prompt": prompts["scene_prompt"],
+            "movement_duration": prompts.get("movement_duration", 0)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
+@app.post("/generate-scene-video")
+async def generate_scene_video_endpoint(req: GenerateSceneVideoRequest):
+    """Animate a scene image and optionally add audio."""
+    try:
+        from video_gen import animate_scene
+        from tts import generate_speech, get_audio_duration
+        from concat import concat_clips
+        from pipeline import merge_audio_video
+        from storage import upload_final_video
+
+        speaking_chars = [c for c in (req.characters or []) if c.get("role") == "speaking"]
+
+        # Animate scene
+        speaking_duration = None
+        audio_bytes = None
+
+        if speaking_chars:
+            sc = speaking_chars[0]
+            if sc.get("dialogue") and sc.get("voice_id"):
+                audio_bytes = await generate_speech(sc["dialogue"], sc["voice_id"])
+                audio_duration = get_audio_duration(audio_bytes)
+                speaking_duration = audio_duration
+
+        video_url = await animate_scene(
+            scene_image_url=req.scene_image_url,
+            scene_description=req.scene_text,
+            duration=req.duration or 5,
+            resolution=req.resolution or "720p",
+            speaking_duration=speaking_duration
+        )
+
+        # Merge audio if exists
+        if audio_bytes:
+            video_url = await merge_audio_video(video_url, audio_bytes)
+
+        final_url = await upload_final_video(video_url)
+
+        return {
+            "success": True,
+            "video_url": final_url
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=repr(e))
