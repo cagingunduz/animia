@@ -94,14 +94,21 @@ async def root():
 async def generate_character(req: GenerateCharacterRequest):
     try:
         style_prompt = get_style_prompt(req.style or "western_cartoon")
-        full_prompt = (
-            f"{req.description}, full body, clean white background, "
-            f"{style_prompt}, high quality digital illustration"
-        )
-        char_url = await generate_character_image(
-            character_prompt=full_prompt,
-            photo_url=req.photo_url
-        )
+        if req.photo_url:
+    full_prompt = (
+        f"Keep this exact character's appearance, outfit, colors, and art style. "
+        f"Only make this specific change: {req.description}. "
+        f"Full body, clean white background, {style_prompt}"
+    )
+else:
+    full_prompt = (
+        f"{req.description}, full body, clean white background, "
+        f"{style_prompt}, high quality digital illustration"
+    )
+char_url = await generate_character_image(
+    character_prompt=full_prompt,
+    photo_url=req.photo_url
+)
         return {
             "success": True,
             "character_image_url": char_url,
