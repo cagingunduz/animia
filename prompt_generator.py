@@ -19,7 +19,7 @@ DURATION_SCENE_MAP = {
     5:  40,
     10: 80,
 }
-
+ 
 THEME_CONTEXT = {
     "true_crime":  "true crime documentary, dark and investigative tone, real-world crime reconstruction",
     "history":     "historical documentary, epic and educational tone, factual historical events",
