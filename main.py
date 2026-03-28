@@ -10,7 +10,7 @@ from pipeline import run_pipeline
 from tts import get_voices, generate_speech
 from lipsync import upload_audio_to_r2
 from image_gen import generate_character_image, generate_scene_image
-from prompt_generator import get_style_prompt, generate_scene_prompts
+from prompt_generator import get_style_prompt, generate_scene_prompts, generate_story_script
 
 app = FastAPI(title="Animave API v3")
 
@@ -65,7 +65,7 @@ class GenerateCharacterRequest(BaseModel):
 class GenerateSceneImageRequest(BaseModel):
     scene_text: str
     aspect_ratio: Optional[str] = "16:9"
-    characters: List[dict]  # [{id, description, style, char_url, role}]
+    characters: List[dict]
 
 
 class GenerateSceneVideoRequest(BaseModel):
@@ -73,8 +73,18 @@ class GenerateSceneVideoRequest(BaseModel):
     scene_text: str
     duration: Optional[int] = 5
     resolution: Optional[Literal["480p", "720p", "1080p"]] = "720p"
-    characters: Optional[List[dict]] = []  # [{character_id, role, dialogue, voice_id}]
+    characters: Optional[List[dict]] = []
     lipsync: Optional[bool] = False
+
+
+class GenerateStoryRequest(BaseModel):
+    title: str
+    genre: str
+    style: Optional[str] = "western_cartoon"
+    theme: Optional[str] = "true_crime"
+    duration_minutes: Optional[int] = 2
+    narrator_voice_id: Optional[str] = None
+    blur_faces: Optional[bool] = False
 
 
 @app.get("/")
@@ -95,20 +105,20 @@ async def generate_character(req: GenerateCharacterRequest):
     try:
         style_prompt = get_style_prompt(req.style or "western_cartoon")
         if req.photo_url:
-    full_prompt = (
-        f"Keep this exact character's appearance, outfit, colors, and art style. "
-        f"Only make this specific change: {req.description}. "
-        f"Full body, clean white background, {style_prompt}"
-    )
-else:
-    full_prompt = (
-        f"{req.description}, full body, clean white background, "
-        f"{style_prompt}, high quality digital illustration"
-    )
-char_url = await generate_character_image(
-    character_prompt=full_prompt,
-    photo_url=req.photo_url
-)
+            full_prompt = (
+                f"Keep this exact character's appearance, outfit, colors, and art style. "
+                f"Only make this specific change: {req.description}. "
+                f"Full body, clean white background, {style_prompt}"
+            )
+        else:
+            full_prompt = (
+                f"{req.description}, full body, clean white background, "
+                f"{style_prompt}, high quality digital illustration"
+            )
+        char_url = await generate_character_image(
+            character_prompt=full_prompt,
+            photo_url=req.photo_url
+        )
         return {
             "success": True,
             "character_image_url": char_url,
@@ -120,9 +130,7 @@ char_url = await generate_character_image(
 
 @app.post("/generate-scene-image")
 async def generate_scene_image_endpoint(req: GenerateSceneImageRequest):
-    """Generate a scene image with all characters placed in the scene."""
     try:
-        # Build chars_for_prompt
         chars_for_prompt = [
             {
                 "id": c.get("id"),
@@ -134,17 +142,14 @@ async def generate_scene_image_endpoint(req: GenerateSceneImageRequest):
             for c in req.characters
         ]
 
-        # Generate scene prompt via Claude
         prompts = await generate_scene_prompts(
             scene_text=req.scene_text,
             characters=chars_for_prompt,
             aspect_ratio=req.aspect_ratio or "16:9"
         )
 
-        # Get character image URLs
         char_urls = [c.get("char_url") for c in req.characters if c.get("char_url")]
 
-        # Generate scene image via Gemini
         scene_image_url = await generate_scene_image(
             scene_prompt=prompts["scene_prompt"],
             character_urls=char_urls,
@@ -163,17 +168,13 @@ async def generate_scene_image_endpoint(req: GenerateSceneImageRequest):
 
 @app.post("/generate-scene-video")
 async def generate_scene_video_endpoint(req: GenerateSceneVideoRequest):
-    """Animate a scene image and optionally add audio."""
     try:
         from video_gen import animate_scene
         from tts import generate_speech, get_audio_duration
-        from concat import concat_clips
         from pipeline import merge_audio_video
         from storage import upload_final_video
 
         speaking_chars = [c for c in (req.characters or []) if c.get("role") == "speaking"]
-
-        # Animate scene
         speaking_duration = None
         audio_bytes = None
 
@@ -192,16 +193,30 @@ async def generate_scene_video_endpoint(req: GenerateSceneVideoRequest):
             speaking_duration=speaking_duration
         )
 
-        # Merge audio if exists
         if audio_bytes:
             video_url = await merge_audio_video(video_url, audio_bytes)
 
         final_url = await upload_final_video(video_url)
 
-        return {
-            "success": True,
-            "video_url": final_url
-        }
+        return {"success": True, "video_url": final_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
+@app.post("/generate-story")
+async def generate_story(req: GenerateStoryRequest):
+    """Generate a full story script using Claude."""
+    try:
+        scenes = await generate_story_script(
+            title=req.title,
+            genre=req.genre,
+            style=req.style or "western_cartoon",
+            theme=req.theme or "true_crime",
+            duration_minutes=req.duration_minutes or 2,
+            narrator_voice_id=req.narrator_voice_id,
+            blur_faces=req.blur_faces or False,
+        )
+        return {"success": True, "scenes": scenes}
     except Exception as e:
         raise HTTPException(status_code=500, detail=repr(e))
 
@@ -218,12 +233,7 @@ async def generate(req: GenerateRequest):
 
     job_id = str(uuid.uuid4())
     scenes_status = [
-        {
-            "scene_index": i + 1,
-            "status": "queued",
-            "video_url": None,
-            "character_urls": {}
-        }
+        {"scene_index": i + 1, "status": "queued", "video_url": None, "character_urls": {}}
         for i in range(len(req.scenes))
     ]
 
