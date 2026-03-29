@@ -1,10 +1,9 @@
 import os
 import httpx
 import uuid
-import io
-import boto3
 import asyncio
 import replicate
+import boto3
 from botocore.config import Config
 
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
@@ -13,6 +12,12 @@ R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
 R2_BUCKET = os.environ.get("R2_BUCKET", "animai-videos")
 R2_PUBLIC_BASE = "https://pub-410f3488491a42f5a631e8944960bd55.r2.dev"
+
+ASPECT_RATIO_MAP = {
+    "16:9": "16:9",
+    "9:16": "9:16",
+    "1:1":  "1:1",
+}
 
 
 def get_r2_client():
@@ -44,11 +49,10 @@ def _extract_url(output) -> str:
     return str(output)
 
 
+# ─── GEMINI — 2D Animation (characters + scenes) ───
+
 async def generate_character_image(character_prompt: str, photo_url: str = None) -> str:
-    """
-    Generate character PNG on white background.
-    If photo_url provided, use as reference for likeness.
-    """
+    """Generate character PNG on white background using Gemini. Used for 2D Animation mode."""
     client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
     input_params = {
@@ -57,36 +61,31 @@ async def generate_character_image(character_prompt: str, photo_url: str = None)
         "output_format": "png"
     }
 
-    # If user provided a reference photo, add it
     if photo_url:
         input_params["image"] = photo_url
 
     loop = asyncio.get_event_loop()
-    output = await loop.run_in_executor(None, lambda: client.run("google/gemini-2.5-flash-image", input=input_params))
+    output = await loop.run_in_executor(
+        None, lambda: client.run("google/gemini-2.5-flash-image", input=input_params)
+    )
     image_url = _extract_url(output)
 
     async with httpx.AsyncClient() as http:
         resp = await http.get(image_url, timeout=60)
         resp.raise_for_status()
-        image_bytes = resp.content
 
-    return upload_to_r2(image_bytes, "characters")
+    return upload_to_r2(resp.content, "characters")
 
 
 async def generate_scene_image(
     scene_prompt: str,
-    character_urls: list,   # List of R2 URLs for character PNGs
+    character_urls: list,
     aspect_ratio: str = "16:9"
 ) -> str:
-    """
-    Generate scene image with all character references.
-    Supports up to 14 reference images (Gemini limit).
-    """
+    """Generate scene image with character references using Gemini. Used for 2D Animation mode."""
     client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
-    # Map aspect ratio to Replicate format
-    ratio_map = {"16:9": "16:9", "9:16": "9:16", "1:1": "1:1"}
-    ar = ratio_map.get(aspect_ratio, "16:9")
+    ar = ASPECT_RATIO_MAP.get(aspect_ratio, "16:9")
 
     input_params = {
         "prompt": scene_prompt,
@@ -94,23 +93,53 @@ async def generate_scene_image(
         "output_format": "png"
     }
 
-    # Add first character as primary reference
     if character_urls:
         input_params["image"] = character_urls[0]
 
-    # Add additional characters as extra references if model supports it
-    # Gemini 2.5 flash image supports multiple images via prompt context
     if len(character_urls) > 1:
         extra_refs = ", ".join([f"character reference {i+2}: {url}" for i, url in enumerate(character_urls[1:])])
         input_params["prompt"] = f"{scene_prompt}. Additional character references: {extra_refs}"
 
     loop = asyncio.get_event_loop()
-    output = await loop.run_in_executor(None, lambda: client.run("google/gemini-2.5-flash-image", input=input_params))
+    output = await loop.run_in_executor(
+        None, lambda: client.run("google/gemini-2.5-flash-image", input=input_params)
+    )
     image_url = _extract_url(output)
 
     async with httpx.AsyncClient() as http:
         resp = await http.get(image_url, timeout=60)
         resp.raise_for_status()
-        image_bytes = resp.content
 
-    return upload_to_r2(image_bytes, "scenes")
+    return upload_to_r2(resp.content, "scenes")
+
+
+# ─── GROK — 2.5D Animation (cinematic story scenes) ───
+
+async def generate_storybook_scene_image(
+    scene_prompt: str,
+    aspect_ratio: str = "9:16"
+) -> str:
+    """
+    Generate a cinematic scene image using Grok via Replicate.
+    Used for 2.5D Animation / Storybook mode.
+    """
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+
+    ar = ASPECT_RATIO_MAP.get(aspect_ratio, "9:16")
+
+    input_params = {
+        "prompt": scene_prompt,
+        "aspect_ratio": ar,
+    }
+
+    loop = asyncio.get_event_loop()
+    output = await loop.run_in_executor(
+        None, lambda: client.run("xai/grok-imagine-image", input=input_params)
+    )
+    image_url = _extract_url(output)
+
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.get(image_url, timeout=60)
+        resp.raise_for_status()
+
+    return upload_to_r2(resp.content, "storybook", ext="jpg")
