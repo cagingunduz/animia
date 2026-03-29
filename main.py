@@ -291,3 +291,11 @@ async def tts_test(req: TTSTestRequest):
         return {"audio_url": audio_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=repr(e))
+
+
+@app.get("/check-ffmpeg")
+async def check_ffmpeg():
+    import subprocess
+    result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+    return {"available": result.returncode == 0, "version": result.stdout[:100]}
+
