@@ -11,6 +11,7 @@ from tts import get_voices, generate_speech
 from lipsync import upload_audio_to_r2
 from image_gen import generate_character_image, generate_scene_image
 from prompt_generator import get_style_prompt, generate_scene_prompts, generate_story_script
+from storybook_pipeline import run_storybook_pipeline, generate_single_scene
 
 app = FastAPI(title="Animave API v3")
 
@@ -289,6 +290,61 @@ async def tts_test(req: TTSTestRequest):
         audio_bytes = await generate_speech(req.text, req.voice_id)
         audio_url = upload_audio_to_r2(audio_bytes)
         return {"audio_url": audio_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
+class GenerateStorybookRequest(BaseModel):
+    scenes: List[dict]
+    narrator_voice_id: str
+    aspect_ratio: Optional[str] = "9:16"
+    scene_duration: Optional[int] = 8
+
+
+class GenerateSingleSceneRequest(BaseModel):
+    scene_description: str
+    narrator_text: str
+    narrator_voice_id: str        # kullanıcının seçtiği ses — değiştirme
+    aspect_ratio: Optional[str] = "9:16"
+    scene_duration: Optional[int] = 8
+    ken_burns: Optional[bool] = True
+    include_narrator: Optional[bool] = True
+
+
+@app.post("/generate-storybook")
+async def generate_storybook(req: GenerateStorybookRequest):
+    job_id = str(uuid.uuid4())
+    scenes_status = [
+        {"scene_index": i + 1, "status": "queued", "video_url": None, "image_url": None}
+        for i in range(len(req.scenes))
+    ]
+    job_store[job_id] = {
+        "status": "queued", "step": 0, "total_steps": 0,
+        "message": "Kuyrukta bekleniyor...", "scenes": scenes_status,
+        "final_video_url": None, "error": None, "traceback": None,
+        "aspect_ratio": req.aspect_ratio, "lipsync": False
+    }
+    asyncio.create_task(run_storybook_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/generate-single-scene")
+async def generate_single_scene_endpoint(req: GenerateSingleSceneRequest):
+    """
+    Generate a single storybook scene: Grok image + Ken Burns/Static + Narrator.
+    Used for auto-generating scene previews in the timeline editor.
+    """
+    try:
+        result = await generate_single_scene(
+            scene_description=req.scene_description,
+            narrator_text=req.narrator_text,
+            narrator_voice_id=req.narrator_voice_id,
+            aspect_ratio=req.aspect_ratio or "9:16",
+            scene_duration=req.scene_duration or 8,
+            ken_burns=req.ken_burns if req.ken_burns is not None else True,
+            include_narrator=req.include_narrator if req.include_narrator is not None else True,
+        )
+        return {"success": True, "image_url": result["image_url"], "video_url": result["video_url"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=repr(e))
 
