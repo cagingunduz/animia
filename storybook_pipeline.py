@@ -16,7 +16,7 @@ R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
 R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
 R2_BUCKET = os.environ.get("R2_BUCKET", "animai-videos")
-R2_PUBLIC_BASE = "https://pub-410f3488491a42f5a631e8944960bd55.r2.dev"
+R2_PUBLIC_BASE = "https://assets.animave.com"
 
 
 def get_r2_client():
