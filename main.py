@@ -299,3 +299,19 @@ async def check_ffmpeg():
     result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
     return {"available": result.returncode == 0, "version": result.stdout[:100]}
 
+class GenerateStorybookSceneRequest(BaseModel):
+    scene_text: str
+    aspect_ratio: Optional[str] = "9:16"
+    characters: Optional[List[dict]] = []
+
+@app.post("/generate-storybook-scene-image")
+async def generate_storybook_scene_image_endpoint(req: GenerateStorybookSceneRequest):
+    try:
+        from image_gen import generate_storybook_scene_image
+        image_url = await generate_storybook_scene_image(
+            scene_prompt=req.scene_text,
+            aspect_ratio=req.aspect_ratio or "9:16"
+        )
+        return {"success": True, "scene_image_url": image_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
