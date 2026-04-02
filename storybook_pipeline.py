@@ -62,81 +62,43 @@ async def download_file(url: str) -> bytes:
         return resp.content
 
 
-def apply_ken_burns(image_path: str, output_path: str, duration: int = 8) -> bool:
-    """Apply Ken Burns zoom-in effect using FFmpeg."""
+def apply_ken_burns(image_path: str, output_path: str, duration: int = 8, aspect_ratio: str = "9:16") -> bool:
+    size_map = {"9:16": "1080x1920", "16:9": "1920x1080", "1:1": "1080x1080"}
+    size = size_map.get(aspect_ratio, "1080x1920")
     result = subprocess.run([
-        "ffmpeg", "-loop", "1",
-        "-i", image_path, "-y",
+        "ffmpeg", "-loop", "1", "-i", image_path, "-y",
         "-filter_complex",
-        f"[0]scale=8000:-2,setsar=1:1[out];[out]zoompan=z='zoom+0.001':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=200:s=1080x1920:fps=25[out]",
-        "-vcodec", "libx264",
-        "-map", "[out]",
-        "-pix_fmt", "yuv420p",
-        "-r", "25",
-        "-t", str(duration),
+        f"[0]scale=8000:-2,setsar=1:1[out];[out]zoompan=z='zoom+0.001':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=200:s={size}:fps=25[out]",
+        "-vcodec", "libx264", "-map", "[out]", "-pix_fmt", "yuv420p", "-r", "25", "-t", str(duration),
         output_path
     ], capture_output=True, text=True)
-
     if result.returncode != 0:
-        print(f"Ken Burns FFmpeg error: {result.stderr}")
+        print(f"Ken Burns error: {result.stderr}")
         return False
     return True
 
 
-def apply_ken_burns_16x9(image_path: str, output_path: str, duration: int = 8) -> bool:
-    """Apply Ken Burns for 16:9 format."""
+def make_static_video(image_path: str, output_path: str, duration: int = 8, aspect_ratio: str = "9:16") -> bool:
+    """Static video without Ken Burns — just image held for duration."""
+    size_map = {"9:16": "1080x1920", "16:9": "1920x1080", "1:1": "1080x1080"}
+    size = size_map.get(aspect_ratio, "1080x1920")
     result = subprocess.run([
-        "ffmpeg", "-loop", "1",
-        "-i", image_path, "-y",
-        "-filter_complex",
-        f"[0]scale=8000:-2,setsar=1:1[out];[out]zoompan=z='zoom+0.001':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=200:s=1920x1080:fps=25[out]",
-        "-vcodec", "libx264",
-        "-map", "[out]",
-        "-pix_fmt", "yuv420p",
-        "-r", "25",
-        "-t", str(duration),
+        "ffmpeg", "-loop", "1", "-i", image_path, "-y",
+        "-vf", f"scale={size}:force_original_aspect_ratio=decrease,pad={size}:(ow-iw)/2:(oh-ih)/2",
+        "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-r", "25", "-t", str(duration),
         output_path
     ], capture_output=True, text=True)
-
     if result.returncode != 0:
-        print(f"Ken Burns 16x9 FFmpeg error: {result.stderr}")
-        return False
-    return True
-
-
-def apply_ken_burns_1x1(image_path: str, output_path: str, duration: int = 8) -> bool:
-    """Apply Ken Burns for 1:1 format."""
-    result = subprocess.run([
-        "ffmpeg", "-loop", "1",
-        "-i", image_path, "-y",
-        "-filter_complex",
-        f"[0]scale=8000:-2,setsar=1:1[out];[out]zoompan=z='zoom+0.001':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=200:s=1080x1080:fps=25[out]",
-        "-vcodec", "libx264",
-        "-map", "[out]",
-        "-pix_fmt", "yuv420p",
-        "-r", "25",
-        "-t", str(duration),
-        output_path
-    ], capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print(f"Ken Burns 1x1 FFmpeg error: {result.stderr}")
+        print(f"Static video error: {result.stderr}")
         return False
     return True
 
 
 def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> bool:
-    """Merge video and audio using FFmpeg."""
     result = subprocess.run([
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        output_path
+        "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
+        "-c:v", "copy", "-c:a", "aac", "-shortest", output_path
     ], capture_output=True, text=True)
-
     if result.returncode != 0:
         print(f"FFmpeg merge error: {result.stderr}")
         return False
@@ -144,27 +106,86 @@ def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> boo
 
 
 def concat_video_files(video_paths: list, output_path: str) -> bool:
-    """Concatenate multiple video files using FFmpeg."""
     tmp = tempfile.mkdtemp()
     list_path = f"{tmp}/concat_list.txt"
-
     with open(list_path, "w") as f:
         for vp in video_paths:
             f.write(f"file '{vp}'\n")
-
     result = subprocess.run([
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", list_path,
-        "-c", "copy",
-        output_path
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c", "copy", output_path
     ], capture_output=True, text=True)
-
     if result.returncode != 0:
         print(f"FFmpeg concat error: {result.stderr}")
         return False
     return True
+
+
+async def generate_single_scene(
+    scene_description: str,
+    narrator_text: str,
+    narrator_voice_id: str,       # kullanıcının seçtiği ses — değiştirme
+    aspect_ratio: str = "9:16",
+    scene_duration: int = 8,
+    ken_burns: bool = True,
+    include_narrator: bool = True,
+) -> dict:
+    """
+    Single scene pipeline: Grok → Ken Burns/Static → Narrator → Merge → R2
+    Returns: { image_url, video_url }
+    """
+    tmp = tempfile.mkdtemp()
+    run_id = uuid.uuid4().hex[:8]
+
+    # 1. Generate image with Grok
+    image_url = await generate_storybook_scene_image(
+        scene_prompt=scene_description,
+        aspect_ratio=aspect_ratio
+    )
+
+    # 2. Download image
+    image_bytes = await download_file(image_url)
+    image_path = f"{tmp}/scene_{run_id}.jpg"
+    with open(image_path, "wb") as f:
+        f.write(image_bytes)
+
+    # 3. Apply Ken Burns or static
+    video_path = f"{tmp}/video_{run_id}.mp4"
+    if ken_burns:
+        success = apply_ken_burns(image_path, video_path, duration=scene_duration, aspect_ratio=aspect_ratio)
+    else:
+        success = make_static_video(image_path, video_path, duration=scene_duration, aspect_ratio=aspect_ratio)
+
+    if not success:
+        raise RuntimeError("Video generation failed")
+
+    # 4. Generate narrator audio and merge
+    final_video_path = video_path
+    if include_narrator and narrator_text and narrator_voice_id:
+        audio_bytes = await generate_speech(narrator_text, narrator_voice_id)
+        audio_path = f"{tmp}/audio_{run_id}.mp3"
+        with open(audio_path, "wb") as f:
+            f.write(audio_bytes)
+
+        merged_path = f"{tmp}/merged_{run_id}.mp4"
+        success = merge_video_audio(video_path, audio_path, merged_path)
+        if not success:
+            raise RuntimeError("Audio merge failed")
+        final_video_path = merged_path
+
+    # 5. Upload to R2
+    with open(final_video_path, "rb") as f:
+        video_data = f.read()
+
+    video_url = upload_bytes_to_r2(video_data, "storybook-scenes", "mp4", "video/mp4")
+
+    # Cleanup
+    for path in [image_path, video_path, final_video_path]:
+        try:
+            os.remove(path)
+        except:
+            pass
+
+    return {"image_url": image_url, "video_url": video_url}
 
 
 async def process_storybook_scene(
@@ -174,151 +195,70 @@ async def process_storybook_scene(
     total_scenes: int,
     step: int,
     total_steps: int,
-    narrator_voice_id: str,  # KULLANICININ SEÇTİĞİ SES — asla değiştirme
+    narrator_voice_id: str,
     aspect_ratio: str = "9:16",
     scene_duration: int = 8,
 ) -> str:
-    """Process a single storybook scene: Grok image + Ken Burns + narrator audio."""
-    tmp = tempfile.mkdtemp()
-    run_id = uuid.uuid4().hex[:8]
-
-    scene_description = scene.get("scene_description", "")
-    narrator_text = scene.get("narrator_text", "")
-
-    # Step 1: Generate scene image with Grok
-    step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}/{total_scenes}: Gorsel uretiliyor (Grok)...")
     set_scene_status(job_id, scene_index, "processing")
 
-    scene_image_url = await generate_storybook_scene_image(
-        scene_prompt=scene_description,
-        aspect_ratio=aspect_ratio
+    step += 1
+    log(job_id, step, total_steps, f"Sahne {scene_index}/{total_scenes}: Gorsel + video uretiliyor...")
+
+    result = await generate_single_scene(
+        scene_description=scene.get("scene_description", ""),
+        narrator_text=scene.get("narrator_text", ""),
+        narrator_voice_id=narrator_voice_id,
+        aspect_ratio=aspect_ratio,
+        scene_duration=scene_duration,
+        ken_burns=True,
+        include_narrator=True,
     )
 
-    # Download image to local temp
-    image_bytes = await download_file(scene_image_url)
-    image_path = f"{tmp}/scene_{run_id}.jpg"
-    with open(image_path, "wb") as f:
-        f.write(image_bytes)
-
-    # Step 2: Apply Ken Burns effect
-    step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}/{total_scenes}: Ken Burns efekti uygulanıyor...")
-
-    video_path = f"{tmp}/kenburns_{run_id}.mp4"
-
-    if aspect_ratio == "9:16":
-        success = apply_ken_burns(image_path, video_path, duration=scene_duration)
-    elif aspect_ratio == "16:9":
-        success = apply_ken_burns_16x9(image_path, video_path, duration=scene_duration)
-    else:  # 1:1
-        success = apply_ken_burns_1x1(image_path, video_path, duration=scene_duration)
-
-    if not success:
-        raise RuntimeError(f"Ken Burns failed for scene {scene_index}")
-
-    # Step 3: Generate narrator audio — KULLANICININ SEÇTİĞİ SES KULLANILIR
-    final_video_path = video_path
-
-    if narrator_text and narrator_voice_id:
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}/{total_scenes}: Narrator sesi uretiliyor...")
-
-        # narrator_voice_id kullanıcının seçtiği ses — kesinlikle değiştirme
-        audio_bytes = await generate_speech(narrator_text, narrator_voice_id)
-
-        audio_path = f"{tmp}/audio_{run_id}.mp3"
-        with open(audio_path, "wb") as f:
-            f.write(audio_bytes)
-
-        # Step 4: Merge video + audio
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}/{total_scenes}: Ses ve video birlestiriliyor...")
-
-        merged_path = f"{tmp}/merged_{run_id}.mp4"
-        success = merge_video_audio(video_path, audio_path, merged_path)
-
-        if not success:
-            raise RuntimeError(f"Audio merge failed for scene {scene_index}")
-
-        final_video_path = merged_path
-
-    # Upload scene video to R2
-    with open(final_video_path, "rb") as f:
-        video_data = f.read()
-
-    scene_url = upload_bytes_to_r2(video_data, "storybook-scenes", "mp4", "video/mp4")
-
-    # Update scene image URL in job store
     scenes = job_store[job_id]["scenes"]
     for s in scenes:
         if s["scene_index"] == scene_index:
-            s["image_url"] = scene_image_url
+            s["image_url"] = result["image_url"]
             break
 
-    set_scene_status(job_id, scene_index, "completed", video_url=scene_url)
-
-    # Cleanup temp files
-    for path in [image_path, video_path, final_video_path]:
-        try:
-            os.remove(path)
-        except:
-            pass
-
-    return scene_url
+    set_scene_status(job_id, scene_index, "completed", video_url=result["video_url"])
+    job_store[job_id]["step"] = step
+    return result["video_url"]
 
 
 async def run_storybook_pipeline(job_id: str, payload: dict):
-    """
-    Full 2.5D Animation pipeline:
-    For each scene: Grok image → Ken Burns → Narrator audio → Merge → Concat all → R2
-    """
     try:
         scenes_list = payload["scenes"]
-        narrator_voice_id = payload.get("narrator_voice_id")  # KULLANICININ SEÇTİĞİ SES
+        narrator_voice_id = payload.get("narrator_voice_id")
         aspect_ratio = payload.get("aspect_ratio", "9:16")
         scene_duration = payload.get("scene_duration", 8)
 
         if not narrator_voice_id:
-            raise ValueError("narrator_voice_id is required for storybook pipeline")
+            raise ValueError("narrator_voice_id is required")
 
         total_scenes = len(scenes_list)
-        # Per scene: 4 steps (image + ken burns + audio + merge)
-        total_steps = total_scenes * 4 + 1  # +1 for final concat
-
+        total_steps = total_scenes + 1
         job_store[job_id]["total_steps"] = total_steps
         step = 0
 
         scene_video_urls = []
-
         for i, scene in enumerate(scenes_list):
             scene_index = i + 1
-
             scene_url = await process_storybook_scene(
-                job_id=job_id,
-                scene=scene,
-                scene_index=scene_index,
-                total_scenes=total_scenes,
-                step=step,
-                total_steps=total_steps,
-                narrator_voice_id=narrator_voice_id,  # kullanıcının seçtiği ses
-                aspect_ratio=aspect_ratio,
-                scene_duration=scene_duration,
+                job_id=job_id, scene=scene, scene_index=scene_index,
+                total_scenes=total_scenes, step=step, total_steps=total_steps,
+                narrator_voice_id=narrator_voice_id,
+                aspect_ratio=aspect_ratio, scene_duration=scene_duration,
             )
             scene_video_urls.append(scene_url)
             step = job_store[job_id]["step"]
 
-        # Concat all scenes
         if len(scene_video_urls) == 1:
             final_url = scene_video_urls[0]
         else:
             step += 1
             log(job_id, step, total_steps, "Tüm sahneler birleştiriliyor...")
-
             tmp = tempfile.mkdtemp()
             run_id = uuid.uuid4().hex[:8]
-
-            # Download all scene videos
             local_paths = []
             for idx, url in enumerate(scene_video_urls):
                 video_bytes = await download_file(url)
@@ -328,9 +268,7 @@ async def run_storybook_pipeline(job_id: str, payload: dict):
                 local_paths.append(local_path)
 
             final_path = f"{tmp}/final_{run_id}.mp4"
-            success = concat_video_files(local_paths, final_path)
-
-            if not success:
+            if not concat_video_files(local_paths, final_path):
                 raise RuntimeError("Final concat failed")
 
             with open(final_path, "rb") as f:
@@ -338,7 +276,6 @@ async def run_storybook_pipeline(job_id: str, payload: dict):
 
             final_url = upload_bytes_to_r2(final_data, "storybook-final", "mp4", "video/mp4")
 
-            # Cleanup
             for p in local_paths + [final_path]:
                 try:
                     os.remove(p)
@@ -348,7 +285,6 @@ async def run_storybook_pipeline(job_id: str, payload: dict):
         job_store[job_id]["status"] = "completed"
         job_store[job_id]["message"] = "Tamamlandı!"
         job_store[job_id]["final_video_url"] = final_url
-        print(f"[{job_id}] Storybook pipeline tamamlandi: {final_url}")
 
     except Exception as e:
         tb = traceback.format_exc()
