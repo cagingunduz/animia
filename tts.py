@@ -8,6 +8,9 @@ def get_client():
 
 
 async def generate_speech(text: str, voice_id: str) -> bytes:
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise ValueError("ELEVENLABS_API_KEY environment variable is not set")
     client = get_client()
     audio = client.text_to_speech.convert(
         text=text,
@@ -15,6 +18,9 @@ async def generate_speech(text: str, voice_id: str) -> bytes:
         model_id="eleven_multilingual_v2",
         output_format="mp3_44100_128",
     )
+    # SDK v1.x returns bytes directly; older versions return Iterator[bytes]
+    if isinstance(audio, bytes):
+        return audio
     return b"".join(audio)
 
 

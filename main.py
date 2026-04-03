@@ -355,6 +355,12 @@ async def check_ffmpeg():
     result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
     return {"available": result.returncode == 0, "version": result.stdout[:100]}
 
+@app.get("/check-env")
+async def check_env():
+    keys = ["ELEVENLABS_API_KEY", "ANTHROPIC_API_KEY", "REPLICATE_API_TOKEN",
+            "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY", "R2_BUCKET"]
+    return {k: bool(os.environ.get(k)) for k in keys}
+
 class GenerateStorybookSceneRequest(BaseModel):
     scene_text: str
     aspect_ratio: Optional[str] = "9:16"
