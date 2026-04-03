@@ -175,7 +175,9 @@ async def generate_single_scene(
             else:
                 print(f"[WARN] Audio merge failed, returning video without audio")
         except Exception as e:
-            print(f"[WARN] TTS failed for narrator: {repr(e)}, returning video without audio")
+            status_code = getattr(e, 'status_code', None)
+            body = getattr(e, 'body', None)
+            print(f"[WARN] TTS failed for narrator: {repr(e)} | status={status_code} | body={body}")
 
     # 5. Upload to R2
     with open(final_video_path, "rb") as f:
