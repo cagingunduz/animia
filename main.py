@@ -303,8 +303,8 @@ class GenerateStorybookRequest(BaseModel):
 
 class GenerateSingleSceneRequest(BaseModel):
     scene_description: str
-    narrator_text: str
-    narrator_voice_id: str        # kullanıcının seçtiği ses — değiştirme
+    narrator_text: Optional[str] = ""
+    narrator_voice_id: Optional[str] = None
     aspect_ratio: Optional[str] = "9:16"
     scene_duration: Optional[int] = 8
     ken_burns: Optional[bool] = True

@@ -160,17 +160,22 @@ async def generate_single_scene(
 
     # 4. Generate narrator audio and merge
     final_video_path = video_path
-    if include_narrator and narrator_text and narrator_voice_id:
-        audio_bytes = await generate_speech(narrator_text, narrator_voice_id)
-        audio_path = f"{tmp}/audio_{run_id}.mp3"
-        with open(audio_path, "wb") as f:
-            f.write(audio_bytes)
+    _valid_voice = narrator_voice_id and narrator_voice_id.strip().lower() != 'none'
+    if include_narrator and narrator_text and _valid_voice:
+        try:
+            audio_bytes = await generate_speech(narrator_text, narrator_voice_id)
+            audio_path = f"{tmp}/audio_{run_id}.mp3"
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
 
-        merged_path = f"{tmp}/merged_{run_id}.mp4"
-        success = merge_video_audio(video_path, audio_path, merged_path)
-        if not success:
-            raise RuntimeError("Audio merge failed")
-        final_video_path = merged_path
+            merged_path = f"{tmp}/merged_{run_id}.mp4"
+            success = merge_video_audio(video_path, audio_path, merged_path)
+            if success:
+                final_video_path = merged_path
+            else:
+                print(f"[WARN] Audio merge failed, returning video without audio")
+        except Exception as e:
+            print(f"[WARN] TTS failed for narrator: {repr(e)}, returning video without audio")
 
     # 5. Upload to R2
     with open(final_video_path, "rb") as f:
@@ -205,8 +210,8 @@ async def process_storybook_scene(
     log(job_id, step, total_steps, f"Sahne {scene_index}/{total_scenes}: Gorsel + video uretiliyor...")
 
     result = await generate_single_scene(
-        scene_description=scene.get("scene_description", ""),
-        narrator_text=scene.get("narrator_text", ""),
+        scene_description=scene.get("scene_description") or "",
+        narrator_text=scene.get("narrator_text") or "",
         narrator_voice_id=narrator_voice_id,
         aspect_ratio=aspect_ratio,
         scene_duration=scene_duration,
