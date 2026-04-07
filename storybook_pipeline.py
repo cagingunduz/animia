@@ -156,14 +156,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
 
 
 def burn_ass_subtitles(input_path: str, ass_path: str, output_path: str) -> bool:
+    font_dir = "/usr/share/fonts/truetype/dejavu"
     result = subprocess.run([
         "ffmpeg", "-y", "-i", input_path,
-        "-vf", f"ass={ass_path}",
+        "-vf", f"ass={ass_path}:fontsdir={font_dir}",
         "-c:a", "copy", output_path
     ], capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"FFmpeg ASS burn error: {result.stderr}")
+        print(f"[ERROR] FFmpeg ASS burn failed (rc={result.returncode}):\n{result.stderr[-2000:]}")
         return False
+    print(f"[OK] ASS subtitles burned successfully")
     return True
 
 
@@ -246,12 +248,15 @@ async def generate_single_scene(
     # 5. Burn subtitles (Whisper word-level timestamps → CapCut-style ASS)
     if include_subtitles and audio_bytes:
         try:
+            print(f"[SUB] Getting word timestamps from Whisper...")
             word_timestamps = await get_word_timestamps(audio_bytes)
+            print(f"[SUB] Got {len(word_timestamps)} word timestamps")
             if word_timestamps:
                 ass_content = build_ass(word_timestamps, aspect_ratio=aspect_ratio)
                 ass_path = f"{tmp}/subs_{run_id}.ass"
                 with open(ass_path, "w", encoding="utf-8") as f:
                     f.write(ass_content)
+                print(f"[SUB] ASS file written: {ass_path}")
                 subtitled_path = f"{tmp}/subtitled_{run_id}.mp4"
                 success = burn_ass_subtitles(final_video_path, ass_path, subtitled_path)
                 if success:
@@ -261,7 +266,8 @@ async def generate_single_scene(
             else:
                 print("[WARN] Whisper returned no word timestamps, skipping subtitles")
         except Exception as e:
-            print(f"[WARN] Subtitle step failed: {repr(e)}")
+            import traceback
+            print(f"[WARN] Subtitle step failed: {repr(e)}\n{traceback.format_exc()}")
 
     # 6. Upload to R2
     with open(final_video_path, "rb") as f:
