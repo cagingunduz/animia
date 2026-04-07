@@ -299,7 +299,6 @@ class GenerateStorybookRequest(BaseModel):
     narrator_voice_id: str
     aspect_ratio: Optional[str] = "9:16"
     scene_duration: Optional[int] = 8
-    include_subtitles: Optional[bool] = False
 
 
 class GenerateSingleSceneRequest(BaseModel):

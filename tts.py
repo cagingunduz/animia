@@ -36,5 +36,23 @@ def get_audio_duration(audio_bytes: bytes) -> float:
         return len(audio_bytes) / 16000.0
 
 
+async def get_word_timestamps(audio_bytes: bytes) -> list:
+    """Use OpenAI Whisper to get word-level timestamps from audio."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return []
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = "audio.mp3"
+    transcript = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=audio_file,
+        response_format="verbose_json",
+        timestamp_granularities=["word"]
+    )
+    return [{"word": w.word, "start": w.start, "end": w.end} for w in (transcript.words or [])]
+
+
 async def get_voices() -> list:
     return OPENAI_VOICES
