@@ -116,7 +116,7 @@ def build_ass(word_timestamps: list, aspect_ratio: str = "9:16", words_per_chunk
         "1:1":   (1080, 1080, 60),
     }
     vw, vh, fsize = size_map.get(aspect_ratio, (1080, 1920, 68))
-    margin_v = int(vh * 0.10)
+    margin_v = int(vh * 0.40)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
