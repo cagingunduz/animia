@@ -13,17 +13,18 @@ OPENAI_VOICES = [
 
 
 async def generate_speech(text: str, voice_id: str) -> bytes:
+    import asyncio
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
-    response = client.audio.speech.create(
-        model="tts-1-hd",
-        voice=voice_id,
-        input=text,
-    )
-    return response.content
+
+    def _sync():
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.audio.speech.create(model="tts-1-hd", voice=voice_id, input=text)
+        return response.content
+
+    return await asyncio.to_thread(_sync)
 
 
 def get_audio_duration(audio_bytes: bytes) -> float:
@@ -38,20 +39,25 @@ def get_audio_duration(audio_bytes: bytes) -> float:
 
 async def get_word_timestamps(audio_bytes: bytes) -> list:
     """Use OpenAI Whisper to get word-level timestamps from audio."""
+    import asyncio
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return []
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
-    audio_file = io.BytesIO(audio_bytes)
-    audio_file.name = "audio.mp3"
-    transcript = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=audio_file,
-        response_format="verbose_json",
-        timestamp_granularities=["word"]
-    )
-    return [{"word": w.word, "start": w.start, "end": w.end} for w in (transcript.words or [])]
+
+    def _sync():
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "audio.mp3"
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            response_format="verbose_json",
+            timestamp_granularities=["word"]
+        )
+        return [{"word": w.word, "start": w.start, "end": w.end} for w in (transcript.words or [])]
+
+    return await asyncio.to_thread(_sync)
 
 
 async def get_voices() -> list:
