@@ -299,6 +299,7 @@ class GenerateStorybookRequest(BaseModel):
     narrator_voice_id: str
     aspect_ratio: Optional[str] = "9:16"
     scene_duration: Optional[int] = 8
+    include_subtitles: Optional[bool] = False
 
 
 class GenerateSingleSceneRequest(BaseModel):
@@ -309,6 +310,7 @@ class GenerateSingleSceneRequest(BaseModel):
     scene_duration: Optional[int] = 8
     ken_burns: Optional[bool] = True
     include_narrator: Optional[bool] = True
+    include_subtitles: Optional[bool] = False
 
 
 @app.post("/generate-storybook")
@@ -343,6 +345,7 @@ async def generate_single_scene_endpoint(req: GenerateSingleSceneRequest):
             scene_duration=req.scene_duration or 8,
             ken_burns=req.ken_burns if req.ken_burns is not None else True,
             include_narrator=req.include_narrator if req.include_narrator is not None else True,
+            include_subtitles=req.include_subtitles if req.include_subtitles is not None else False,
         )
         return {"success": True, "image_url": result["image_url"], "video_url": result["video_url"]}
     except Exception as e:

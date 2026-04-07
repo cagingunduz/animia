@@ -105,6 +105,42 @@ def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> boo
     return True
 
 
+def build_srt(narrator_text: str, audio_duration: float, words_per_chunk: int = 3) -> str:
+    words = narrator_text.split()
+    chunks = [' '.join(words[i:i+words_per_chunk]) for i in range(0, len(words), words_per_chunk)]
+    if not chunks:
+        return ''
+    time_per_chunk = audio_duration / len(chunks)
+    lines = []
+    for idx, chunk in enumerate(chunks):
+        start = idx * time_per_chunk
+        end = start + time_per_chunk - 0.05  # 50ms gap
+        def fmt(t):
+            h = int(t // 3600)
+            m = int((t % 3600) // 60)
+            s = int(t % 60)
+            ms = int((t - int(t)) * 1000)
+            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+        lines.append(str(idx + 1))
+        lines.append(f"{fmt(start)} --> {fmt(end)}")
+        lines.append(chunk)
+        lines.append('')
+    return '\n'.join(lines)
+
+
+def burn_subtitles(input_path: str, srt_path: str, output_path: str) -> bool:
+    style = "FontName=DejaVu Sans Bold,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1,Outline=3,Shadow=0,Alignment=2,MarginV=120"
+    result = subprocess.run([
+        "ffmpeg", "-y", "-i", input_path,
+        "-vf", f"subtitles={srt_path}:force_style='{style}'",
+        "-c:a", "copy", output_path
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"FFmpeg subtitle burn error: {result.stderr}")
+        return False
+    return True
+
+
 def concat_video_files(video_paths: list, output_path: str) -> bool:
     tmp = tempfile.mkdtemp()
     list_path = f"{tmp}/concat_list.txt"
@@ -128,9 +164,10 @@ async def generate_single_scene(
     scene_duration: int = 8,
     ken_burns: bool = True,
     include_narrator: bool = True,
+    include_subtitles: bool = False,
 ) -> dict:
     """
-    Single scene pipeline: Grok → Ken Burns/Static → Narrator → Merge → R2
+    Single scene pipeline: Grok → Ken Burns/Static → Narrator → Subtitle burn → R2
     Returns: { image_url, video_url }
     """
     tmp = tempfile.mkdtemp()
@@ -160,6 +197,7 @@ async def generate_single_scene(
 
     # 4. Generate narrator audio and merge
     final_video_path = video_path
+    audio_bytes = None
     _valid_voice = narrator_voice_id and narrator_voice_id.strip().lower() != 'none'
     if include_narrator and narrator_text and _valid_voice:
         try:
@@ -179,7 +217,25 @@ async def generate_single_scene(
             body = getattr(e, 'body', None)
             print(f"[WARN] TTS failed for narrator: {repr(e)} | status={status_code} | body={body}")
 
-    # 5. Upload to R2
+    # 5. Burn subtitles
+    if include_subtitles and narrator_text and audio_bytes:
+        try:
+            audio_duration = get_audio_duration(audio_bytes)
+            srt_content = build_srt(narrator_text, audio_duration)
+            if srt_content:
+                srt_path = f"{tmp}/subs_{run_id}.srt"
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write(srt_content)
+                subtitled_path = f"{tmp}/subtitled_{run_id}.mp4"
+                success = burn_subtitles(final_video_path, srt_path, subtitled_path)
+                if success:
+                    final_video_path = subtitled_path
+                else:
+                    print("[WARN] Subtitle burn failed, returning video without subtitles")
+        except Exception as e:
+            print(f"[WARN] Subtitle step failed: {repr(e)}")
+
+    # 6. Upload to R2
     with open(final_video_path, "rb") as f:
         video_data = f.read()
 
@@ -205,6 +261,7 @@ async def process_storybook_scene(
     narrator_voice_id: str,
     aspect_ratio: str = "9:16",
     scene_duration: int = 8,
+    include_subtitles: bool = False,
 ) -> str:
     set_scene_status(job_id, scene_index, "processing")
 
@@ -219,6 +276,7 @@ async def process_storybook_scene(
         scene_duration=scene_duration,
         ken_burns=True,
         include_narrator=True,
+        include_subtitles=include_subtitles,
     )
 
     scenes = job_store[job_id]["scenes"]
@@ -238,6 +296,7 @@ async def run_storybook_pipeline(job_id: str, payload: dict):
         narrator_voice_id = payload.get("narrator_voice_id")
         aspect_ratio = payload.get("aspect_ratio", "9:16")
         scene_duration = payload.get("scene_duration", 8)
+        include_subtitles = payload.get("include_subtitles", False)
 
         if not narrator_voice_id:
             raise ValueError("narrator_voice_id is required")
@@ -255,6 +314,7 @@ async def run_storybook_pipeline(job_id: str, payload: dict):
                 total_scenes=total_scenes, step=step, total_steps=total_steps,
                 narrator_voice_id=narrator_voice_id,
                 aspect_ratio=aspect_ratio, scene_duration=scene_duration,
+                include_subtitles=include_subtitles,
             )
             scene_video_urls.append(scene_url)
             step = job_store[job_id]["step"]
