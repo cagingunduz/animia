@@ -195,17 +195,41 @@ async def generate_single_scene(
     include_subtitles: bool = False,
 ) -> dict:
     """
-    Single scene pipeline: Grok → Ken Burns/Static → Narrator → Subtitle burn → R2
+    Single scene pipeline: Grok + Narrator (parallel) → Ken Burns (audio duration) → Merge → Subtitle burn → R2
     Returns: { image_url, video_url }
     """
     tmp = tempfile.mkdtemp()
     run_id = uuid.uuid4().hex[:8]
 
-    # 1. Generate image with Grok
-    image_url = await generate_storybook_scene_image(
-        scene_prompt=scene_description,
-        aspect_ratio=aspect_ratio
-    )
+    # 1. Generate image and narrator audio in parallel
+    _valid_voice = narrator_voice_id and narrator_voice_id.strip().lower() != 'none'
+    _do_narrator = include_narrator and narrator_text and _valid_voice
+
+    image_task = asyncio.create_task(generate_storybook_scene_image(
+        scene_prompt=scene_description, aspect_ratio=aspect_ratio
+    ))
+    audio_task = asyncio.create_task(generate_speech(narrator_text, narrator_voice_id)) if _do_narrator else None
+
+    image_url = await image_task
+
+    audio_bytes = None
+    audio_path = None
+    video_duration = scene_duration  # fallback
+
+    if audio_task:
+        try:
+            audio_bytes = await audio_task
+            audio_path = f"{tmp}/audio_{run_id}.mp3"
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            # Use actual audio duration so Ken Burns matches narrator length
+            audio_duration = get_audio_duration(audio_bytes)
+            video_duration = max(audio_duration, 1.0)
+            print(f"[INFO] Audio duration: {video_duration:.2f}s")
+        except Exception as e:
+            status_code = getattr(e, 'status_code', None)
+            body = getattr(e, 'body', None)
+            print(f"[WARN] TTS failed for narrator: {repr(e)} | status={status_code} | body={body}")
 
     # 2. Download image
     image_bytes = await download_file(image_url)
@@ -213,37 +237,25 @@ async def generate_single_scene(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
 
-    # 3. Apply Ken Burns or static
+    # 3. Apply Ken Burns or static — duration matches narrator audio
     video_path = f"{tmp}/video_{run_id}.mp4"
     if ken_burns:
-        success = apply_ken_burns(image_path, video_path, duration=scene_duration, aspect_ratio=aspect_ratio)
+        success = apply_ken_burns(image_path, video_path, duration=video_duration, aspect_ratio=aspect_ratio)
     else:
-        success = make_static_video(image_path, video_path, duration=scene_duration, aspect_ratio=aspect_ratio)
+        success = make_static_video(image_path, video_path, duration=video_duration, aspect_ratio=aspect_ratio)
 
     if not success:
         raise RuntimeError("Video generation failed")
 
-    # 4. Generate narrator audio and merge
+    # 4. Merge audio into video
     final_video_path = video_path
-    audio_bytes = None
-    _valid_voice = narrator_voice_id and narrator_voice_id.strip().lower() != 'none'
-    if include_narrator and narrator_text and _valid_voice:
-        try:
-            audio_bytes = await generate_speech(narrator_text, narrator_voice_id)
-            audio_path = f"{tmp}/audio_{run_id}.mp3"
-            with open(audio_path, "wb") as f:
-                f.write(audio_bytes)
-
-            merged_path = f"{tmp}/merged_{run_id}.mp4"
-            success = merge_video_audio(video_path, audio_path, merged_path)
-            if success:
-                final_video_path = merged_path
-            else:
-                print(f"[WARN] Audio merge failed, returning video without audio")
-        except Exception as e:
-            status_code = getattr(e, 'status_code', None)
-            body = getattr(e, 'body', None)
-            print(f"[WARN] TTS failed for narrator: {repr(e)} | status={status_code} | body={body}")
+    if audio_bytes and audio_path:
+        merged_path = f"{tmp}/merged_{run_id}.mp4"
+        success = merge_video_audio(video_path, audio_path, merged_path)
+        if success:
+            final_video_path = merged_path
+        else:
+            print("[WARN] Audio merge failed, returning video without audio")
 
     # 5. Burn subtitles (Whisper word-level timestamps → CapCut-style ASS)
     if include_subtitles and audio_bytes:
