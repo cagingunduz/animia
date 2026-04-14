@@ -1,5 +1,7 @@
+import os
 import uuid
 import asyncio
+import tempfile
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +13,7 @@ from tts import get_voices, generate_speech
 from lipsync import upload_audio_to_r2
 from image_gen import generate_character_image, generate_scene_image
 from prompt_generator import get_style_prompt, generate_scene_prompts, generate_story_script
-from storybook_pipeline import run_storybook_pipeline, generate_single_scene
+from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
 
 app = FastAPI(title="Animave API v3")
 
@@ -347,6 +349,47 @@ async def generate_single_scene_endpoint(req: GenerateSingleSceneRequest):
             include_subtitles=req.include_subtitles if req.include_subtitles is not None else False,
         )
         return {"success": True, "image_url": result["image_url"], "video_url": result["video_url"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
+class MergeVideosRequest(BaseModel):
+    video_urls: List[str]
+
+@app.post("/merge-videos")
+async def merge_videos_endpoint(req: MergeVideosRequest):
+    """Merge already-generated scene videos into a final video."""
+    try:
+        if not req.video_urls:
+            raise HTTPException(status_code=400, detail="No video URLs provided")
+        if len(req.video_urls) == 1:
+            return {"success": True, "final_video_url": req.video_urls[0]}
+
+        tmp = tempfile.mkdtemp()
+        run_id = uuid.uuid4().hex[:8]
+        local_paths = []
+
+        for idx, url in enumerate(req.video_urls):
+            video_bytes = await download_file(url)
+            path = f"{tmp}/scene_{idx}_{run_id}.mp4"
+            with open(path, "wb") as f:
+                f.write(video_bytes)
+            local_paths.append(path)
+
+        final_path = f"{tmp}/final_{run_id}.mp4"
+        if not concat_video_files(local_paths, final_path):
+            raise RuntimeError("Merge failed")
+
+        with open(final_path, "rb") as f:
+            final_data = f.read()
+
+        final_url = upload_bytes_to_r2(final_data, "storybook-final", "mp4", "video/mp4")
+
+        for p in local_paths + [final_path]:
+            try: os.remove(p)
+            except: pass
+
+        return {"success": True, "final_video_url": final_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=repr(e))
 
