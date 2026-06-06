@@ -340,7 +340,7 @@ class GenerateAnimatedStoryRequest(BaseModel):
     style: Optional[str] = "western_cartoon"
     duration_minutes: Optional[int] = 1
     aspect_ratio: Optional[str] = "16:9"
-    resolution: Optional[Literal["480p", "720p", "1080p"]] = "1080p"
+    resolution: Optional[Literal["480p", "720p", "1080p", "2k"]] = "1080p"
     characters: List[dict]              # [{id, description, char_url, style}]
     scene_count: Optional[int] = None   # override for cheap testing
 
