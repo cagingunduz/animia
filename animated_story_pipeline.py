@@ -133,9 +133,10 @@ async def run_animated_story_pipeline(job_id: str, payload: dict):
             clip_url = await animate_scene_runpod(
                 scene_image_url=img_url,
                 scene_description=ltx_desc,
-                duration=5,
+                duration=4,                 # tighter window = snappier motion
                 resolution=resolution,
                 aspect_ratio=aspect_ratio,
+                audio=False,                # v1: no LTX scene audio (narrator added later)
             )
 
             for s in job_store[job_id]["scenes"]:

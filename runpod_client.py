@@ -29,16 +29,15 @@ NEGATIVE = (
 
 
 def _build_prompt(scene_description: str, speaking_duration: float | None) -> str:
-    # TODO: replace with the Claude prompt-enhancement layer (formula from design).
-    if speaking_duration and speaking_duration > 0:
-        return (
-            f"2D cartoon animation, {scene_description}, character speaking naturally, "
-            f"mouth moving while talking, expressive subtle gestures, eyes blinking, smooth motion"
-        )
-    return (
-        f"2D cartoon animation, {scene_description}, subtle breathing motion, "
-        f"slight head movement, eyes blinking, ambient motion, smooth fluid animation"
+    # scene_description already carries the scene's motion hint from the script.
+    base = (
+        f"2D cartoon animation. {scene_description}. "
+        f"Dynamic expressive character movement, lively energetic motion, "
+        f"smooth fluid animation, cinematic camera movement."
     )
+    if speaking_duration and speaking_duration > 0:
+        base += " The character speaks naturally, mouth moving in sync."
+    return base
 
 
 async def animate_scene_runpod(
@@ -48,6 +47,7 @@ async def animate_scene_runpod(
     resolution: str = "1080p",
     speaking_duration: float = None,
     aspect_ratio: str = "16:9",
+    audio: bool = False,
 ) -> str:
     if not (RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID):
         raise RuntimeError("RUNPOD_API_KEY / RUNPOD_LTX_ENDPOINT_ID not set")
@@ -60,6 +60,7 @@ async def animate_scene_runpod(
             "resolution": resolution,
             "aspect_ratio": aspect_ratio,
             "duration": duration,
+            "audio": audio,
         }
     }
     headers = {"Authorization": f"Bearer {RUNPOD_API_KEY}"}
