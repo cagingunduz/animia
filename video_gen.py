@@ -35,6 +35,17 @@ async def animate_scene(
     resolution: str = "720p",
     speaking_duration: float = None
 ) -> str:
+    # ── Self-hosted LTX-2.3 on RunPod (set VIDEO_BACKEND=runpod to enable) ──
+    if os.environ.get("VIDEO_BACKEND") == "runpod":
+        from runpod_client import animate_scene_runpod
+        return await animate_scene_runpod(
+            scene_image_url=scene_image_url,
+            scene_description=scene_description,
+            duration=duration,
+            resolution=resolution,
+            speaking_duration=speaking_duration,
+        )
+
     client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
     if speaking_duration and speaking_duration > 0:
