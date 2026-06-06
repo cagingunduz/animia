@@ -14,6 +14,7 @@ from lipsync import upload_audio_to_r2
 from image_gen import generate_character_image, generate_scene_image
 from prompt_generator import get_style_prompt, generate_scene_prompts, generate_story_script
 from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
+from animated_story_pipeline import run_animated_story_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -148,7 +149,8 @@ async def generate_scene_image_endpoint(req: GenerateSceneImageRequest):
         prompts = await generate_scene_prompts(
             scene_text=req.scene_text,
             characters=chars_for_prompt,
-            aspect_ratio=req.aspect_ratio or "16:9"
+            aspect_ratio=req.aspect_ratio or "16:9",
+            blur_faces=req.blur_faces or False
         )
 
         char_urls = [c.get("char_url") for c in req.characters if c.get("char_url")]
@@ -328,6 +330,31 @@ async def generate_storybook(req: GenerateStorybookRequest):
         "aspect_ratio": req.aspect_ratio, "lipsync": False
     }
     asyncio.create_task(run_storybook_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+# ─── Animated Storytelling: character-driven script → scene images → LTX ───
+class GenerateAnimatedStoryRequest(BaseModel):
+    title: str
+    theme: Optional[str] = ""
+    style: Optional[str] = "western_cartoon"
+    duration_minutes: Optional[int] = 1
+    aspect_ratio: Optional[str] = "16:9"
+    resolution: Optional[Literal["480p", "720p", "1080p"]] = "1080p"
+    characters: List[dict]              # [{id, description, char_url, style}]
+    scene_count: Optional[int] = None   # override for cheap testing
+
+
+@app.post("/generate-animated-story")
+async def generate_animated_story(req: GenerateAnimatedStoryRequest):
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "status": "queued", "step": 0, "total_steps": 0,
+        "message": "Kuyrukta bekleniyor...", "scenes": [],
+        "final_video_url": None, "error": None, "traceback": None,
+        "aspect_ratio": req.aspect_ratio,
+    }
+    asyncio.create_task(run_animated_story_pipeline(job_id, req.model_dump()))
     return {"job_id": job_id, "status": "queued"}
 
 
