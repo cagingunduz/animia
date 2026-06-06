@@ -24,7 +24,9 @@ MAX_WAIT_S = int(os.environ.get("RUNPOD_MAX_WAIT_S", "900"))  # 15 min safety de
 NEGATIVE = (
     "distorted face, morphing facial features, warping, melting, extra limbs, "
     "deformed hands, inconsistent character, jittery motion, blurry, low quality, "
-    "text artifacts, watermark"
+    "text artifacts, watermark, floating objects, duplicate objects, duplicated props, "
+    "extra props, magnifying glass, morphing artifacts, distorted shapes, glitch, "
+    "ghosting, deformed geometry, spurious objects"
 )
 
 

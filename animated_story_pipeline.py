@@ -74,6 +74,9 @@ RULES
 - Keep the characters consistent (same appearance, outfit, colors) in every scene.
 - Every scene visually distinct (different location / angle / action).
 - Clear narrative arc: hook -> development -> climax -> resolution.
+- Do NOT give characters small handheld props (magnifying glass, phone, papers,
+  tiny tools) — they animate badly and duplicate. Favor full-body poses,
+  expressions, hand gestures, walking/turning, and rich environments.
 
 Respond with a valid JSON array ONLY, no other text:
 [{{"scene_number":1,"title":"...","scene_description":"...","motion":"..."}}]"""
