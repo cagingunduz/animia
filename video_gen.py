@@ -108,10 +108,13 @@ async def animate_scene_pvideo(
     res = "1080p" if resolution in ("1080p", "2k") else "720p"
     dur = max(1, min(10, int(duration)))
     prompt = (
-        f"Animate this image. {scene_description}. "
-        f"Keep the character EXACTLY as shown in the image — same face, hair, outfit, "
-        f"colors and identity; do not redraw, rename or replace the character. "
-        f"Dynamic expressive movement, lively natural motion, smooth fluid animation."
+        f"Animate this image into a subtle living photo (cinemagraph). {scene_description}. "
+        f"Keep the character EXACTLY as shown — same face, hair, outfit, colors and identity; "
+        f"do not redraw, rename or replace the character. The character stays mostly still, "
+        f"with only very subtle motion (gentle breathing, a slight head movement, blinking). "
+        f"Animate the ENVIRONMENT instead — wind, water, waves, drifting clouds, blowing "
+        f"fabric and hair, leaves, dust, flickering light and small background movements. "
+        f"Subtle, smooth, natural, atmospheric motion — just enough to feel alive."
     )
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(None, lambda: _run_with_retry(
@@ -122,6 +125,7 @@ async def animate_scene_pvideo(
             "duration": dur,
             "resolution": res,
             "aspect_ratio": aspect_ratio,
+            "fps": 48,  # smoother "living photo" feel for subtle/ambient motion
         }
     ))
     return _extract_url(output)

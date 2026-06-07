@@ -84,11 +84,12 @@ For each of the {scene_count} scenes produce:
   character(s) in a clear environment doing a specific action that advances the story.
   Describe location, lighting, composition and the character's pose/expression. Apply
   the {style} cartoon style. No photorealism, no text/watermarks.
-- "motion": one short sentence describing ONLY the movement for the animation. Refer to
-  the character generically as "the character" — NEVER use the character's name or
-  re-describe their appearance here (the video engine would otherwise redraw a named
-  character and break consistency). E.g. "the character slowly turns their head as rain
-  falls and the camera pushes in".
+- "motion": one short sentence describing SUBTLE, AMBIENT motion that makes the still
+  image feel alive (a living photo). Focus on the ENVIRONMENT — wind, water, waves,
+  drifting clouds, blowing fabric/hair, leaves, dust, flickering light, small background
+  movements. The character barely moves (gentle breathing, a slight head turn, blinking).
+  NEVER use the character's name or re-describe their appearance. E.g. "wind blows through
+  the trees and his coat, distant waves roll, the character breathes gently and blinks".
 - "narrator_text": one SHORT narration line, MAX 14 words (~4 seconds spoken).
   Punchy, present tense, advances the story. This is the voice-over for the scene.
 
