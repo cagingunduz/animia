@@ -77,3 +77,34 @@ async def animate_scene(
         }
     ))
     return _extract_url(output)
+
+
+async def animate_scene_pvideo(
+    scene_image_url: str,
+    scene_description: str,
+    duration: int = 5,
+    resolution: str = "1080p",
+    aspect_ratio: str = "16:9",
+) -> str:
+    """Animate a scene image with Replicate prunaai/p-video (image-to-video).
+    Used by Animated Storytelling. p-video maxes at 1080p (2k -> 1080p)."""
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+    res = "1080p" if resolution in ("1080p", "2k") else "720p"
+    dur = max(1, min(10, int(duration)))
+    prompt = (
+        f"2D cartoon animation. {scene_description}. "
+        f"Dynamic expressive character movement, lively energetic motion, "
+        f"smooth fluid animation, cinematic camera movement."
+    )
+    loop = asyncio.get_event_loop()
+    output = await loop.run_in_executor(None, lambda: client.run(
+        "prunaai/p-video",
+        input={
+            "image": scene_image_url,
+            "prompt": prompt,
+            "duration": dur,
+            "resolution": res,
+            "aspect_ratio": aspect_ratio,
+        }
+    ))
+    return _extract_url(output)

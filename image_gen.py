@@ -143,3 +143,31 @@ async def generate_storybook_scene_image(
         resp.raise_for_status()
 
     return upload_to_r2(resp.content, "storybook", ext="jpg")
+
+
+async def generate_scene_image_grok(
+    scene_prompt: str,
+    character_urls: list,
+    aspect_ratio: str = "16:9"
+) -> str:
+    """Scene image via Grok (xai/grok-imagine-image), conditioned on the character
+    reference image when available (image-editing) for consistency. Used for
+    Animated Storytelling mode."""
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+    ar = ASPECT_RATIO_MAP.get(aspect_ratio, "16:9")
+
+    input_params = {"prompt": scene_prompt, "aspect_ratio": ar}
+    if character_urls:
+        input_params["image"] = character_urls[0]  # character reference for consistency
+
+    loop = asyncio.get_event_loop()
+    output = await loop.run_in_executor(
+        None, lambda: client.run("xai/grok-imagine-image", input=input_params)
+    )
+    image_url = _extract_url(output)
+
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.get(image_url, timeout=60)
+        resp.raise_for_status()
+
+    return upload_to_r2(resp.content, "scenes", ext="jpg")

@@ -16,12 +16,13 @@ import json
 import uuid
 import tempfile
 import traceback
+import subprocess
 
 import anthropic
 
 from jobs import job_store
-from image_gen import generate_scene_image
-from runpod_client import animate_scene_runpod
+from image_gen import generate_scene_image_grok
+from video_gen import animate_scene_pvideo
 from prompt_generator import get_style_prompt, get_scene_count
 from tts import generate_speech, get_audio_duration, get_word_timestamps
 from storybook_pipeline import (
@@ -34,6 +35,15 @@ from storybook_pipeline import (
     log,
     set_scene_status,
 )
+
+
+def _strip_audio(input_path: str, output_path: str) -> bool:
+    """Drop the audio track (copy video) so clips stay silent + concat-consistent."""
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", input_path, "-c", "copy", "-an", output_path],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0
 
 
 async def generate_animated_story_script(
@@ -121,7 +131,7 @@ async def generate_single_animated_scene(
 
     # 1) Scene image (character-consistent)
     scene_prompt = f"{desc}. Style: {style_prompt}. High detail, clean composition, sharp focus."
-    img_url = await generate_scene_image(scene_prompt, char_urls, aspect_ratio)
+    img_url = await generate_scene_image_grok(scene_prompt, char_urls, aspect_ratio)
 
     # 2) Narrator TTS (optional) — drives the clip length so A/V stay in sync
     _valid_voice = narrator_voice_id and str(narrator_voice_id).strip().lower() != "none"
@@ -141,15 +151,14 @@ async def generate_single_animated_scene(
             print(f"[WARN] narrator TTS failed: {repr(e)}")
             audio_bytes = None
 
-    # 3) LTX animation (silent — narrator is the audio)
+    # 3) p-video animation (Replicate prunaai/p-video)
     ltx_desc = f"{motion}. {desc}" if motion else desc
-    clip_url = await animate_scene_runpod(
+    clip_url = await animate_scene_pvideo(
         scene_image_url=img_url,
         scene_description=ltx_desc,
         duration=clip_duration,
         resolution=resolution,
         aspect_ratio=aspect_ratio,
-        audio=False,
     )
     clip_bytes = await download_file(clip_url)
     video_path = f"{tmp}/video_{run_id}.mp4"
@@ -157,11 +166,15 @@ async def generate_single_animated_scene(
         f.write(clip_bytes)
     final_path = video_path
 
-    # 4) Merge narrator audio
+    # 4) Audio: merge narrator, otherwise strip any model audio (no scene sounds)
     if audio_bytes and audio_path:
         merged = f"{tmp}/merged_{run_id}.mp4"
         if merge_video_audio(video_path, audio_path, merged):
             final_path = merged
+    else:
+        silent = f"{tmp}/silent_{run_id}.mp4"
+        if _strip_audio(video_path, silent):
+            final_path = silent
 
     # 5) Captions (CapCut-style, word-level from Whisper)
     if include_subtitles and audio_bytes:
