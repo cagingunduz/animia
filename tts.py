@@ -110,4 +110,4 @@ async def get_voices() -> list:
         return voices or _FALLBACK_VOICES
     except Exception as e:
         print(f"[WARN] ElevenLabs get_voices failed: {repr(e)}")
-        return _FALLBACK_VOICES
+        return [{"voice_id": "err", "name": f"ERR: {repr(e)}"[:300], "preview_url": "", "labels": {}}]
