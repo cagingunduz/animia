@@ -108,9 +108,10 @@ async def animate_scene_pvideo(
     res = "1080p" if resolution in ("1080p", "2k") else "720p"
     dur = max(1, min(10, int(duration)))
     prompt = (
-        f"2D cartoon animation. {scene_description}. "
-        f"Dynamic expressive character movement, lively energetic motion, "
-        f"smooth fluid animation, cinematic camera movement."
+        f"Animate this image. {scene_description}. "
+        f"Keep the character EXACTLY as shown in the image — same face, hair, outfit, "
+        f"colors and identity; do not redraw, rename or replace the character. "
+        f"Dynamic expressive movement, lively natural motion, smooth fluid animation."
     )
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(None, lambda: _run_with_retry(

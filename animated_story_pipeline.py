@@ -84,8 +84,11 @@ For each of the {scene_count} scenes produce:
   character(s) in a clear environment doing a specific action that advances the story.
   Describe location, lighting, composition and the character's pose/expression. Apply
   the {style} cartoon style. No photorealism, no text/watermarks.
-- "motion": one short sentence describing the MOVEMENT for the animation
-  (e.g. "the detective slowly turns his head as rain falls and the camera pushes in").
+- "motion": one short sentence describing ONLY the movement for the animation. Refer to
+  the character generically as "the character" — NEVER use the character's name or
+  re-describe their appearance here (the video engine would otherwise redraw a named
+  character and break consistency). E.g. "the character slowly turns their head as rain
+  falls and the camera pushes in".
 - "narrator_text": one SHORT narration line, MAX 14 words (~4 seconds spoken).
   Punchy, present tense, advances the story. This is the voice-over for the scene.
 
@@ -151,8 +154,9 @@ async def generate_single_animated_scene(
             print(f"[WARN] narrator TTS failed: {repr(e)}")
             audio_bytes = None
 
-    # 3) p-video animation (Replicate prunaai/p-video)
-    ltx_desc = f"{motion}. {desc}" if motion else desc
+    # 3) p-video animation — send ONLY the motion (no character name/appearance,
+    #    otherwise the i2v engine redraws a named character and breaks consistency)
+    ltx_desc = motion or "natural lively motion of the character"
     clip_url = await animate_scene_pvideo(
         scene_image_url=img_url,
         scene_description=ltx_desc,
