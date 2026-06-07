@@ -49,6 +49,22 @@ def _extract_url(output) -> str:
     return str(output)
 
 
+import time
+
+
+def _run_with_retry(client, model: str, input_params: dict, max_retries: int = 6):
+    """Replicate client.run with backoff on 429 (rate-limit) errors."""
+    delays = [3, 6, 10, 10, 12, 15]
+    for attempt in range(max_retries):
+        try:
+            return client.run(model, input=input_params)
+        except Exception as e:
+            if getattr(e, "status", None) == 429 and attempt < max_retries - 1:
+                time.sleep(delays[min(attempt, len(delays) - 1)])
+                continue
+            raise
+
+
 # ─── GEMINI — 2D Animation (characters + scenes) ───
 
 async def generate_character_image(character_prompt: str, photo_url: str = None) -> str:
@@ -66,7 +82,7 @@ async def generate_character_image(character_prompt: str, photo_url: str = None)
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: client.run("google/gemini-2.5-flash-image", input=input_params)
+        None, lambda: _run_with_retry(client, "google/gemini-2.5-flash-image", input_params)
     )
     image_url = _extract_url(output)
 
@@ -102,7 +118,7 @@ async def generate_scene_image(
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: client.run("google/gemini-2.5-flash-image", input=input_params)
+        None, lambda: _run_with_retry(client, "google/gemini-2.5-flash-image", input_params)
     )
     image_url = _extract_url(output)
 
@@ -134,7 +150,7 @@ async def generate_storybook_scene_image(
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: client.run("xai/grok-imagine-image", input=input_params)
+        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
     )
     image_url = _extract_url(output)
 
@@ -162,7 +178,7 @@ async def generate_scene_image_grok(
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: client.run("xai/grok-imagine-image", input=input_params)
+        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
     )
     image_url = _extract_url(output)
 

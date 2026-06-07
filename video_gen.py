@@ -23,6 +23,22 @@ def _extract_url(output) -> str:
     return str(output)
 
 
+import time
+
+
+def _run_with_retry(client, model: str, input_params: dict, max_retries: int = 6):
+    """Replicate client.run with backoff on 429 (rate-limit) errors."""
+    delays = [3, 6, 10, 10, 12, 15]
+    for attempt in range(max_retries):
+        try:
+            return client.run(model, input=input_params)
+        except Exception as e:
+            if getattr(e, "status", None) == 429 and attempt < max_retries - 1:
+                time.sleep(delays[min(attempt, len(delays) - 1)])
+                continue
+            raise
+
+
 def calculate_duration(movement_duration: int, audio_duration: float) -> int:
     total = movement_duration + audio_duration + 0.5
     return max(MIN_DURATION, min(MAX_DURATION, round(total)))
@@ -97,9 +113,9 @@ async def animate_scene_pvideo(
         f"smooth fluid animation, cinematic camera movement."
     )
     loop = asyncio.get_event_loop()
-    output = await loop.run_in_executor(None, lambda: client.run(
-        "prunaai/p-video",
-        input={
+    output = await loop.run_in_executor(None, lambda: _run_with_retry(
+        client, "prunaai/p-video",
+        {
             "image": scene_image_url,
             "prompt": prompt,
             "duration": dur,
