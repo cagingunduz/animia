@@ -437,6 +437,43 @@ async def check_env():
             "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY", "R2_BUCKET"]
     return {k: bool(os.environ.get(k)) for k in keys}
 
+
+@app.get("/recent-final-videos")
+async def recent_final_videos(hours: int = 24, prefix: str = "animated-story-final/"):
+    """List final video objects in R2 under `prefix`, newest first, within the
+    last `hours`. NOT user-scoped (the bucket mixes all users) — admin use only;
+    the Next.js proxy gates this on is_admin."""
+    from datetime import datetime, timezone, timedelta
+    from storybook_pipeline import get_r2_client, R2_BUCKET, R2_PUBLIC_BASE
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    s3 = get_r2_client()
+    items = []
+    token = None
+    while True:
+        kwargs = {"Bucket": R2_BUCKET, "Prefix": prefix, "MaxKeys": 1000}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            if not key.lower().endswith(".mp4"):
+                continue
+            lm = obj["LastModified"]
+            if lm < cutoff:
+                continue
+            items.append({
+                "url": f"{R2_PUBLIC_BASE}/{key}",
+                "key": key,
+                "last_modified": lm.isoformat(),
+            })
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    items.sort(key=lambda x: x["last_modified"], reverse=True)
+    return {"videos": items}
+
 class GenerateStorybookSceneRequest(BaseModel):
     scene_text: str
     aspect_ratio: Optional[str] = "9:16"
