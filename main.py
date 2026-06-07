@@ -344,6 +344,7 @@ class GenerateAnimatedStoryRequest(BaseModel):
     characters: List[dict]              # [{id, description, char_url, style}]
     scene_count: Optional[int] = None   # override for cheap testing
     narrator_voice_id: Optional[str] = None
+    narrator_speed: Optional[float] = 1.0   # 1.0 / 1.5 / 2.0 narration playback speed
     include_narrator: Optional[bool] = False
     include_subtitles: Optional[bool] = False
 

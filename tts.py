@@ -24,16 +24,33 @@ def _headers() -> dict:
     return {"xi-api-key": api_key}
 
 
-async def generate_speech(text: str, voice_id: str) -> bytes:
-    """Generate narration audio (MP3 bytes) with ElevenLabs TTS."""
+# Per-tone voice settings. Lower stability + higher style = more emotional,
+# human, expressive delivery (less robotic/monotone). Tuned per scene mood.
+TONE_SETTINGS = {
+    "emotional":  {"stability": 0.30, "style": 0.55},
+    "closing":    {"stability": 0.32, "style": 0.50},
+    "tense":      {"stability": 0.34, "style": 0.55},
+    "exciting":   {"stability": 0.30, "style": 0.62},
+    "triumphant": {"stability": 0.33, "style": 0.58},
+    "mysterious": {"stability": 0.45, "style": 0.38},
+    "calm":       {"stability": 0.50, "style": 0.28},
+}
+# Default (no tone given): warm, lively human baseline — NOT the flat 0.5/0.0.
+DEFAULT_TONE = {"stability": 0.40, "style": 0.42}
+
+
+async def generate_speech(text: str, voice_id: str, tone: str = None) -> bytes:
+    """Generate narration audio (MP3 bytes) with ElevenLabs TTS.
+    `tone` shapes the emotional delivery (see TONE_SETTINGS)."""
+    ts = TONE_SETTINGS.get((tone or "").strip().lower(), DEFAULT_TONE)
     url = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"
     payload = {
         "text": text,
         "model_id": ELEVENLABS_MODEL,
         "voice_settings": {
-            "stability": 0.5,
+            "stability": ts["stability"],
             "similarity_boost": 0.75,
-            "style": 0.0,
+            "style": ts["style"],
             "use_speaker_boost": True,
         },
     }

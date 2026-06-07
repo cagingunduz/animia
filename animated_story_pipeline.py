@@ -46,6 +46,31 @@ def _strip_audio(input_path: str, output_path: str) -> bool:
     return r.returncode == 0
 
 
+def _speed_audio(audio_bytes: bytes, speed: float, tmp: str, run_id: str) -> bytes:
+    """Speed up narration with ffmpeg atempo (pitch-preserving). atempo handles
+    0.5-2.0 directly, so 1.0/1.5/2.0 all work. Returns original on failure/no-op."""
+    try:
+        speed = float(speed)
+    except (TypeError, ValueError):
+        return audio_bytes
+    if abs(speed - 1.0) < 0.01:
+        return audio_bytes
+    speed = max(0.5, min(2.0, speed))
+    inp = f"{tmp}/spin_{run_id}.mp3"
+    out = f"{tmp}/spout_{run_id}.mp3"
+    with open(inp, "wb") as f:
+        f.write(audio_bytes)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", inp, "-filter:a", f"atempo={speed}", "-vn", out],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0:
+        with open(out, "rb") as f:
+            return f.read()
+    print(f"[WARN] speed adjust failed: {r.stderr[:200]}")
+    return audio_bytes
+
+
 async def generate_animated_story_script(
     title: str,
     theme: str,
@@ -92,18 +117,28 @@ For each of the {scene_count} scenes produce:
   the trees and his coat, distant waves roll, the character breathes gently and blinks".
 - "narrator_text": one SHORT narration line, MAX 14 words (~4 seconds spoken).
   Punchy, present tense, advances the story. This is the voice-over for the scene.
+  Write it the way a HUMAN storyteller speaks — natural, vivid, emotional, never
+  dry or robotic. Let the wording carry the feeling of the moment.
+- "tone": the emotional delivery for the voice-over. Choose EXACTLY ONE of:
+  "calm", "mysterious", "emotional", "tense", "exciting", "triumphant", "closing".
+  Pick the one that fits what happens in THIS scene.
 
 RULES
 - Keep the characters consistent (same appearance, outfit, colors) in every scene.
 - Every scene visually distinct (different location / angle / action).
 - Clear narrative arc: hook -> development -> climax -> resolution.
+- THE FINAL SCENE IS THE CLOSING. Its narrator_text must feel like a true ending:
+  resolve the story with a satisfying, meaningful wrap-up / emotional final beat or
+  moral — NOT a cliffhanger and NOT mid-action. Its "tone" MUST be "closing".
+- Vary the emotion across scenes so the narration feels human: emotional scenes read
+  emotional, tense scenes tense, the closing reads like a real closing.
 - Do NOT give characters small handheld props (magnifying glass, phone, papers,
   tiny tools) — they animate badly and duplicate. Favor full-body poses,
   expressions, hand gestures, walking/turning, and rich environments.
 - narrator_text MUST stay <= 14 words so it fits the short clip.
 
 Respond with a valid JSON array ONLY, no other text:
-[{{"scene_number":1,"title":"...","scene_description":"...","motion":"...","narrator_text":"..."}}]"""
+[{{"scene_number":1,"title":"...","scene_description":"...","motion":"...","narrator_text":"...","tone":"..."}}]"""
         }]
     )
 
@@ -124,6 +159,7 @@ async def generate_single_animated_scene(
     narrator_voice_id: str,
     include_narrator: bool,
     include_subtitles: bool,
+    narrator_speed: float = 1.0,
 ) -> dict:
     """One scene: character-consistent image -> LTX animation -> (narrator + captions)."""
     tmp = tempfile.mkdtemp()
@@ -132,6 +168,7 @@ async def generate_single_animated_scene(
     desc = scene.get("scene_description", "")
     motion = scene.get("motion", "")
     narrator_text = scene.get("narrator_text", "")
+    tone = scene.get("tone", "")
 
     # 1) Scene image (character-consistent)
     scene_prompt = f"{desc}. Style: {style_prompt}. High detail, clean composition, sharp focus."
@@ -145,7 +182,8 @@ async def generate_single_animated_scene(
     clip_duration = 4
     if do_narrator:
         try:
-            audio_bytes = await generate_speech(narrator_text, narrator_voice_id)
+            audio_bytes = await generate_speech(narrator_text, narrator_voice_id, tone=tone)
+            audio_bytes = _speed_audio(audio_bytes, narrator_speed, tmp, run_id)
             audio_dur = get_audio_duration(audio_bytes)
             clip_duration = max(4, min(8, int(round(audio_dur)) + 1))  # keep video >= narration
             audio_path = f"{tmp}/audio_{run_id}.mp3"
@@ -219,6 +257,7 @@ async def run_animated_story_pipeline(job_id: str, payload: dict):
         resolution = payload.get("resolution", "1080p")
         scene_count = payload.get("scene_count")        # optional override (cheap testing)
         narrator_voice_id = payload.get("narrator_voice_id")
+        narrator_speed = payload.get("narrator_speed", 1.0) or 1.0
         include_narrator = bool(payload.get("include_narrator", False))
         include_subtitles = bool(payload.get("include_subtitles", False))
 
@@ -254,6 +293,7 @@ async def run_animated_story_pipeline(job_id: str, payload: dict):
                 narrator_voice_id=narrator_voice_id,
                 include_narrator=include_narrator,
                 include_subtitles=include_subtitles,
+                narrator_speed=narrator_speed,
             )
 
             for s in job_store[job_id]["scenes"]:
