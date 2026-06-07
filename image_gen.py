@@ -68,21 +68,20 @@ def _run_with_retry(client, model: str, input_params: dict, max_retries: int = 6
 # ─── GEMINI — 2D Animation (characters + scenes) ───
 
 async def generate_character_image(character_prompt: str, photo_url: str = None) -> str:
-    """Generate character PNG on white background using Gemini. Used for 2D Animation mode."""
+    """Generate a character reference image using Grok (xai/grok-imagine-image).
+    Keeps the whole image pipeline on Grok for stronger character consistency."""
     client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
     input_params = {
         "prompt": character_prompt,
-        "aspect_ratio": "3:4",
-        "output_format": "png"
+        "aspect_ratio": "9:16",
     }
-
     if photo_url:
         input_params["image"] = photo_url
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: _run_with_retry(client, "google/gemini-2.5-flash-image", input_params)
+        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
     )
     image_url = _extract_url(output)
 
@@ -90,7 +89,7 @@ async def generate_character_image(character_prompt: str, photo_url: str = None)
         resp = await http.get(image_url, timeout=60)
         resp.raise_for_status()
 
-    return upload_to_r2(resp.content, "characters")
+    return upload_to_r2(resp.content, "characters", ext="jpg")
 
 
 async def generate_scene_image(
