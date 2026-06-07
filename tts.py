@@ -1,30 +1,50 @@
 import os
 import io
 
+import httpx
 
-OPENAI_VOICES = [
-    {"voice_id": "onyx",    "name": "Onyx",    "preview_url": "", "labels": {"gender": "male",   "accent": "american", "age": "middle_aged", "use_case": "narrator", "descriptive": "deep, authoritative"}},
-    {"voice_id": "echo",    "name": "Echo",    "preview_url": "", "labels": {"gender": "male",   "accent": "american", "age": "young",       "use_case": "narrator", "descriptive": "clear, confident"}},
-    {"voice_id": "fable",   "name": "Fable",   "preview_url": "", "labels": {"gender": "male",   "accent": "british",  "age": "middle_aged", "use_case": "narrator", "descriptive": "warm, storytelling"}},
-    {"voice_id": "alloy",   "name": "Alloy",   "preview_url": "", "labels": {"gender": "male",   "accent": "american", "age": "middle_aged", "use_case": "narrator", "descriptive": "neutral, balanced"}},
-    {"voice_id": "nova",    "name": "Nova",    "preview_url": "", "labels": {"gender": "female", "accent": "american", "age": "young",       "use_case": "narrator", "descriptive": "warm, engaging"}},
-    {"voice_id": "shimmer", "name": "Shimmer", "preview_url": "", "labels": {"gender": "female", "accent": "american", "age": "young",       "use_case": "narrator", "descriptive": "clear, expressive"}},
+
+ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
+# High-quality multilingual model (handles Turkish + English narration well)
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+
+# Fallback list shown if the ElevenLabs API can't be reached (premade voice ids).
+_FALLBACK_VOICES = [
+    {"voice_id": "JBFqnCBsd6RMkjVDRZzb", "name": "George",  "preview_url": "", "labels": {"gender": "male",   "descriptive": "warm, mature narrator"}},
+    {"voice_id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah",   "preview_url": "", "labels": {"gender": "female", "descriptive": "soft, engaging"}},
+    {"voice_id": "onwK4e9ZLuTAKqWW03F9", "name": "Daniel",  "preview_url": "", "labels": {"gender": "male",   "descriptive": "deep, authoritative"}},
+    {"voice_id": "XB0fDUnXU5powFXDhCwa", "name": "Charlotte","preview_url": "", "labels": {"gender": "female", "descriptive": "expressive, youthful"}},
 ]
 
 
-async def generate_speech(text: str, voice_id: str) -> bytes:
-    import asyncio
-    api_key = os.environ.get("OPENAI_API_KEY")
+def _headers() -> dict:
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
+        raise ValueError("ELEVENLABS_API_KEY environment variable is not set")
+    return {"xi-api-key": api_key}
 
-    def _sync():
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        response = client.audio.speech.create(model="tts-1-hd", voice=voice_id, input=text)
-        return response.content
 
-    return await asyncio.to_thread(_sync)
+async def generate_speech(text: str, voice_id: str) -> bytes:
+    """Generate narration audio (MP3 bytes) with ElevenLabs TTS."""
+    url = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"
+    payload = {
+        "text": text,
+        "model_id": ELEVENLABS_MODEL,
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+        },
+    }
+    headers = {**_headers(), "Content-Type": "application/json", "Accept": "audio/mpeg"}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            url, json=payload, headers=headers,
+            params={"output_format": "mp3_44100_128"},
+        )
+        resp.raise_for_status()
+        return resp.content
 
 
 def get_audio_duration(audio_bytes: bytes) -> float:
@@ -38,7 +58,8 @@ def get_audio_duration(audio_bytes: bytes) -> float:
 
 
 async def get_word_timestamps(audio_bytes: bytes) -> list:
-    """Use OpenAI Whisper to get word-level timestamps from audio."""
+    """Use OpenAI Whisper to get word-level timestamps from audio (for captions).
+    Independent of the TTS engine — works on any MP3."""
     import asyncio
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -60,5 +81,33 @@ async def get_word_timestamps(audio_bytes: bytes) -> list:
     return await asyncio.to_thread(_sync)
 
 
+def _map_voice(v: dict) -> dict:
+    labels = v.get("labels") or {}
+    return {
+        "voice_id": v.get("voice_id"),
+        "name": v.get("name", "Voice"),
+        "preview_url": v.get("preview_url", ""),
+        "labels": {
+            "gender": labels.get("gender", ""),
+            "accent": labels.get("accent", ""),
+            "age": labels.get("age", ""),
+            "use_case": labels.get("use_case", ""),
+            # ElevenLabs uses "description"; our UI reads "descriptive"
+            "descriptive": labels.get("description") or labels.get("descriptive") or labels.get("use_case", ""),
+        },
+    }
+
+
 async def get_voices() -> list:
-    return OPENAI_VOICES
+    """List narrator voices from the ElevenLabs account (premade + custom).
+    Each carries a preview_url so the UI can play a sample instantly."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(f"{ELEVENLABS_BASE}/voices", headers=_headers())
+            resp.raise_for_status()
+            data = resp.json()
+        voices = [_map_voice(v) for v in data.get("voices", []) if v.get("voice_id")]
+        return voices or _FALLBACK_VOICES
+    except Exception as e:
+        print(f"[WARN] ElevenLabs get_voices failed: {repr(e)}")
+        return _FALLBACK_VOICES
