@@ -97,6 +97,10 @@ def make_static_video(image_path: str, output_path: str, duration: int = 8, aspe
 def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> bool:
     result = subprocess.run([
         "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
+        # Explicitly take video from input 0 + audio from input 1 (narrator).
+        # Without -map, ffmpeg may keep the source clip's own audio (e.g. the
+        # p-video engine's generated sound) and drop the narrator entirely.
+        "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", "copy", "-c:a", "aac", "-shortest", output_path
     ], capture_output=True, text=True)
     if result.returncode != 0:
