@@ -438,6 +438,27 @@ async def check_env():
     return {k: bool(os.environ.get(k)) for k in keys}
 
 
+@app.post("/setup-r2-cors")
+async def setup_r2_cors():
+    """One-time: allow cross-origin GET so the web app can blob-download videos.
+    The videos are already public; this only enables browser fetch()."""
+    from storybook_pipeline import get_r2_client, R2_BUCKET
+    s3 = get_r2_client()
+    s3.put_bucket_cors(
+        Bucket=R2_BUCKET,
+        CORSConfiguration={
+            "CORSRules": [{
+                "AllowedOrigins": ["*"],
+                "AllowedMethods": ["GET", "HEAD"],
+                "AllowedHeaders": ["*"],
+                "ExposeHeaders": ["Content-Length", "Content-Type"],
+                "MaxAgeSeconds": 3600,
+            }]
+        },
+    )
+    return {"ok": True, "bucket": R2_BUCKET}
+
+
 @app.get("/recent-final-videos")
 async def recent_final_videos(hours: int = 24, prefix: str = "animated-story-final/"):
     """List final video objects in R2 under `prefix`, newest first, within the
