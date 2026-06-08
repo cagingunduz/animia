@@ -438,28 +438,29 @@ async def check_env():
     return {k: bool(os.environ.get(k)) for k in keys}
 
 
-@app.post("/setup-r2-cors")
-async def setup_r2_cors():
-    """One-time: allow cross-origin GET so the web app can blob-download videos.
-    The videos are already public; this only enables browser fetch()."""
-    from storybook_pipeline import get_r2_client, R2_BUCKET
-    try:
-        s3 = get_r2_client()
-        s3.put_bucket_cors(
-            Bucket=R2_BUCKET,
-            CORSConfiguration={
-                "CORSRules": [{
-                    "AllowedOrigins": ["*"],
-                    "AllowedMethods": ["GET", "HEAD"],
-                    "AllowedHeaders": ["*"],
-                    "ExposeHeaders": ["Content-Length", "Content-Type"],
-                    "MaxAgeSeconds": 3600,
-                }]
-            },
-        )
-        return {"ok": True, "bucket": R2_BUCKET}
-    except Exception as e:
-        return {"ok": False, "bucket": R2_BUCKET, "error": repr(e)}
+@app.get("/download")
+async def download(url: str, filename: str = "video.mp4"):
+    """Stream a (public R2) video back with an attachment disposition so browsers
+    download it. No size limit (unlike a Vercel proxy) and no CORS needed."""
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    safe_name = "".join(c for c in filename if c.isalnum() or c in " ._-").strip() or "video.mp4"
+    if not safe_name.lower().endswith(".mp4"):
+        safe_name += ".mp4"
+
+    async def stream():
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
+            async with client.stream("GET", url) as r:
+                r.raise_for_status()
+                async for chunk in r.aiter_bytes(chunk_size=1 << 16):
+                    yield chunk
+
+    return StreamingResponse(
+        stream(),
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
 
 
 @app.get("/recent-final-videos")
