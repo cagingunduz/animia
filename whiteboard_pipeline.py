@@ -48,32 +48,81 @@ def _dims(aspect_ratio: str, resolution: str) -> tuple:
     return (1920, 1080) if tall else (1280, 720)  # 16:9 default
 
 
-def _whiteboard_reveal(image_path: str, out_path: str, total_dur: float,
-                       aspect_ratio: str, resolution: str) -> bool:
-    """Reveal the line-art left-to-right on a white canvas (xfade smoothright),
-    then hold the finished drawing. No hand — just the drawing appearing."""
+def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
+                     aspect_ratio: str, resolution: str) -> bool:
+    """Real whiteboard 'being drawn' effect (no hand): trace the line-art contours
+    and progressively reveal the ink ALONG the strokes, so lines appear following
+    their own shape (not a slide/wipe). Then hold the finished drawing."""
+    import math
+    import numpy as np
+    import cv2
+
     w, h = _dims(aspect_ratio, resolution)
     fps = 30
     total = max(3.0, float(total_dur))
-    draw = max(2.0, total - 0.8)  # finish drawing slightly before the clip ends
-    filter_complex = (
-        f"[1:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
-        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:white,setsar=1,fps={fps},format=rgba[draw];"
-        f"[0:v]setsar=1,format=rgba[wb];"
-        f"[wb][draw]xfade=transition=smoothright:duration={draw:.2f}:offset=0,format=yuv420p[v]"
-    )
+    draw = max(2.0, total - 0.8)
+
+    src = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if src is None:
+        return False
+    # Fit the drawing onto a white w×h canvas
+    ih, iw = src.shape[:2]
+    scale = min(w / iw, h / ih)
+    nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
+    resized = cv2.resize(src, (nw, nh), interpolation=cv2.INTER_AREA)
+    canvas_img = np.full((h, w, 3), 255, np.uint8)
+    ox, oy = (w - nw) // 2, (h - nh) // 2
+    canvas_img[oy:oy + nh, ox:ox + nw] = resized
+
+    gray = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
+    _, ink = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
+    contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    # Natural drawing order: roughly top→bottom, then left→right by contour position
+    band = max(20, h // 20)
+    contours = sorted(contours, key=lambda c: (cv2.boundingRect(c)[1] // band, cv2.boundingRect(c)[0]))
+    pts = [(int(p[0]), int(p[1])) for c in contours for p in c[:, 0, :]]
+    n = len(pts)
+
+    draw_frames = max(1, int(draw * fps))
+    hold_frames = max(1, int((total - draw) * fps))
+    brush = max(2, int(round(h / 220)))
+
+    tmpvid = out_path + ".raw.avi"
+    vw = cv2.VideoWriter(tmpvid, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h))
+    if not vw.isOpened():
+        return False
+
+    if n == 0:
+        for _ in range(draw_frames + hold_frames):
+            vw.write(canvas_img)
+    else:
+        white = np.full((h, w, 3), 255, np.uint8)
+        reveal = np.zeros((h, w), np.uint8)
+        per = max(1, math.ceil(n / draw_frames))
+        idx = 0
+        for _f in range(draw_frames):
+            target = min(n, idx + per)
+            for j in range(idx, target):
+                cv2.circle(reveal, pts[j], brush, 255, -1)
+            idx = target
+            frame = white.copy()
+            m = reveal > 0
+            frame[m] = canvas_img[m]
+            vw.write(frame)
+        for _ in range(hold_frames):  # hold the complete drawing
+            vw.write(canvas_img)
+    vw.release()
+
     r = subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", f"color=white:s={w}x{h}:r={fps}:d={total:.2f}",
-            "-loop", "1", "-t", f"{total:.2f}", "-i", image_path,
-            "-filter_complex", filter_complex,
-            "-map", "[v]", "-pix_fmt", "yuv420p", "-r", str(fps), out_path,
-        ],
+        ["ffmpeg", "-y", "-i", tmpvid, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps), out_path],
         capture_output=True, text=True,
     )
+    try:
+        os.remove(tmpvid)
+    except OSError:
+        pass
     if r.returncode != 0:
-        print(f"[WARN] whiteboard reveal failed: {r.stderr[-400:]}")
+        print(f"[WARN] whiteboard draw encode failed: {r.stderr[-400:]}")
     return r.returncode == 0
 
 
@@ -166,10 +215,10 @@ async def generate_single_whiteboard_scene(
             print(f"[WARN] whiteboard narration failed: {repr(e)}")
             audio_bytes = None
 
-    # 3) Reveal animation
+    # 3) Whiteboard "being drawn" animation
     reveal_path = f"{tmp}/reveal_{run_id}.mp4"
-    if not _whiteboard_reveal(img_path, reveal_path, clip_dur, aspect_ratio, resolution):
-        raise RuntimeError("Whiteboard reveal render failed")
+    if not _whiteboard_draw(img_path, reveal_path, clip_dur, aspect_ratio, resolution):
+        raise RuntimeError("Whiteboard draw render failed")
     final_path = reveal_path
 
     # 4) Merge narration (xfade output is silent already)
