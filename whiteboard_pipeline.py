@@ -75,33 +75,42 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     ox, oy = (w - nw) // 2, (h - nh) // 2
     canvas_img[oy:oy + nh, ox:ox + nw] = resized
 
-    # Clean the line-art: kill JPEG ringing/speckle, then rebuild smooth anti-aliased
-    # black lines on white (removes the wavy/rippled edges of compressed source art).
+    # Clean the line-art (kill JPEG ringing/speckle) → binary ink mask.
     gray = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
     gray = cv2.medianBlur(gray, 3)
     _, ink = cv2.threshold(gray, 185, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
-    smooth = 255 - cv2.GaussianBlur(ink, (3, 3), 0)               # crisp, anti-aliased lines
-    canvas_img = cv2.cvtColor(smooth, cv2.COLOR_GRAY2BGR)
-    # SIMPLE keeps only corner points (bounded memory); we draw line segments between them.
-    contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    # Natural drawing order: roughly top→bottom, then left→right by contour position
+
+    # Vector trace: extract stroke contours, smooth out jitter/ripples, then DRAW them as
+    # clean anti-aliased black lines (no raster copy → crisp, even strokes at any size).
+    raw_contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    min_len = max(12, h / 90.0)  # drop tiny specks
+    contours = [c for c in raw_contours if cv2.arcLength(c, True) >= min_len]
     band = max(20, h // 20)
     contours = sorted(contours, key=lambda c: (cv2.boundingRect(c)[1] // band, cv2.boundingRect(c)[0]))
-    segs = []  # (x1,y1,x2,y2) stroke segments in draw order
+
+    def _smooth_pts(c, passes=3):
+        p = c[:, 0, :].astype(np.float32)
+        if len(p) < 6:
+            return p.astype(np.int32)
+        for _ in range(passes):  # moving-average rounds off the wobble/scallops
+            p = (np.roll(p, 1, 0) + p + np.roll(p, -1, 0)) / 3.0
+        return p.astype(np.int32)
+
+    segs = []  # (x1,y1,x2,y2) in draw order
     for c in contours:
-        p = c[:, 0, :]
+        p = _smooth_pts(c)
         for k in range(len(p) - 1):
             segs.append((int(p[k][0]), int(p[k][1]), int(p[k + 1][0]), int(p[k + 1][1])))
         if len(p) > 2:
             segs.append((int(p[-1][0]), int(p[-1][1]), int(p[0][0]), int(p[0][1])))
-    MAX_SEG = 120000  # cap for memory/time safety on busy images
+    MAX_SEG = 200000
     if len(segs) > MAX_SEG:
         segs = segs[:: math.ceil(len(segs) / MAX_SEG)]
     n = len(segs)
 
     draw_frames = max(1, int(draw * fps))
     hold_frames = max(1, int((total - draw) * fps))
-    brush = max(2, int(round(h / 220)))
+    thick = max(3, int(round(h / 260)))  # thick enough to merge the two stroke edges
 
     # Stream raw frames straight to ffmpeg (no lossy MJPG step) → crisp libx264.
     proc = subprocess.Popen(
@@ -121,28 +130,24 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
         except (BrokenPipeError, ValueError):
             return False
 
+    frame = np.full((h, w, 3), 255, np.uint8)  # white board, lines drawn incrementally
     if n == 0:
         for _ in range(draw_frames + hold_frames):
-            if not emit(canvas_img):
+            if not emit(frame):
                 break
     else:
-        frame = np.full((h, w, 3), 255, np.uint8)  # persistent, drawn incrementally
         per = max(1, math.ceil(n / draw_frames))
         idx = 0
         for _f in range(draw_frames):
             target = min(n, idx + per)
-            if target > idx:
-                newmask = np.zeros((h, w), np.uint8)
-                for j in range(idx, target):
-                    x1, y1, x2, y2 = segs[j]
-                    cv2.line(newmask, (x1, y1), (x2, y2), 255, brush, lineType=cv2.LINE_AA)
-                m = newmask > 0
-                frame[m] = canvas_img[m]
-                idx = target
+            for j in range(idx, target):
+                x1, y1, x2, y2 = segs[j]
+                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 0), thick, cv2.LINE_AA)
+            idx = target
             if not emit(frame):
                 break
         for _ in range(hold_frames):  # hold the complete drawing
-            if not emit(canvas_img):
+            if not emit(frame):
                 break
 
     try:
