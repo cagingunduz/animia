@@ -15,6 +15,7 @@ from image_gen import generate_character_image, generate_scene_image
 from prompt_generator import get_style_prompt, generate_scene_prompts, generate_story_script
 from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
 from animated_story_pipeline import run_animated_story_pipeline
+from whiteboard_pipeline import run_whiteboard_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -359,6 +360,31 @@ async def generate_animated_story(req: GenerateAnimatedStoryRequest):
         "aspect_ratio": req.aspect_ratio,
     }
     asyncio.create_task(run_animated_story_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+class GenerateWhiteboardRequest(BaseModel):
+    title: str
+    duration_minutes: Optional[int] = 1
+    aspect_ratio: Optional[str] = "16:9"
+    resolution: Optional[Literal["480p", "720p", "1080p", "2k"]] = "1080p"
+    scene_count: Optional[int] = None
+    narrator_voice_id: Optional[str] = None
+    narrator_speed: Optional[float] = 1.0
+    include_narrator: Optional[bool] = False
+    include_subtitles: Optional[bool] = False
+
+
+@app.post("/generate-whiteboard")
+async def generate_whiteboard(req: GenerateWhiteboardRequest):
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "status": "queued", "step": 0, "total_steps": 0,
+        "message": "Kuyrukta bekleniyor...", "scenes": [],
+        "final_video_url": None, "error": None, "traceback": None,
+        "aspect_ratio": req.aspect_ratio,
+    }
+    asyncio.create_task(run_whiteboard_pipeline(job_id, req.model_dump()))
     return {"job_id": job_id, "status": "queued"}
 
 

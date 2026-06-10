@@ -186,3 +186,31 @@ async def generate_scene_image_grok(
         resp.raise_for_status()
 
     return upload_to_r2(resp.content, "scenes", ext="jpg")
+
+
+async def generate_whiteboard_image(concept: str, aspect_ratio: str = "16:9") -> str:
+    """Generate a clean black line-art illustration on a plain white background,
+    for the Whiteboard Animation mode (revealed as if hand-drawn)."""
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+    ar = ASPECT_RATIO_MAP.get(aspect_ratio, "16:9")
+
+    prompt = (
+        f"Black ink line drawing of: {concept}. "
+        f"Simple hand-drawn marker sketch / doodle, clean bold black outlines on a "
+        f"plain pure white background. Whiteboard explainer / doodle style. "
+        f"Flat, no shading, no gradients, no color, no grey fills, minimal detail, "
+        f"clear silhouette, lots of white space. No text, no watermark, no border."
+    )
+    input_params = {"prompt": prompt, "aspect_ratio": ar}
+
+    loop = asyncio.get_event_loop()
+    output = await loop.run_in_executor(
+        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
+    )
+    image_url = _extract_url(output)
+
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.get(image_url, timeout=60)
+        resp.raise_for_status()
+
+    return upload_to_r2(resp.content, "whiteboard", ext="jpg")
