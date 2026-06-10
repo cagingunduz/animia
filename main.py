@@ -491,23 +491,37 @@ async def check_cv():
 
 
 @app.get("/check-draw")
-async def check_draw(w: int = 1280, h: int = 720):
-    """Run the whiteboard draw on a synthetic line-art at the given size to locate
-    a crash (no response = hard crash/OOM; JSON = it survived)."""
-    out = {"ok": False, "w": w, "h": h}
+async def check_draw(w: int = 1280, h: int = 720, gen: int = 0):
+    """Run the whiteboard draw to locate a crash (no response = hard crash/OOM).
+    gen=1 generates a REAL Grok whiteboard image first (exact pipeline path)."""
+    out = {"ok": False, "w": w, "h": h, "gen": gen}
     try:
         import tempfile, os as _os
         import numpy as np
         import cv2
         from whiteboard_pipeline import _whiteboard_draw
-        img = np.full((h, w, 3), 255, np.uint8)
-        cv2.circle(img, (w // 2, h // 2), min(w, h) // 4, (0, 0, 0), 3)
-        cv2.rectangle(img, (60, 60), (w // 3, h // 3), (0, 0, 0), 3)
-        cv2.line(img, (40, h - 40), (w - 40, 40), (0, 0, 0), 3)
+        from storybook_pipeline import download_file as _dl
         ip = tempfile.mktemp(suffix=".jpg")
+        if gen:
+            from image_gen import generate_whiteboard_image
+            url = await generate_whiteboard_image("how compound interest works", "16:9")
+            out["img_url"] = url
+            data = await _dl(url)
+            with open(ip, "wb") as f:
+                f.write(data)
+            im = cv2.imread(ip, cv2.IMREAD_GRAYSCALE)
+            _, ink = cv2.threshold(im, 200, 255, cv2.THRESH_BINARY_INV)
+            cnts, _hi = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            out["n_contours"] = len(cnts)
+            out["n_points_simple"] = int(sum(len(c) for c in cnts))
+            out["ink_ratio"] = round(float((ink > 0).mean()), 4)
+        else:
+            img = np.full((h, w, 3), 255, np.uint8)
+            cv2.circle(img, (w // 2, h // 2), min(w, h) // 4, (0, 0, 0), 3)
+            cv2.line(img, (40, h - 40), (w - 40, 40), (0, 0, 0), 3)
+            cv2.imwrite(ip, img)
         op = tempfile.mktemp(suffix=".mp4")
-        cv2.imwrite(ip, img)
-        ok = _whiteboard_draw(ip, op, 3.0, "16:9" if w >= h else "9:16", "1080p" if h >= 1000 else "720p")
+        ok = _whiteboard_draw(ip, op, 3.0, "16:9", "720p")
         out["draw_ok"] = bool(ok)
         out["out_size"] = _os.path.getsize(op) if _os.path.exists(op) else 0
         for p in (ip, op):
