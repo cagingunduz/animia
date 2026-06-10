@@ -464,6 +464,32 @@ async def check_env():
     return {k: bool(os.environ.get(k)) for k in keys}
 
 
+@app.get("/check-cv")
+async def check_cv():
+    """Verify OpenCV imports + can write a tiny MJPG video on this host."""
+    out = {"ok": False}
+    try:
+        import numpy as np
+        import cv2
+        out["cv2"] = cv2.__version__
+        import tempfile, os as _os
+        p = tempfile.mktemp(suffix=".avi")
+        vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30, (64, 64))
+        out["writer_opened"] = bool(vw.isOpened())
+        if vw.isOpened():
+            vw.write(np.full((64, 64, 3), 255, np.uint8))
+            vw.release()
+            out["wrote"] = _os.path.exists(p) and _os.path.getsize(p) > 0
+            try:
+                _os.remove(p)
+            except OSError:
+                pass
+        out["ok"] = out.get("writer_opened", False)
+    except Exception as e:
+        out["error"] = repr(e)
+    return out
+
+
 @app.get("/download")
 async def download(url: str, filename: str = "video.mp4"):
     """Stream a (public R2) video back with an attachment disposition so browsers
