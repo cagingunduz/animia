@@ -490,6 +490,39 @@ async def check_cv():
     return out
 
 
+@app.get("/check-draw")
+async def check_draw(w: int = 1280, h: int = 720):
+    """Run the whiteboard draw on a synthetic line-art at the given size to locate
+    a crash (no response = hard crash/OOM; JSON = it survived)."""
+    out = {"ok": False, "w": w, "h": h}
+    try:
+        import tempfile, os as _os
+        import numpy as np
+        import cv2
+        from whiteboard_pipeline import _whiteboard_draw
+        img = np.full((h, w, 3), 255, np.uint8)
+        cv2.circle(img, (w // 2, h // 2), min(w, h) // 4, (0, 0, 0), 3)
+        cv2.rectangle(img, (60, 60), (w // 3, h // 3), (0, 0, 0), 3)
+        cv2.line(img, (40, h - 40), (w - 40, 40), (0, 0, 0), 3)
+        ip = tempfile.mktemp(suffix=".jpg")
+        op = tempfile.mktemp(suffix=".mp4")
+        cv2.imwrite(ip, img)
+        ok = _whiteboard_draw(ip, op, 3.0, "16:9" if w >= h else "9:16", "1080p" if h >= 1000 else "720p")
+        out["draw_ok"] = bool(ok)
+        out["out_size"] = _os.path.getsize(op) if _os.path.exists(op) else 0
+        for p in (ip, op):
+            try:
+                _os.remove(p)
+            except OSError:
+                pass
+        out["ok"] = out["draw_ok"] and out["out_size"] > 0
+    except Exception as e:
+        import traceback
+        out["error"] = repr(e)
+        out["tb"] = traceback.format_exc()[-500:]
+    return out
+
+
 @app.get("/download")
 async def download(url: str, filename: str = "video.mp4"):
     """Stream a (public R2) video back with an attachment disposition so browsers
