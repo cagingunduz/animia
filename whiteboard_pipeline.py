@@ -69,7 +69,8 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     ih, iw = src.shape[:2]
     scale = min(w / iw, h / ih)
     nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
-    resized = cv2.resize(src, (nw, nh), interpolation=cv2.INTER_AREA)
+    interp = cv2.INTER_LANCZOS4 if scale > 1 else cv2.INTER_AREA  # sharper upscaling
+    resized = cv2.resize(src, (nw, nh), interpolation=interp)
     canvas_img = np.full((h, w, 3), 255, np.uint8)
     ox, oy = (w - nw) // 2, (h - nh) // 2
     canvas_img[oy:oy + nh, ox:ox + nw] = resized
@@ -97,14 +98,28 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     hold_frames = max(1, int((total - draw) * fps))
     brush = max(2, int(round(h / 220)))
 
-    tmpvid = out_path + ".raw.avi"
-    vw = cv2.VideoWriter(tmpvid, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h))
-    if not vw.isOpened():
-        return False
+    # Stream raw frames straight to ffmpeg (no lossy MJPG step) → crisp libx264.
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s", f"{w}x{h}", "-r", str(fps), "-i", "-", "-an",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p", out_path,
+        ],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+    def emit(fr) -> bool:
+        try:
+            proc.stdin.write(fr.tobytes())
+            return True
+        except (BrokenPipeError, ValueError):
+            return False
 
     if n == 0:
         for _ in range(draw_frames + hold_frames):
-            vw.write(canvas_img)
+            if not emit(canvas_img):
+                break
     else:
         frame = np.full((h, w, 3), 255, np.uint8)  # persistent, drawn incrementally
         per = max(1, math.ceil(n / draw_frames))
@@ -115,26 +130,24 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 newmask = np.zeros((h, w), np.uint8)
                 for j in range(idx, target):
                     x1, y1, x2, y2 = segs[j]
-                    cv2.line(newmask, (x1, y1), (x2, y2), 255, brush)
+                    cv2.line(newmask, (x1, y1), (x2, y2), 255, brush, lineType=cv2.LINE_AA)
                 m = newmask > 0
                 frame[m] = canvas_img[m]
                 idx = target
-            vw.write(frame)
+            if not emit(frame):
+                break
         for _ in range(hold_frames):  # hold the complete drawing
-            vw.write(canvas_img)
-    vw.release()
+            if not emit(canvas_img):
+                break
 
-    r = subprocess.run(
-        ["ffmpeg", "-y", "-i", tmpvid, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps), out_path],
-        capture_output=True, text=True,
-    )
     try:
-        os.remove(tmpvid)
-    except OSError:
+        proc.stdin.close()
+    except (BrokenPipeError, ValueError):
         pass
-    if r.returncode != 0:
-        print(f"[WARN] whiteboard draw encode failed: {r.stderr[-400:]}")
-    return r.returncode == 0
+    proc.wait()
+    if proc.returncode != 0:
+        print(f"[WARN] whiteboard draw encode rc={proc.returncode}")
+    return proc.returncode == 0
 
 
 async def generate_whiteboard_script(title: str, duration_minutes: int,
