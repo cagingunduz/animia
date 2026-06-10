@@ -76,12 +76,22 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
 
     gray = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
     _, ink = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
-    contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    # SIMPLE keeps only corner points (bounded memory); we draw line segments between them.
+    contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     # Natural drawing order: roughly top→bottom, then left→right by contour position
     band = max(20, h // 20)
     contours = sorted(contours, key=lambda c: (cv2.boundingRect(c)[1] // band, cv2.boundingRect(c)[0]))
-    pts = [(int(p[0]), int(p[1])) for c in contours for p in c[:, 0, :]]
-    n = len(pts)
+    segs = []  # (x1,y1,x2,y2) stroke segments in draw order
+    for c in contours:
+        p = c[:, 0, :]
+        for k in range(len(p) - 1):
+            segs.append((int(p[k][0]), int(p[k][1]), int(p[k + 1][0]), int(p[k + 1][1])))
+        if len(p) > 2:
+            segs.append((int(p[-1][0]), int(p[-1][1]), int(p[0][0]), int(p[0][1])))
+    MAX_SEG = 120000  # cap for memory/time safety on busy images
+    if len(segs) > MAX_SEG:
+        segs = segs[:: math.ceil(len(segs) / MAX_SEG)]
+    n = len(segs)
 
     draw_frames = max(1, int(draw * fps))
     hold_frames = max(1, int((total - draw) * fps))
@@ -96,18 +106,19 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
         for _ in range(draw_frames + hold_frames):
             vw.write(canvas_img)
     else:
-        white = np.full((h, w, 3), 255, np.uint8)
-        reveal = np.zeros((h, w), np.uint8)
+        frame = np.full((h, w, 3), 255, np.uint8)  # persistent, drawn incrementally
         per = max(1, math.ceil(n / draw_frames))
         idx = 0
         for _f in range(draw_frames):
             target = min(n, idx + per)
-            for j in range(idx, target):
-                cv2.circle(reveal, pts[j], brush, 255, -1)
-            idx = target
-            frame = white.copy()
-            m = reveal > 0
-            frame[m] = canvas_img[m]
+            if target > idx:
+                newmask = np.zeros((h, w), np.uint8)
+                for j in range(idx, target):
+                    x1, y1, x2, y2 = segs[j]
+                    cv2.line(newmask, (x1, y1), (x2, y2), 255, brush)
+                m = newmask > 0
+                frame[m] = canvas_img[m]
+                idx = target
             vw.write(frame)
         for _ in range(hold_frames):  # hold the complete drawing
             vw.write(canvas_img)
