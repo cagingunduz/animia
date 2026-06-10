@@ -111,9 +111,9 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     n = len(segs)
 
     draw_frames = max(1, int(draw * fps))
-    # In colour mode reserve a short window to wash the colour in after the outline.
-    color_frames = max(1, int(min(1.3, (total - draw) * 0.6) * fps)) if colored else 0
-    hold_frames = max(1, int(total * fps) - draw_frames - color_frames)
+    remaining = max(1, int(total * fps) - draw_frames)
+    settle_frames = max(1, int(remaining * 0.45)) if colored else 0  # let colour finish filling
+    hold_frames = max(1, remaining - settle_frames)
     thick = max(3, int(round(h / 260)))  # thick enough to merge the two stroke edges
 
     # Stream raw frames straight to ffmpeg (no lossy MJPG step) → crisp libx264.
@@ -135,9 +135,10 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             return False
 
     frame = np.full((h, w, 3), 255, np.uint8)  # white board, lines drawn incrementally
-    # Phase A — draw the (black) outlines along their strokes
-    if n > 0:
-        per = max(1, math.ceil(n / draw_frames))
+    per = max(1, math.ceil(n / draw_frames)) if n > 0 else 0
+
+    if not colored:
+        # Phase A only — draw black outlines along their strokes, then hold the drawing
         idx = 0
         for _f in range(draw_frames):
             target = min(n, idx + per)
@@ -147,25 +148,40 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             idx = target
             if not emit(frame):
                 break
-    else:
-        for _ in range(draw_frames):
+        for _ in range(hold_frames):
             if not emit(frame):
                 break
+    else:
+        # Colour mode — "expanding radial matte": as each stroke is drawn, colour blooms
+        # out from behind it like ink and keeps spreading (dilate) to fill interiors.
+        colmask = np.zeros((h, w), np.uint8)              # 0=hidden, 255=colour revealed
+        radius = max(18, int(round(h / 22)))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        colored_f = canvas_img.astype(np.float32)
 
-    if colored:
-        # Phase B — wash the colour in over the outlines, then hold the coloured image
-        outline = frame.copy()
-        for k in range(color_frames):
-            a = (k + 1) / color_frames
-            blended = cv2.addWeighted(outline, 1.0 - a, canvas_img, a, 0)
-            if not emit(blended):
+        def composite():
+            a = cv2.GaussianBlur(colmask, (31, 31), 0).astype(np.float32) / 255.0
+            a3 = cv2.merge([a, a, a])
+            return (colored_f * a3 + frame.astype(np.float32) * (1.0 - a3)).astype(np.uint8)
+
+        idx = 0
+        for _f in range(draw_frames):
+            target = min(n, idx + per)
+            for j in range(idx, target):
+                x1, y1, x2, y2 = segs[j]
+                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 0), thick, cv2.LINE_AA)
+                cv2.circle(colmask, (x2, y2), radius, 255, -1)  # seed colour bloom at the pen
+            idx = target
+            colmask = cv2.dilate(colmask, kernel)               # grow the bloom each frame
+            if not emit(composite()):
+                break
+        # Settle — keep spreading colour into the interiors, then hold the full image
+        for _ in range(settle_frames):
+            colmask = cv2.dilate(colmask, kernel, iterations=2)
+            if not emit(composite()):
                 break
         for _ in range(hold_frames):
             if not emit(canvas_img):
-                break
-    else:
-        for _ in range(hold_frames):  # hold the complete line drawing
-            if not emit(frame):
                 break
 
     try:
