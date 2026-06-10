@@ -17,7 +17,7 @@ import subprocess
 import anthropic
 
 from jobs import job_store
-from image_gen import generate_whiteboard_image
+from image_gen import generate_whiteboard_image, generate_whiteboard_color_image
 from tts import generate_speech, get_audio_duration, get_word_timestamps
 from storybook_pipeline import (
     concat_video_files,
@@ -49,10 +49,10 @@ def _dims(aspect_ratio: str, resolution: str) -> tuple:
 
 
 def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
-                     aspect_ratio: str, resolution: str) -> bool:
-    """Real whiteboard 'being drawn' effect (no hand): trace the line-art contours
-    and progressively reveal the ink ALONG the strokes, so lines appear following
-    their own shape (not a slide/wipe). Then hold the finished drawing."""
+                     aspect_ratio: str, resolution: str, colored: bool = False) -> bool:
+    """Whiteboard 'being drawn' effect (no hand): trace the contours and draw clean
+    lines following their own shape. When `colored`, draw the black outlines first,
+    then wash the colour in over the line art (then hold the finished image)."""
     import math
     import numpy as np
     import cv2
@@ -75,10 +75,12 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     ox, oy = (w - nw) // 2, (h - nh) // 2
     canvas_img[oy:oy + nh, ox:ox + nw] = resized
 
-    # Clean the line-art (kill JPEG ringing/speckle) → binary ink mask.
+    # Clean (kill JPEG ringing/speckle) → binary ink mask. In colour mode only the
+    # near-black OUTLINES become "ink" (so colour fills are not traced as lines).
     gray = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
     gray = cv2.medianBlur(gray, 3)
-    _, ink = cv2.threshold(gray, 185, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
+    ink_thresh = 95 if colored else 185
+    _, ink = cv2.threshold(gray, ink_thresh, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
 
     # Vector trace: extract stroke contours, smooth out jitter/ripples, then DRAW them as
     # clean anti-aliased black lines (no raster copy → crisp, even strokes at any size).
@@ -109,7 +111,9 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     n = len(segs)
 
     draw_frames = max(1, int(draw * fps))
-    hold_frames = max(1, int((total - draw) * fps))
+    # In colour mode reserve a short window to wash the colour in after the outline.
+    color_frames = max(1, int(min(1.3, (total - draw) * 0.6) * fps)) if colored else 0
+    hold_frames = max(1, int(total * fps) - draw_frames - color_frames)
     thick = max(3, int(round(h / 260)))  # thick enough to merge the two stroke edges
 
     # Stream raw frames straight to ffmpeg (no lossy MJPG step) → crisp libx264.
@@ -131,11 +135,8 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             return False
 
     frame = np.full((h, w, 3), 255, np.uint8)  # white board, lines drawn incrementally
-    if n == 0:
-        for _ in range(draw_frames + hold_frames):
-            if not emit(frame):
-                break
-    else:
+    # Phase A — draw the (black) outlines along their strokes
+    if n > 0:
         per = max(1, math.ceil(n / draw_frames))
         idx = 0
         for _f in range(draw_frames):
@@ -146,7 +147,24 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             idx = target
             if not emit(frame):
                 break
-        for _ in range(hold_frames):  # hold the complete drawing
+    else:
+        for _ in range(draw_frames):
+            if not emit(frame):
+                break
+
+    if colored:
+        # Phase B — wash the colour in over the outlines, then hold the coloured image
+        outline = frame.copy()
+        for k in range(color_frames):
+            a = (k + 1) / color_frames
+            blended = cv2.addWeighted(outline, 1.0 - a, canvas_img, a, 0)
+            if not emit(blended):
+                break
+        for _ in range(hold_frames):
+            if not emit(canvas_img):
+                break
+    else:
+        for _ in range(hold_frames):  # hold the complete line drawing
             if not emit(frame):
                 break
 
@@ -215,6 +233,7 @@ async def generate_single_whiteboard_scene(
     include_narrator: bool,
     include_subtitles: bool,
     narrator_speed: float = 1.0,
+    colored: bool = False,
 ) -> dict:
     tmp = tempfile.mkdtemp()
     run_id = uuid.uuid4().hex[:8]
@@ -222,8 +241,11 @@ async def generate_single_whiteboard_scene(
     narrator_text = scene.get("narrator_text", "")
     tone = scene.get("tone", "informative")
 
-    # 1) Line-art drawing on white
-    img_url = await generate_whiteboard_image(concept, aspect_ratio)
+    # 1) Drawing — black line-art, or colour illustration with black outlines
+    if colored:
+        img_url = await generate_whiteboard_color_image(concept, aspect_ratio)
+    else:
+        img_url = await generate_whiteboard_image(concept, aspect_ratio)
     img_bytes = await download_file(img_url)
     img_path = f"{tmp}/draw_{run_id}.jpg"
     with open(img_path, "wb") as f:
@@ -251,7 +273,7 @@ async def generate_single_whiteboard_scene(
 
     # 3) Whiteboard "being drawn" animation
     reveal_path = f"{tmp}/reveal_{run_id}.mp4"
-    if not _whiteboard_draw(img_path, reveal_path, clip_dur, aspect_ratio, resolution):
+    if not _whiteboard_draw(img_path, reveal_path, clip_dur, aspect_ratio, resolution, colored=colored):
         raise RuntimeError("Whiteboard draw render failed")
     final_path = reveal_path
 
@@ -293,6 +315,7 @@ async def run_whiteboard_pipeline(job_id: str, payload: dict):
         narrator_speed = payload.get("narrator_speed", 1.0) or 1.0
         include_narrator = bool(payload.get("include_narrator", False))
         include_subtitles = bool(payload.get("include_subtitles", False))
+        colored = bool(payload.get("colored", False))
 
         # 1) Script
         log(job_id, 1, 1, "Senaryo yazılıyor...")
@@ -320,6 +343,7 @@ async def run_whiteboard_pipeline(job_id: str, payload: dict):
                 include_narrator=include_narrator,
                 include_subtitles=include_subtitles,
                 narrator_speed=narrator_speed,
+                colored=colored,
             )
             for s in job_store[job_id]["scenes"]:
                 if s["scene_index"] == idx:

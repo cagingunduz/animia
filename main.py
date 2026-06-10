@@ -373,6 +373,7 @@ class GenerateWhiteboardRequest(BaseModel):
     narrator_speed: Optional[float] = 1.0
     include_narrator: Optional[bool] = False
     include_subtitles: Optional[bool] = False
+    colored: Optional[bool] = False
 
 
 @app.post("/generate-whiteboard")

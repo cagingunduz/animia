@@ -214,3 +214,31 @@ async def generate_whiteboard_image(concept: str, aspect_ratio: str = "16:9") ->
         resp.raise_for_status()
 
     return upload_to_r2(resp.content, "whiteboard", ext="jpg")
+
+
+async def generate_whiteboard_color_image(concept: str, aspect_ratio: str = "16:9") -> str:
+    """Generate a COLORFUL flat illustration with bold black outlines on white, for the
+    colored Whiteboard mode (outline is drawn, then the color washes in)."""
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+    ar = ASPECT_RATIO_MAP.get(aspect_ratio, "16:9")
+
+    prompt = (
+        f"Colorful flat vector illustration of: {concept}. "
+        f"Bold clean BLACK outlines with simple flat color fills, cartoon / children's "
+        f"book / explainer doodle style, on a plain pure white background. "
+        f"Bright friendly colors, simple shapes, no shading, no gradients, no photo "
+        f"realism, no text, no watermark, no border, lots of white space."
+    )
+    input_params = {"prompt": prompt, "aspect_ratio": ar}
+
+    loop = asyncio.get_event_loop()
+    output = await loop.run_in_executor(
+        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
+    )
+    image_url = _extract_url(output)
+
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.get(image_url, timeout=60)
+        resp.raise_for_status()
+
+    return upload_to_r2(resp.content, "whiteboard", ext="jpg")
