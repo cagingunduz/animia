@@ -60,7 +60,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     w, h = _dims(aspect_ratio, resolution)
     fps = 30
     total = max(3.0, float(total_dur))
-    draw = max(2.0, total - 0.8)
+    draw = max(1.5, min(total * 0.5, total - 0.5))  # draw faster, then hold the finished art
 
     src = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if src is None:
@@ -75,8 +75,13 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
     ox, oy = (w - nw) // 2, (h - nh) // 2
     canvas_img[oy:oy + nh, ox:ox + nw] = resized
 
+    # Clean the line-art: kill JPEG ringing/speckle, then rebuild smooth anti-aliased
+    # black lines on white (removes the wavy/rippled edges of compressed source art).
     gray = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
-    _, ink = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
+    gray = cv2.medianBlur(gray, 3)
+    _, ink = cv2.threshold(gray, 185, 255, cv2.THRESH_BINARY_INV)  # ink = white(255)
+    smooth = 255 - cv2.GaussianBlur(ink, (3, 3), 0)               # crisp, anti-aliased lines
+    canvas_img = cv2.cvtColor(smooth, cv2.COLOR_GRAY2BGR)
     # SIMPLE keeps only corner points (bounded memory); we draw line segments between them.
     contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     # Natural drawing order: roughly top→bottom, then left→right by contour position
