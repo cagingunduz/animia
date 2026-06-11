@@ -53,16 +53,65 @@ import time
 
 
 def _run_with_retry(client, model: str, input_params: dict, max_retries: int = 6):
-    """Replicate client.run with backoff on 429 (rate-limit) errors."""
+    """Replicate client.run with backoff on transient provider errors."""
     delays = [3, 6, 10, 10, 12, 15]
     for attempt in range(max_retries):
         try:
             return client.run(model, input=input_params)
         except Exception as e:
-            if getattr(e, "status", None) == 429 and attempt < max_retries - 1:
+            if _is_retryable_replicate_error(e) and attempt < max_retries - 1:
+                print(f"[WARN] {model} transient error, retry {attempt + 1}/{max_retries}: {repr(e)}")
                 time.sleep(delays[min(attempt, len(delays) - 1)])
                 continue
             raise
+
+
+def _is_retryable_replicate_error(error: Exception) -> bool:
+    status = getattr(error, "status", None)
+    if status in (408, 409, 429, 500, 502, 503, 504):
+        return True
+    msg = str(error).lower()
+    transient_terms = (
+        "internal",
+        "try again later",
+        "temporarily",
+        "timeout",
+        "timed out",
+        "rate limit",
+        "overloaded",
+        "failed to generate image",
+    )
+    return any(term in msg for term in transient_terms)
+
+
+def _run_with_fallback(
+    client,
+    primary_model: str,
+    primary_input: dict,
+    fallback_model: str,
+    fallback_input: dict,
+):
+    try:
+        return _run_with_retry(client, primary_model, primary_input)
+    except Exception as primary_error:
+        print(f"[WARN] {primary_model} failed, falling back to {fallback_model}: {repr(primary_error)}")
+        try:
+            return _run_with_retry(client, fallback_model, fallback_input)
+        except Exception as fallback_error:
+            raise RuntimeError(
+                f"Image generation failed on primary {primary_model} and fallback {fallback_model}: "
+                f"{repr(primary_error)} / {repr(fallback_error)}"
+            ) from fallback_error
+
+
+async def _download_and_upload_generated_image(image_url: str, folder: str, default_ext: str = "jpg") -> str:
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.get(image_url, timeout=60)
+        resp.raise_for_status()
+
+    content_type = resp.headers.get("content-type", "").lower()
+    ext = "png" if "png" in content_type else default_ext
+    return upload_to_r2(resp.content, folder, ext=ext)
 
 
 # ─── GEMINI — 2D Animation (characters + scenes) ───
@@ -202,18 +251,21 @@ async def generate_whiteboard_image(concept: str, aspect_ratio: str = "16:9") ->
         f"clear silhouette, lots of white space. No text, no watermark, no border."
     )
     input_params = {"prompt": prompt, "aspect_ratio": ar}
+    fallback_input = {"prompt": prompt, "aspect_ratio": ar, "output_format": "png"}
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
+        None,
+        lambda: _run_with_fallback(
+            client,
+            "xai/grok-imagine-image",
+            input_params,
+            "google/gemini-2.5-flash-image",
+            fallback_input,
+        )
     )
     image_url = _extract_url(output)
-
-    async with httpx.AsyncClient(timeout=60) as http:
-        resp = await http.get(image_url, timeout=60)
-        resp.raise_for_status()
-
-    return upload_to_r2(resp.content, "whiteboard", ext="jpg")
+    return await _download_and_upload_generated_image(image_url, "whiteboard")
 
 
 async def generate_whiteboard_color_image(
@@ -248,15 +300,18 @@ async def generate_whiteboard_color_image(
             f"realism, no text, no watermark, no border, lots of white space."
         )
     input_params = {"prompt": prompt, "aspect_ratio": ar}
+    fallback_input = {"prompt": prompt, "aspect_ratio": ar, "output_format": "png"}
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(
-        None, lambda: _run_with_retry(client, "xai/grok-imagine-image", input_params)
+        None,
+        lambda: _run_with_fallback(
+            client,
+            "xai/grok-imagine-image",
+            input_params,
+            "google/gemini-2.5-flash-image",
+            fallback_input,
+        )
     )
     image_url = _extract_url(output)
-
-    async with httpx.AsyncClient(timeout=60) as http:
-        resp = await http.get(image_url, timeout=60)
-        resp.raise_for_status()
-
-    return upload_to_r2(resp.content, "whiteboard", ext="jpg")
+    return await _download_and_upload_generated_image(image_url, "whiteboard")
