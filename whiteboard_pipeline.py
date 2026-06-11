@@ -192,28 +192,33 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 return
             x, y, rw, rh = bbox
             ink_area = int(cv2.countNonZero(cv2.bitwise_and(ink_mask, visible)))
-            seed_source = cv2.bitwise_and(cv2.dilate(ink_mask, small_kernel, iterations=1), visible)
+            seed_source = cv2.bitwise_and(ink_mask, visible)
             seed_contours, _ = cv2.findContours(seed_source, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+            if not seed_contours:
+                seed_contours, _ = cv2.findContours(visible, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
             seed_contours = [c for c in seed_contours if cv2.arcLength(c, False) > max(8, h / 180)]
             seed_contours = sorted(seed_contours, key=lambda c: (cv2.boundingRect(c)[1] // band, cv2.boundingRect(c)[0]))
-            points = []
+
+            paths = []
+            previous_end = None
             for contour in seed_contours:
                 pts = contour[:, 0, :]
-                step = max(1, int(math.ceil(len(pts) / 42)))
-                points.extend((int(px), int(py)) for px, py in pts[::step])
+                if len(pts) < 2:
+                    continue
+                step = max(1, int(math.ceil(len(pts) / 260)))
+                sampled = pts[::step].astype(np.int32)
+                if len(sampled) < 2:
+                    continue
+                if previous_end is not None and len(sampled) > 3:
+                    d = np.sum((sampled - np.array(previous_end, dtype=np.int32)) ** 2, axis=1)
+                    start = int(np.argmin(d))
+                    sampled = np.concatenate([sampled[start:], sampled[:start]], axis=0)
+                path = [(int(px), int(py)) for px, py in sampled]
+                paths.append(path)
+                previous_end = path[-1]
 
-            if len(points) < 18:
-                ys, xs = np.where(visible > 0)
-                if len(xs) > 0:
-                    # Deterministic hash order avoids row/column scanline reveals.
-                    hashes = ((xs.astype(np.uint64) * 73856093) ^ (ys.astype(np.uint64) * 19349663))
-                    order = np.argsort(hashes)
-                    max_points = 220
-                    stride = max(1, int(math.ceil(len(order) / max_points)))
-                    points = [(int(xs[i]), int(ys[i])) for i in order[::stride]]
-
-            if not points:
-                points = [(int(x + rw / 2), int(y + rh / 2))]
+            if not paths:
+                paths = [[(int(x + rw / 2), int(y + rh / 2)), (int(x + rw / 2) + 1, int(y + rh / 2) + 1)]]
 
             regions.append({
                 "mask": visible,
@@ -221,7 +226,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 "area": area,
                 "ink": ink_area,
                 "order_bias": order_bias,
-                "points": points,
+                "paths": paths,
             })
 
         for lab in range(1, num):
@@ -243,7 +248,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 "area": max(1, int(cv2.countNonZero(subject))),
                 "ink": int(cv2.countNonZero(ink_mask)),
                 "order_bias": 0,
-                "points": [(w // 2, h // 2)],
+                "paths": [[(w // 2, h // 2), (w // 2 + 1, h // 2 + 1)]],
             }]
 
         # Merge tiny leftovers into the closest normal reveal by letting the final
@@ -256,7 +261,10 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 r["order_bias"],
             ),
         )
-        total_weight = max(1, sum(max(r["area"] ** 0.55, r["ink"] ** 0.65, 1) for r in regions))
+        def _region_path_len(region):
+            return max(1, sum(max(1, len(path) - 1) for path in region.get("paths", [])))
+
+        total_weight = max(1, sum(max(_region_path_len(r), r["ink"] ** 0.65, 1) for r in regions))
         reveal_frames = max(1, int(total * fps * 0.86))
         hold_frames = max(1, int(total * fps) - reveal_frames)
         soft_ksize = max(25, int(round(h / 48)) | 1)
@@ -265,16 +273,13 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             (max(5, int(h / 180) | 1), max(5, int(h / 180) | 1)),
         )
 
-        def _region_progress_mask(region, progress):
+        def _mask_from_drawn_strokes(region, stroke_seed, progress):
             x, y, rw, rh = region["bbox"]
-            points = region.get("points") or [(x + max(1, rw) // 2, y + max(1, rh) // 2)]
-            count = max(1, int(math.ceil(len(points) * progress)))
-            selected = points[:count]
-            bloom = np.zeros((h, w), np.uint8)
             radius = max(10, int(round(min(max(rw, 1), max(rh, 1)) / 18)))
             radius = min(radius, max(42, int(h / 18)))
-            for px, py in selected:
-                cv2.circle(bloom, (px, py), radius, 255, -1)
+            kernel_size = max(5, (radius * 2 + 1) | 1)
+            stroke_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+            bloom = cv2.dilate(stroke_seed, stroke_kernel, iterations=1)
 
             # Late in the component, let the ink blooms expand into the remaining
             # interior fill. This keeps the "paint appears behind the drawing"
@@ -309,14 +314,43 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             if ri == len(regions) - 1:
                 region_frames = frames_left
             else:
-                weight = max(region["area"] ** 0.55, region["ink"] ** 0.65, 1)
+                weight = max(_region_path_len(region), region["ink"] ** 0.65, 1)
                 region_frames = max(5, int(round(reveal_frames * weight / total_weight)))
                 region_frames = min(region_frames, max(5, frames_left - remaining_regions + 1))
             used += region_frames
 
+            paths = region.get("paths") or []
+            total_segments = _region_path_len(region)
+            segs_per_frame = max(1, int(math.ceil(total_segments / max(1, region_frames))))
+            stroke_seed = np.zeros((h, w), np.uint8)
+            path_idx = 0
+            point_idx = 0
+            drawn_segments = 0
+
+            # Start the active mask exactly at the first drawable point. If a hand
+            # overlay is added later, this same point is the pen-tip coordinate.
+            if paths and paths[0]:
+                cv2.circle(stroke_seed, paths[0][0], max(2, thick), 255, -1)
+
             for fidx in range(region_frames):
-                progress = (fidx + 1) / float(region_frames)
-                active = _region_progress_mask(region, progress)
+                budget = segs_per_frame
+                while budget > 0 and path_idx < len(paths):
+                    path = paths[path_idx]
+                    if len(path) < 2 or point_idx >= len(path) - 1:
+                        path_idx += 1
+                        point_idx = 0
+                        if path_idx < len(paths) and paths[path_idx]:
+                            cv2.circle(stroke_seed, paths[path_idx][0], max(2, thick), 255, -1)
+                        continue
+                    p1 = path[point_idx]
+                    p2 = path[point_idx + 1]
+                    cv2.line(stroke_seed, p1, p2, 255, max(2, thick + 1), cv2.LINE_AA)
+                    point_idx += 1
+                    drawn_segments += 1
+                    budget -= 1
+
+                progress = min(1.0, drawn_segments / float(total_segments))
+                active = _mask_from_drawn_strokes(region, stroke_seed, progress)
                 reveal_mask = cv2.max(reveal_mask, active)
                 if not emit(_composite(active)):
                     break
