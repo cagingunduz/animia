@@ -152,35 +152,46 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             if not emit(frame):
                 break
     else:
-        # Colour mode — "expanding radial matte": as each stroke is drawn, colour blooms
-        # out from behind it like ink and keeps spreading (dilate) to fill interiors.
-        colmask = np.zeros((h, w), np.uint8)              # 0=hidden, 255=colour revealed
-        radius = max(18, int(round(h / 22)))
+        # ── Colour mode: TWO visible passes ──
+        # Phase A: draw the black outlines (clearly visible sketch, no colour yet)
+        outline_frames = max(1, int(total * 0.42 * fps))
+        color_frames = max(1, int(total * 0.40 * fps))
+        col_hold = max(1, int(total * fps) - outline_frames - color_frames)
+        op = max(1, math.ceil(n / outline_frames)) if n > 0 else 0
+        idx = 0
+        for _f in range(outline_frames):
+            target = min(n, idx + op)
+            for j in range(idx, target):
+                x1, y1, x2, y2 = segs[j]
+                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 0), thick, cv2.LINE_AA)
+            idx = target
+            if not emit(frame):
+                break
+
+        # Phase B: colour blooms along the SAME strokes (radial matte), filling interiors
+        colmask = np.zeros((h, w), np.uint8)
+        radius = max(14, int(round(h / 30)))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         colored_f = canvas_img.astype(np.float32)
+        frame_f = frame.astype(np.float32)  # the finished outline (static during Phase B)
 
         def composite():
             a = cv2.GaussianBlur(colmask, (31, 31), 0).astype(np.float32) / 255.0
             a3 = cv2.merge([a, a, a])
-            return (colored_f * a3 + frame.astype(np.float32) * (1.0 - a3)).astype(np.uint8)
+            return (colored_f * a3 + frame_f * (1.0 - a3)).astype(np.uint8)
 
-        idx = 0
-        for _f in range(draw_frames):
-            target = min(n, idx + per)
-            for j in range(idx, target):
-                x1, y1, x2, y2 = segs[j]
-                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 0), thick, cv2.LINE_AA)
-                cv2.circle(colmask, (x2, y2), radius, 255, -1)  # seed colour bloom at the pen
-            idx = target
-            colmask = cv2.dilate(colmask, kernel)               # grow the bloom each frame
+        cp = max(1, math.ceil(n / color_frames)) if n > 0 else 0
+        cidx = 0
+        for _f in range(color_frames):
+            ctarget = min(n, cidx + cp)
+            for j in range(cidx, ctarget):
+                _, _, x2, y2 = segs[j]
+                cv2.circle(colmask, (x2, y2), radius, 255, -1)  # seed colour at the stroke
+            cidx = ctarget
+            colmask = cv2.dilate(colmask, kernel)               # spread to fill interiors
             if not emit(composite()):
                 break
-        # Settle — keep spreading colour into the interiors, then hold the full image
-        for _ in range(settle_frames):
-            colmask = cv2.dilate(colmask, kernel, iterations=2)
-            if not emit(composite()):
-                break
-        for _ in range(hold_frames):
+        for _ in range(col_hold):  # hold the full coloured image
             if not emit(canvas_img):
                 break
 
