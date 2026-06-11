@@ -289,10 +289,35 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             (max(5, int(h / 180) | 1), max(5, int(h / 180) | 1)),
         )
 
-        def _mask_from_drawn_strokes(region, stroke_seed, progress):
+        rng = np.random.default_rng(1729)
+        noise_h = max(24, h // 28)
+        noise_w = max(24, w // 28)
+        noise_a = cv2.resize(
+            rng.random((noise_h, noise_w)).astype(np.float32),
+            (w, h),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        noise_b = cv2.resize(
+            rng.random((noise_h, noise_w)).astype(np.float32),
+            (w, h),
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+        def _organic_edge(mask, frame_no):
+            if mask.max() == 0:
+                return mask
+            mix = (frame_no % 19) / 19.0
+            noise = noise_a * (1.0 - mix) + noise_b * mix
+            edge = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, edge_kernel)
+            jitter = ((noise - 0.5) * 110.0).astype(np.float32)
+            out = mask.astype(np.float32)
+            out[edge > 0] = np.clip(out[edge > 0] + jitter[edge > 0], 0, 255)
+            return out.astype(np.uint8)
+
+        def _mask_from_drawn_strokes(region, stroke_seed, progress, frame_no):
             x, y, rw, rh = region["bbox"]
-            radius = max(10, int(round(min(max(rw, 1), max(rh, 1)) / 18)))
-            radius = min(radius, max(42, int(h / 18)))
+            radius = max(12, int(round(min(max(rw, 1), max(rh, 1)) / 15)))
+            radius = min(radius, max(54, int(h / 16)))
             kernel_size = max(5, (radius * 2 + 1) | 1)
             stroke_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
             bloom = cv2.dilate(stroke_seed, stroke_kernel, iterations=1)
@@ -309,11 +334,12 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             bloom = cv2.GaussianBlur(bloom, (soft_ksize, soft_ksize), 0)
 
             progressive = bloom
-            if progress > 0.12:
-                fill_alpha = int(min(255, (((progress - 0.12) / 0.88) ** 0.8) * 255))
-                local_fill = (region["mask"].astype(np.float32) * (fill_alpha / 255.0)).astype(np.uint8)
+            if progress > 0.88:
+                finish_alpha = int(min(255, (((progress - 0.88) / 0.12) ** 1.3) * 255))
+                local_fill = (region["mask"].astype(np.float32) * (finish_alpha / 255.0)).astype(np.uint8)
                 progressive = cv2.max(progressive, local_fill)
             progressive = cv2.bitwise_and(progressive, region["mask"])
+            progressive = _organic_edge(progressive, frame_no)
             progressive = cv2.dilate(progressive, edge_kernel, iterations=1)
             return progressive
 
@@ -350,7 +376,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             drawn_segments = 0
             color_segments = 0
             delayed_segments = []
-            color_lag_frames = max(2, int(round(fps * 0.12)))
+            color_lag_frames = max(5, min(10, int(round(fps * 0.24))))
 
             # Start the active mask exactly at the first drawable point. If a hand
             # overlay is added later, this same point is the pen-tip coordinate.
@@ -387,7 +413,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                         color_segments += 1
 
                 progress = min(1.0, color_segments / float(total_segments))
-                active = _mask_from_drawn_strokes(region, color_seed, progress)
+                active = _mask_from_drawn_strokes(region, color_seed, progress, used - region_frames + fidx)
                 color_reveal_mask = cv2.max(color_reveal_mask, active)
                 if not emit(_composite(active)):
                     break
@@ -398,7 +424,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                     color_segments += 1
             color_reveal_mask = cv2.max(
                 color_reveal_mask,
-                _mask_from_drawn_strokes(region, color_seed, 1.0),
+                _mask_from_drawn_strokes(region, color_seed, 1.0, used),
             )
             line_reveal_mask = cv2.max(line_reveal_mask, region["mask"])
             color_reveal_mask = cv2.max(color_reveal_mask, region["mask"])
