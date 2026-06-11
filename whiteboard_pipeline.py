@@ -157,11 +157,14 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
         # visual components. This is intentionally not stroke-by-stroke tracing:
         # premium AI whiteboard products keep component/timing structure and then
         # render a scene reveal. We approximate that from the final image.
-        canvas_f = canvas_img.astype(np.float32)
-        white_f = np.full((h, w, 3), 255, np.float32)
-        reveal_mask = np.zeros((h, w), np.uint8)
-
         ink_mask = (np.min(canvas_img, axis=2) < 100).astype(np.uint8) * 255
+        color_layer = canvas_img.copy()
+        color_layer[ink_mask > 0] = (255, 255, 255)
+        color_f = color_layer.astype(np.float32)
+        white_f = np.full((h, w, 3), 255, np.float32)
+        color_reveal_mask = np.zeros((h, w), np.uint8)
+        line_reveal_mask = np.zeros((h, w), np.uint8)
+
         subject = (np.min(canvas_img, axis=2) < 248).astype(np.uint8) * 255
         close_size = max(9, int(round(h / 95)) | 1)
         close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
@@ -193,14 +196,12 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             x, y, rw, rh = bbox
             ink_area = int(cv2.countNonZero(cv2.bitwise_and(ink_mask, visible)))
             seed_source = cv2.bitwise_and(ink_mask, visible)
+            seed_source = cv2.morphologyEx(seed_source, cv2.MORPH_CLOSE, small_kernel, iterations=1)
             seed_contours, _ = cv2.findContours(seed_source, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
             if not seed_contours:
                 seed_contours, _ = cv2.findContours(visible, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-            seed_contours = [c for c in seed_contours if cv2.arcLength(c, False) > max(8, h / 180)]
-            seed_contours = sorted(seed_contours, key=lambda c: (cv2.boundingRect(c)[1] // band, cv2.boundingRect(c)[0]))
-
-            paths = []
-            previous_end = None
+            seed_contours = [c for c in seed_contours if cv2.arcLength(c, True) > max(8, h / 180)]
+            raw_paths = []
             for contour in seed_contours:
                 pts = contour[:, 0, :]
                 if len(pts) < 2:
@@ -209,13 +210,28 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 sampled = pts[::step].astype(np.int32)
                 if len(sampled) < 2:
                     continue
-                if previous_end is not None and len(sampled) > 3:
-                    d = np.sum((sampled - np.array(previous_end, dtype=np.int32)) ** 2, axis=1)
+                if np.linalg.norm(sampled[0] - sampled[-1]) > max(3, thick * 2):
+                    sampled = np.concatenate([sampled, sampled[:1]], axis=0)
+                raw_paths.append(sampled)
+
+            paths = []
+            current = np.array([x, y], dtype=np.int32)
+            while raw_paths:
+                best_i = 0
+                best_start = 0
+                best_dist = None
+                for i, sampled in enumerate(raw_paths):
+                    d = np.sum((sampled - current) ** 2, axis=1)
                     start = int(np.argmin(d))
-                    sampled = np.concatenate([sampled[start:], sampled[:start]], axis=0)
+                    dist = int(d[start])
+                    if best_dist is None or dist < best_dist:
+                        best_i, best_start, best_dist = i, start, dist
+                sampled = raw_paths.pop(best_i)
+                if len(sampled) > 3:
+                    sampled = np.concatenate([sampled[best_start:], sampled[:best_start + 1]], axis=0)
                 path = [(int(px), int(py)) for px, py in sampled]
                 paths.append(path)
-                previous_end = path[-1]
+                current = np.array(path[-1], dtype=np.int32)
 
             if not paths:
                 paths = [[(int(x + rw / 2), int(y + rh / 2)), (int(x + rw / 2) + 1, int(y + rh / 2) + 1)]]
@@ -302,10 +318,13 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             return progressive
 
         def _composite(active_mask=None):
-            a = cv2.GaussianBlur(reveal_mask, (soft_ksize, soft_ksize), 0)
+            a = cv2.GaussianBlur(color_reveal_mask, (soft_ksize, soft_ksize), 0)
             a = cv2.bitwise_and(a, subject).astype(np.float32) / 255.0
             a3 = cv2.merge([a, a, a])
-            return (canvas_f * a3 + white_f * (1.0 - a3)).astype(np.uint8)
+            out = (color_f * a3 + white_f * (1.0 - a3)).astype(np.uint8)
+            visible_ink = cv2.bitwise_and(line_reveal_mask, ink_mask) > 0
+            out[visible_ink] = canvas_img[visible_ink]
+            return out
 
         used = 0
         for ri, region in enumerate(regions):
@@ -323,9 +342,15 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             total_segments = _region_path_len(region)
             segs_per_frame = max(1, int(math.ceil(total_segments / max(1, region_frames))))
             stroke_seed = np.zeros((h, w), np.uint8)
+            color_seed = np.zeros((h, w), np.uint8)
+            line_kernel_size = max(5, (thick * 6 + 1) | 1)
+            line_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (line_kernel_size, line_kernel_size))
             path_idx = 0
             point_idx = 0
             drawn_segments = 0
+            color_segments = 0
+            delayed_segments = []
+            color_lag_frames = max(2, int(round(fps * 0.12)))
 
             # Start the active mask exactly at the first drawable point. If a hand
             # overlay is added later, this same point is the pen-tip coordinate.
@@ -334,6 +359,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
 
             for fidx in range(region_frames):
                 budget = segs_per_frame
+                frame_segments = []
                 while budget > 0 and path_idx < len(paths):
                     path = paths[path_idx]
                     if len(path) < 2 or point_idx >= len(path) - 1:
@@ -345,17 +371,37 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                     p1 = path[point_idx]
                     p2 = path[point_idx + 1]
                     cv2.line(stroke_seed, p1, p2, 255, max(2, thick + 1), cv2.LINE_AA)
+                    frame_segments.append((p1, p2))
                     point_idx += 1
                     drawn_segments += 1
                     budget -= 1
 
-                progress = min(1.0, drawn_segments / float(total_segments))
-                active = _mask_from_drawn_strokes(region, stroke_seed, progress)
-                reveal_mask = cv2.max(reveal_mask, active)
+                delayed_segments.append(frame_segments)
+                line_reveal_mask = cv2.max(
+                    line_reveal_mask,
+                    cv2.bitwise_and(cv2.dilate(stroke_seed, line_kernel, iterations=1), region["mask"]),
+                )
+                if len(delayed_segments) > color_lag_frames:
+                    for p1, p2 in delayed_segments.pop(0):
+                        cv2.line(color_seed, p1, p2, 255, max(2, thick + 2), cv2.LINE_AA)
+                        color_segments += 1
+
+                progress = min(1.0, color_segments / float(total_segments))
+                active = _mask_from_drawn_strokes(region, color_seed, progress)
+                color_reveal_mask = cv2.max(color_reveal_mask, active)
                 if not emit(_composite(active)):
                     break
 
-            reveal_mask = cv2.max(reveal_mask, region["mask"])
+            for queued in delayed_segments:
+                for p1, p2 in queued:
+                    cv2.line(color_seed, p1, p2, 255, max(2, thick + 2), cv2.LINE_AA)
+                    color_segments += 1
+            color_reveal_mask = cv2.max(
+                color_reveal_mask,
+                _mask_from_drawn_strokes(region, color_seed, 1.0),
+            )
+            line_reveal_mask = cv2.max(line_reveal_mask, region["mask"])
+            color_reveal_mask = cv2.max(color_reveal_mask, region["mask"])
             emit(_composite(region["mask"]))
 
         for _ in range(hold_frames):
