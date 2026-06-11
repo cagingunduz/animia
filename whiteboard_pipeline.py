@@ -163,7 +163,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
 
         ink_mask = (np.min(canvas_img, axis=2) < 100).astype(np.uint8) * 255
         subject = (np.min(canvas_img, axis=2) < 248).astype(np.uint8) * 255
-        close_size = max(19, int(round(h / 42)) | 1)
+        close_size = max(9, int(round(h / 95)) | 1)
         close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
         small_size = max(7, int(round(h / 135)) | 1)
         small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (small_size, small_size))
@@ -192,36 +192,37 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 return
             x, y, rw, rh = bbox
             ink_area = int(cv2.countNonZero(cv2.bitwise_and(ink_mask, visible)))
+            seed_source = cv2.bitwise_and(cv2.dilate(ink_mask, small_kernel, iterations=1), visible)
+            seed_contours, _ = cv2.findContours(seed_source, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+            seed_contours = [c for c in seed_contours if cv2.arcLength(c, False) > max(8, h / 180)]
+            seed_contours = sorted(seed_contours, key=lambda c: (cv2.boundingRect(c)[1] // band, cv2.boundingRect(c)[0]))
+            points = []
+            for contour in seed_contours:
+                pts = contour[:, 0, :]
+                step = max(1, int(math.ceil(len(pts) / 42)))
+                points.extend((int(px), int(py)) for px, py in pts[::step])
+
+            if len(points) < 18:
+                ys, xs = np.where(visible > 0)
+                if len(xs) > 0:
+                    # Deterministic hash order avoids row/column scanline reveals.
+                    hashes = ((xs.astype(np.uint64) * 73856093) ^ (ys.astype(np.uint64) * 19349663))
+                    order = np.argsort(hashes)
+                    max_points = 220
+                    stride = max(1, int(math.ceil(len(order) / max_points)))
+                    points = [(int(xs[i]), int(ys[i])) for i in order[::stride]]
+
+            if not points:
+                points = [(int(x + rw / 2), int(y + rh / 2))]
+
             regions.append({
                 "mask": visible,
                 "bbox": (int(x), int(y), int(rw), int(rh)),
                 "area": area,
                 "ink": ink_area,
                 "order_bias": order_bias,
+                "points": points,
             })
-
-        def _split_large_component(mask, bbox, area):
-            x, y, cw, ch = bbox
-            max_w = max(220, int(w * 0.28))
-            max_h = max(180, int(h * 0.34))
-            cols = max(1, int(math.ceil(cw / max_w)))
-            rows = max(1, int(math.ceil(ch / max_h)))
-            if area < (w * h * 0.10) and cols == 1 and rows == 1:
-                _add_region(mask, bbox)
-                return
-
-            overlap_x = max(12, int(cw * 0.08 / cols))
-            overlap_y = max(12, int(ch * 0.08 / rows))
-            for ry in range(rows):
-                for cx in range(cols):
-                    tx1 = max(x, x + int(cx * cw / cols) - overlap_x)
-                    tx2 = min(x + cw, x + int((cx + 1) * cw / cols) + overlap_x)
-                    ty1 = max(y, y + int(ry * ch / rows) - overlap_y)
-                    ty2 = min(y + ch, y + int((ry + 1) * ch / rows) + overlap_y)
-                    tile = np.zeros((h, w), np.uint8)
-                    tile[ty1:ty2, tx1:tx2] = 255
-                    part = cv2.bitwise_and(mask, tile)
-                    _add_region(part, (tx1, ty1, tx2 - tx1, ty2 - ty1), ry * cols + cx)
 
         for lab in range(1, num):
             area = int(stats[lab, cv2.CC_STAT_AREA])
@@ -233,7 +234,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             ch = int(stats[lab, cv2.CC_STAT_HEIGHT])
             comp = ((labels == lab).astype(np.uint8) * 255)
             comp = cv2.dilate(comp, small_kernel, iterations=1)
-            _split_large_component(comp, (x, y, cw, ch), area)
+            _add_region(comp, (x, y, cw, ch))
 
         if not regions:
             regions = [{
@@ -242,6 +243,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 "area": max(1, int(cv2.countNonZero(subject))),
                 "ink": int(cv2.countNonZero(ink_mask)),
                 "order_bias": 0,
+                "points": [(w // 2, h // 2)],
             }]
 
         # Merge tiny leftovers into the closest normal reveal by letting the final
@@ -263,33 +265,33 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             (max(5, int(h / 180) | 1), max(5, int(h / 180) | 1)),
         )
 
-        yy, xx = np.indices((h, w))
-
         def _region_progress_mask(region, progress):
             x, y, rw, rh = region["bbox"]
-            rw = max(1, rw)
-            rh = max(1, rh)
-            local_x = (xx - x) / float(rw)
-            local_y = (yy - y) / float(rh)
-            diagonal = local_x * 0.68 + local_y * 0.32
-            threshold = progress * 1.24 - 0.12
-            wipe = (diagonal <= threshold).astype(np.uint8) * 255
-
-            # Add an organic expanding bloom from the visual center so the reveal
-            # does not feel like a mechanical rectangular wipe.
-            m = cv2.moments(region["mask"], binaryImage=True)
-            if m["m00"] > 0:
-                cx = int(m["m10"] / m["m00"])
-                cy = int(m["m01"] / m["m00"])
-            else:
-                cx = x + rw // 2
-                cy = y + rh // 2
-            radius = int(max(rw, rh) * (0.16 + progress * 0.95))
+            points = region.get("points") or [(x + max(1, rw) // 2, y + max(1, rh) // 2)]
+            count = max(1, int(math.ceil(len(points) * progress)))
+            selected = points[:count]
             bloom = np.zeros((h, w), np.uint8)
-            cv2.circle(bloom, (cx, cy), max(8, radius), 255, -1)
+            radius = max(10, int(round(min(max(rw, 1), max(rh, 1)) / 18)))
+            radius = min(radius, max(42, int(h / 18)))
+            for px, py in selected:
+                cv2.circle(bloom, (px, py), radius, 255, -1)
+
+            # Late in the component, let the ink blooms expand into the remaining
+            # interior fill. This keeps the "paint appears behind the drawing"
+            # feeling without rectangular or tiled masks.
+            if progress > 0.72:
+                grow = int((progress - 0.72) / 0.28 * max(rw, rh) / 8)
+                if grow > 0:
+                    grow_size = max(5, (grow * 2 + 1) | 1)
+                    grow_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow_size, grow_size))
+                    bloom = cv2.dilate(bloom, grow_kernel, iterations=1)
             bloom = cv2.GaussianBlur(bloom, (soft_ksize, soft_ksize), 0)
 
-            progressive = cv2.max(wipe, bloom)
+            progressive = bloom
+            if progress > 0.12:
+                fill_alpha = int(min(255, (((progress - 0.12) / 0.88) ** 0.8) * 255))
+                local_fill = (region["mask"].astype(np.float32) * (fill_alpha / 255.0)).astype(np.uint8)
+                progressive = cv2.max(progressive, local_fill)
             progressive = cv2.bitwise_and(progressive, region["mask"])
             progressive = cv2.dilate(progressive, edge_kernel, iterations=1)
             return progressive
@@ -298,12 +300,7 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             a = cv2.GaussianBlur(reveal_mask, (soft_ksize, soft_ksize), 0)
             a = cv2.bitwise_and(a, subject).astype(np.float32) / 255.0
             a3 = cv2.merge([a, a, a])
-            out = (canvas_f * a3 + white_f * (1.0 - a3)).astype(np.uint8)
-            if active_mask is not None and active_mask.max() > 0:
-                edge = cv2.Canny(active_mask, 50, 120)
-                edge = cv2.dilate(edge, edge_kernel, iterations=1)
-                out[edge > 0] = (35, 35, 35)
-            return out
+            return (canvas_f * a3 + white_f * (1.0 - a3)).astype(np.uint8)
 
         used = 0
         for ri, region in enumerate(regions):
