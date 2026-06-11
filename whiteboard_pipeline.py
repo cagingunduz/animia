@@ -157,7 +157,8 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
         # visual components. This is intentionally not stroke-by-stroke tracing:
         # premium AI whiteboard products keep component/timing structure and then
         # render a scene reveal. We approximate that from the final image.
-        ink_mask = (np.min(canvas_img, axis=2) < 100).astype(np.uint8) * 255
+        gray_for_ink = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
+        ink_mask = ((gray_for_ink < 105) & (np.max(canvas_img, axis=2) < 135)).astype(np.uint8) * 255
         color_layer = canvas_img.copy()
         color_layer[ink_mask > 0] = (255, 255, 255)
         color_f = color_layer.astype(np.float32)
@@ -267,12 +268,12 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 "paths": [[(w // 2, h // 2), (w // 2 + 1, h // 2 + 1)]],
             }]
 
-        # Merge tiny leftovers into the closest normal reveal by letting the final
-        # hold render the exact source image. Ordered regions still drive the video.
+        # Strict top-to-bottom build: lower regions do not start until upper
+        # regions have finished their own contour-led drawing.
         regions = sorted(
             regions,
             key=lambda r: (
-                r["bbox"][1] // max(1, h // 5),
+                r["bbox"][1],
                 r["bbox"][0],
                 r["order_bias"],
             ),
@@ -281,8 +282,9 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             return max(1, sum(max(1, len(path) - 1) for path in region.get("paths", [])))
 
         total_weight = max(1, sum(max(_region_path_len(r), r["ink"] ** 0.65, 1) for r in regions))
-        reveal_frames = max(1, int(total * fps * 0.86))
-        hold_frames = max(1, int(total * fps) - reveal_frames)
+        total_frames = max(1, int(total * fps))
+        hold_frames = min(2, max(0, total_frames // 60))
+        reveal_frames = max(1, total_frames - hold_frames)
         soft_ksize = max(25, int(round(h / 48)) | 1)
         edge_kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE,
@@ -322,9 +324,9 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             stroke_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
             bloom = cv2.dilate(stroke_seed, stroke_kernel, iterations=1)
 
-            # Late in the component, let the ink blooms expand into the remaining
-            # interior fill. This keeps the "paint appears behind the drawing"
-            # feeling without rectangular or tiled masks.
+            # Late in the component, widen only the contour-guided bloom. Do not
+            # reveal the whole region as a shortcut; the image must keep drawing
+            # until the end instead of snapping to the source art.
             if progress > 0.72:
                 grow = int((progress - 0.72) / 0.28 * max(rw, rh) / 8)
                 if grow > 0:
@@ -334,14 +336,23 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             bloom = cv2.GaussianBlur(bloom, (soft_ksize, soft_ksize), 0)
 
             progressive = bloom
-            if progress > 0.88:
-                finish_alpha = int(min(255, (((progress - 0.88) / 0.12) ** 1.3) * 255))
-                local_fill = (region["mask"].astype(np.float32) * (finish_alpha / 255.0)).astype(np.uint8)
-                progressive = cv2.max(progressive, local_fill)
             progressive = cv2.bitwise_and(progressive, region["mask"])
             progressive = _organic_edge(progressive, frame_no)
             progressive = cv2.dilate(progressive, edge_kernel, iterations=1)
             return progressive
+
+        def _expand_paint_to_region(region, color_seed, frames, frame_no):
+            if frames <= 0:
+                return
+            x, y, rw, rh = region["bbox"]
+            base = max(7, int(round(max(rw, rh) / max(12, frames))))
+            base = min(max(base, 7), max(45, h // 18))
+            grow_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, ((base * 2 + 1) | 1, (base * 2 + 1) | 1))
+            for k in range(frames):
+                color_seed = cv2.dilate(color_seed, grow_kernel, iterations=1)
+                active = cv2.bitwise_and(color_seed, region["mask"])
+                active = _organic_edge(active, frame_no + k)
+                yield active, color_seed
 
         def _composite(active_mask=None):
             a = cv2.GaussianBlur(color_reveal_mask, (soft_ksize, soft_ksize), 0)
@@ -366,7 +377,6 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
 
             paths = region.get("paths") or []
             total_segments = _region_path_len(region)
-            segs_per_frame = max(1, int(math.ceil(total_segments / max(1, region_frames))))
             stroke_seed = np.zeros((h, w), np.uint8)
             color_seed = np.zeros((h, w), np.uint8)
             line_kernel_size = max(5, (thick * 6 + 1) | 1)
@@ -377,13 +387,17 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
             color_segments = 0
             delayed_segments = []
             color_lag_frames = max(5, min(10, int(round(fps * 0.24))))
+            paint_tail_frames = max(color_lag_frames + 3, int(region_frames * 0.22))
+            paint_tail_frames = min(max(0, region_frames - 3), paint_tail_frames)
+            stroke_frames = max(1, region_frames - paint_tail_frames)
+            segs_per_frame = max(1, int(math.ceil(total_segments / max(1, stroke_frames))))
 
             # Start the active mask exactly at the first drawable point. If a hand
             # overlay is added later, this same point is the pen-tip coordinate.
             if paths and paths[0]:
                 cv2.circle(stroke_seed, paths[0][0], max(2, thick), 255, -1)
 
-            for fidx in range(region_frames):
+            for fidx in range(stroke_frames):
                 budget = segs_per_frame
                 frame_segments = []
                 while budget > 0 and path_idx < len(paths):
@@ -426,12 +440,19 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
                 color_reveal_mask,
                 _mask_from_drawn_strokes(region, color_seed, 1.0, used),
             )
-            line_reveal_mask = cv2.max(line_reveal_mask, region["mask"])
-            color_reveal_mask = cv2.max(color_reveal_mask, region["mask"])
-            emit(_composite(region["mask"]))
+            line_reveal_mask = cv2.max(
+                line_reveal_mask,
+                cv2.bitwise_and(cv2.dilate(stroke_seed, line_kernel, iterations=1), region["mask"]),
+            )
+
+            tail_start = used - region_frames + stroke_frames
+            for active, color_seed in _expand_paint_to_region(region, color_seed, paint_tail_frames, tail_start):
+                color_reveal_mask = cv2.max(color_reveal_mask, active)
+                if not emit(_composite(active)):
+                    break
 
         for _ in range(hold_frames):
-            if not emit(canvas_img):
+            if not emit(_composite()):
                 break
     else:
         # ── Colour mode: TWO visible passes ──
