@@ -216,19 +216,37 @@ async def generate_whiteboard_image(concept: str, aspect_ratio: str = "16:9") ->
     return upload_to_r2(resp.content, "whiteboard", ext="jpg")
 
 
-async def generate_whiteboard_color_image(concept: str, aspect_ratio: str = "16:9") -> str:
+async def generate_whiteboard_color_image(
+    concept: str,
+    aspect_ratio: str = "16:9",
+    render_style: str = "classic",
+) -> str:
     """Generate a COLORFUL flat illustration with bold black outlines on white, for the
     colored Whiteboard mode (outline is drawn, then the color washes in)."""
     client = replicate.Client(api_token=REPLICATE_API_TOKEN)
     ar = ASPECT_RATIO_MAP.get(aspect_ratio, "16:9")
 
-    prompt = (
-        f"Colorful flat vector illustration of: {concept}. "
-        f"Bold clean BLACK outlines with simple flat color fills, cartoon / children's "
-        f"book / explainer doodle style, on a plain pure white background. "
-        f"Bright friendly colors, simple shapes, no shading, no gradients, no photo "
-        f"realism, no text, no watermark, no border, lots of white space."
-    )
+    if render_style == "illustrated":
+        prompt = (
+            f"Premium AI whiteboard explainer canvas illustration of: {concept}. "
+            f"Create one rich educational scene, not a single icon: expressive hand-drawn "
+            f"characters when useful, props, arrows, symbols, maps, coins, charts, or "
+            f"cause-and-effect visual metaphors. Bold imperfect black ink outlines, warm "
+            f"watercolor and colored-pencil fills, cross-hatching, sketch texture, and "
+            f"editorial explainer composition on a pure white background. Arrange the "
+            f"scene as 3 to 7 clear separated visual components so it can be revealed "
+            f"piece by piece. Avoid tiny text; use simple symbols instead of words. "
+            f"No photorealism, no 3D render, no glossy vector clipart, no watermark, "
+            f"no border."
+        )
+    else:
+        prompt = (
+            f"Colorful flat vector illustration of: {concept}. "
+            f"Bold clean BLACK outlines with simple flat color fills, cartoon / children's "
+            f"book / explainer doodle style, on a plain pure white background. "
+            f"Bright friendly colors, simple shapes, no shading, no gradients, no photo "
+            f"realism, no text, no watermark, no border, lots of white space."
+        )
     input_params = {"prompt": prompt, "aspect_ratio": ar}
 
     loop = asyncio.get_event_loop()

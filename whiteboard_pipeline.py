@@ -49,7 +49,8 @@ def _dims(aspect_ratio: str, resolution: str) -> tuple:
 
 
 def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
-                     aspect_ratio: str, resolution: str, colored: bool = False) -> bool:
+                     aspect_ratio: str, resolution: str, colored: bool = False,
+                     render_style: str = "classic") -> bool:
     """Whiteboard 'being drawn' effect (no hand): trace the contours and draw clean
     lines following their own shape. When `colored`, draw the black outlines first,
     then wash the colour in over the line art (then hold the finished image)."""
@@ -151,6 +152,184 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
         for _ in range(hold_frames):
             if not emit(frame):
                 break
+    elif render_style == "illustrated":
+        # Canvas-style explainer mode: reveal the final illustration as ordered
+        # visual components. This is intentionally not stroke-by-stroke tracing:
+        # premium AI whiteboard products keep component/timing structure and then
+        # render a scene reveal. We approximate that from the final image.
+        canvas_f = canvas_img.astype(np.float32)
+        white_f = np.full((h, w, 3), 255, np.float32)
+        reveal_mask = np.zeros((h, w), np.uint8)
+
+        ink_mask = (np.min(canvas_img, axis=2) < 100).astype(np.uint8) * 255
+        subject = (np.min(canvas_img, axis=2) < 248).astype(np.uint8) * 255
+        close_size = max(19, int(round(h / 42)) | 1)
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
+        small_size = max(7, int(round(h / 135)) | 1)
+        small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (small_size, small_size))
+        subject = cv2.morphologyEx(subject, cv2.MORPH_CLOSE, close_kernel, iterations=2)
+        subject = cv2.dilate(subject, small_kernel, iterations=1)
+
+        def _fill_holes(mask):
+            if mask is None or mask.max() == 0:
+                return mask
+            flood = mask.copy()
+            cv2.floodFill(flood, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 255)
+            holes = cv2.bitwise_not(flood)
+            return cv2.bitwise_or(mask, holes)
+
+        subject = _fill_holes(subject)
+        component_seed = cv2.morphologyEx(subject, cv2.MORPH_CLOSE, close_kernel, iterations=1)
+        num, labels, stats, _centroids = cv2.connectedComponentsWithStats(component_seed, 8)
+        min_component_area = max(400, (w * h) // 9000)
+        regions = []
+
+        def _add_region(mask, bbox, order_bias=0):
+            mask = _fill_holes(mask)
+            visible = cv2.bitwise_and(subject, mask)
+            area = int(cv2.countNonZero(visible))
+            if area < min_component_area:
+                return
+            x, y, rw, rh = bbox
+            ink_area = int(cv2.countNonZero(cv2.bitwise_and(ink_mask, visible)))
+            regions.append({
+                "mask": visible,
+                "bbox": (int(x), int(y), int(rw), int(rh)),
+                "area": area,
+                "ink": ink_area,
+                "order_bias": order_bias,
+            })
+
+        def _split_large_component(mask, bbox, area):
+            x, y, cw, ch = bbox
+            max_w = max(220, int(w * 0.28))
+            max_h = max(180, int(h * 0.34))
+            cols = max(1, int(math.ceil(cw / max_w)))
+            rows = max(1, int(math.ceil(ch / max_h)))
+            if area < (w * h * 0.10) and cols == 1 and rows == 1:
+                _add_region(mask, bbox)
+                return
+
+            overlap_x = max(12, int(cw * 0.08 / cols))
+            overlap_y = max(12, int(ch * 0.08 / rows))
+            for ry in range(rows):
+                for cx in range(cols):
+                    tx1 = max(x, x + int(cx * cw / cols) - overlap_x)
+                    tx2 = min(x + cw, x + int((cx + 1) * cw / cols) + overlap_x)
+                    ty1 = max(y, y + int(ry * ch / rows) - overlap_y)
+                    ty2 = min(y + ch, y + int((ry + 1) * ch / rows) + overlap_y)
+                    tile = np.zeros((h, w), np.uint8)
+                    tile[ty1:ty2, tx1:tx2] = 255
+                    part = cv2.bitwise_and(mask, tile)
+                    _add_region(part, (tx1, ty1, tx2 - tx1, ty2 - ty1), ry * cols + cx)
+
+        for lab in range(1, num):
+            area = int(stats[lab, cv2.CC_STAT_AREA])
+            if area < min_component_area:
+                continue
+            x = int(stats[lab, cv2.CC_STAT_LEFT])
+            y = int(stats[lab, cv2.CC_STAT_TOP])
+            cw = int(stats[lab, cv2.CC_STAT_WIDTH])
+            ch = int(stats[lab, cv2.CC_STAT_HEIGHT])
+            comp = ((labels == lab).astype(np.uint8) * 255)
+            comp = cv2.dilate(comp, small_kernel, iterations=1)
+            _split_large_component(comp, (x, y, cw, ch), area)
+
+        if not regions:
+            regions = [{
+                "mask": subject,
+                "bbox": (0, 0, w, h),
+                "area": max(1, int(cv2.countNonZero(subject))),
+                "ink": int(cv2.countNonZero(ink_mask)),
+                "order_bias": 0,
+            }]
+
+        # Merge tiny leftovers into the closest normal reveal by letting the final
+        # hold render the exact source image. Ordered regions still drive the video.
+        regions = sorted(
+            regions,
+            key=lambda r: (
+                r["bbox"][1] // max(1, h // 5),
+                r["bbox"][0],
+                r["order_bias"],
+            ),
+        )
+        total_weight = max(1, sum(max(r["area"] ** 0.55, r["ink"] ** 0.65, 1) for r in regions))
+        reveal_frames = max(1, int(total * fps * 0.86))
+        hold_frames = max(1, int(total * fps) - reveal_frames)
+        soft_ksize = max(25, int(round(h / 48)) | 1)
+        edge_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (max(5, int(h / 180) | 1), max(5, int(h / 180) | 1)),
+        )
+
+        yy, xx = np.indices((h, w))
+
+        def _region_progress_mask(region, progress):
+            x, y, rw, rh = region["bbox"]
+            rw = max(1, rw)
+            rh = max(1, rh)
+            local_x = (xx - x) / float(rw)
+            local_y = (yy - y) / float(rh)
+            diagonal = local_x * 0.68 + local_y * 0.32
+            threshold = progress * 1.24 - 0.12
+            wipe = (diagonal <= threshold).astype(np.uint8) * 255
+
+            # Add an organic expanding bloom from the visual center so the reveal
+            # does not feel like a mechanical rectangular wipe.
+            m = cv2.moments(region["mask"], binaryImage=True)
+            if m["m00"] > 0:
+                cx = int(m["m10"] / m["m00"])
+                cy = int(m["m01"] / m["m00"])
+            else:
+                cx = x + rw // 2
+                cy = y + rh // 2
+            radius = int(max(rw, rh) * (0.16 + progress * 0.95))
+            bloom = np.zeros((h, w), np.uint8)
+            cv2.circle(bloom, (cx, cy), max(8, radius), 255, -1)
+            bloom = cv2.GaussianBlur(bloom, (soft_ksize, soft_ksize), 0)
+
+            progressive = cv2.max(wipe, bloom)
+            progressive = cv2.bitwise_and(progressive, region["mask"])
+            progressive = cv2.dilate(progressive, edge_kernel, iterations=1)
+            return progressive
+
+        def _composite(active_mask=None):
+            a = cv2.GaussianBlur(reveal_mask, (soft_ksize, soft_ksize), 0)
+            a = cv2.bitwise_and(a, subject).astype(np.float32) / 255.0
+            a3 = cv2.merge([a, a, a])
+            out = (canvas_f * a3 + white_f * (1.0 - a3)).astype(np.uint8)
+            if active_mask is not None and active_mask.max() > 0:
+                edge = cv2.Canny(active_mask, 50, 120)
+                edge = cv2.dilate(edge, edge_kernel, iterations=1)
+                out[edge > 0] = (35, 35, 35)
+            return out
+
+        used = 0
+        for ri, region in enumerate(regions):
+            remaining_regions = len(regions) - ri
+            frames_left = max(remaining_regions, reveal_frames - used)
+            if ri == len(regions) - 1:
+                region_frames = frames_left
+            else:
+                weight = max(region["area"] ** 0.55, region["ink"] ** 0.65, 1)
+                region_frames = max(5, int(round(reveal_frames * weight / total_weight)))
+                region_frames = min(region_frames, max(5, frames_left - remaining_regions + 1))
+            used += region_frames
+
+            for fidx in range(region_frames):
+                progress = (fidx + 1) / float(region_frames)
+                active = _region_progress_mask(region, progress)
+                reveal_mask = cv2.max(reveal_mask, active)
+                if not emit(_composite(active)):
+                    break
+
+            reveal_mask = cv2.max(reveal_mask, region["mask"])
+            emit(_composite(region["mask"]))
+
+        for _ in range(hold_frames):
+            if not emit(canvas_img):
+                break
     else:
         # ── Colour mode: TWO visible passes ──
         # Phase A: draw the black outlines (clearly visible sketch, no colour yet)
@@ -206,13 +385,33 @@ def _whiteboard_draw(image_path: str, out_path: str, total_dur: float,
 
 
 async def generate_whiteboard_script(title: str, duration_minutes: int,
-                                     scene_count: int | None = None) -> list:
+                                     scene_count: int | None = None,
+                                     render_style: str = "classic") -> list:
     """Claude writes a whiteboard explainer: each scene is one clear thing to draw
     plus the narration that explains it."""
     if scene_count is None:
         scene_count = whiteboard_scene_count(duration_minutes)
 
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    if render_style == "illustrated":
+        visual_rules = """- "visual_concept": ONE rich illustrated explainer tableau that can be revealed in
+  3-7 visual components (28-45 words). Include characters, props, arrows, symbols,
+  maps, coins, charts, or cause-effect metaphors when they clarify the beat. Avoid
+  tiny text; prefer symbols and readable shapes."""
+        style_rules = """- Each visual_concept should feel like a premium AI whiteboard/canvas explainer:
+  expressive black-ink drawing, warm colour fills, cross-hatching, editorial
+  composition, storytelling tableau, market/classroom/historical scene, map,
+  timeline, or simple visual metaphor.
+- Do not request a lone icon unless the beat absolutely needs one. Build a small
+  scene with multiple separated objects that can appear one by one."""
+    else:
+        visual_rules = """- "visual_concept": ONE simple thing to draw as a black-ink line doodle on a white
+  board (10-20 words). A single clear object / icon / simple diagram / metaphor that
+  illustrates this beat. Simple silhouettes draw well; avoid busy scenes, photos,
+  text labels, or fine detail."""
+        style_rules = """- Each visual_concept is a DISTINCT, simple drawable doodle.
+- Keep it concrete and visual — prefer icons/metaphors over abstract words."""
+
     message = client.messages.create(
         model="claude-opus-4-5",
         max_tokens=8000,
@@ -226,10 +425,7 @@ TOTAL SCENES: {scene_count} (each is one drawing + one narration beat, ~10-12s)
 
 For each scene produce:
 - "title": short scene title
-- "visual_concept": ONE simple thing to draw as a black-ink line doodle on a white
-  board (10-20 words). A single clear object / icon / simple diagram / metaphor that
-  illustrates this beat. Simple silhouettes draw well; avoid busy scenes, photos,
-  text labels, or fine detail.
+{visual_rules}
 - "narrator_text": the spoken explanation for this beat (1-2 sentences, <= 28 words).
   Clear, friendly, informative — like a teacher explaining. Builds on the previous beat.
 - "tone": one of "calm", "informative", "exciting", "emotional", "closing".
@@ -237,8 +433,7 @@ For each scene produce:
 RULES
 - Logical flow: hook -> explanation -> build-up -> takeaway. The FINAL scene is the
   CLOSING (a clear takeaway / call to action), tone "closing".
-- Each visual_concept is a DISTINCT, simple drawable doodle.
-- Keep it concrete and visual — prefer icons/metaphors over abstract words.
+{style_rules}
 
 Respond with a valid JSON array ONLY, no other text:
 [{{"scene_number":1,"title":"...","visual_concept":"...","narrator_text":"...","tone":"..."}}]"""
@@ -261,6 +456,7 @@ async def generate_single_whiteboard_scene(
     include_subtitles: bool,
     narrator_speed: float = 1.0,
     colored: bool = False,
+    render_style: str = "classic",
 ) -> dict:
     tmp = tempfile.mkdtemp()
     run_id = uuid.uuid4().hex[:8]
@@ -270,7 +466,7 @@ async def generate_single_whiteboard_scene(
 
     # 1) Drawing — black line-art, or colour illustration with black outlines
     if colored:
-        img_url = await generate_whiteboard_color_image(concept, aspect_ratio)
+        img_url = await generate_whiteboard_color_image(concept, aspect_ratio, render_style)
     else:
         img_url = await generate_whiteboard_image(concept, aspect_ratio)
     img_bytes = await download_file(img_url)
@@ -300,7 +496,10 @@ async def generate_single_whiteboard_scene(
 
     # 3) Whiteboard "being drawn" animation
     reveal_path = f"{tmp}/reveal_{run_id}.mp4"
-    if not _whiteboard_draw(img_path, reveal_path, clip_dur, aspect_ratio, resolution, colored=colored):
+    if not _whiteboard_draw(
+        img_path, reveal_path, clip_dur, aspect_ratio, resolution,
+        colored=colored, render_style=render_style,
+    ):
         raise RuntimeError("Whiteboard draw render failed")
     final_path = reveal_path
 
@@ -343,10 +542,15 @@ async def run_whiteboard_pipeline(job_id: str, payload: dict):
         include_narrator = bool(payload.get("include_narrator", False))
         include_subtitles = bool(payload.get("include_subtitles", False))
         colored = bool(payload.get("colored", False))
+        render_style = payload.get("render_style", "classic")
+        if render_style not in ("classic", "illustrated"):
+            render_style = "classic"
+        if render_style == "illustrated":
+            colored = True
 
         # 1) Script
         log(job_id, 1, 1, "Senaryo yazılıyor...")
-        scenes = await generate_whiteboard_script(title, duration_minutes, scene_count)
+        scenes = await generate_whiteboard_script(title, duration_minutes, scene_count, render_style)
 
         total = len(scenes)
         total_steps = total + 1
@@ -371,6 +575,7 @@ async def run_whiteboard_pipeline(job_id: str, payload: dict):
                 include_subtitles=include_subtitles,
                 narrator_speed=narrator_speed,
                 colored=colored,
+                render_style=render_style,
             )
             for s in job_store[job_id]["scenes"]:
                 if s["scene_index"] == idx:

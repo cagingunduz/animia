@@ -374,6 +374,7 @@ class GenerateWhiteboardRequest(BaseModel):
     include_narrator: Optional[bool] = False
     include_subtitles: Optional[bool] = False
     colored: Optional[bool] = False
+    render_style: Optional[Literal["classic", "illustrated"]] = "classic"
 
 
 @app.post("/generate-whiteboard")
