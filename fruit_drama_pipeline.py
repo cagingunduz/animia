@@ -53,6 +53,13 @@ def _extract_json(text: str):
     return json.loads(text.strip())
 
 
+def _raise_for_veo_error(response: httpx.Response, context: str):
+    if response.is_success:
+        return
+    body = response.text[:2000]
+    raise RuntimeError(f"Veo {context} failed ({response.status_code}): {body}")
+
+
 def _character_reference_prompt(character: dict, aspect_ratio: str) -> str:
     orientation = "vertical" if aspect_ratio == "9:16" else "horizontal"
     return f"""{orientation.capitalize()} {aspect_ratio} full-body character reference image.
@@ -203,16 +210,13 @@ async def generate_veo_video_from_image(
         "instances": [{
             "prompt": prompt,
             "image": {
-                "inlineData": {
-                    "mimeType": mime_type,
-                    "data": base64.b64encode(image_bytes).decode("ascii"),
-                }
+                "bytesBase64Encoded": base64.b64encode(image_bytes).decode("ascii"),
+                "mimeType": mime_type,
             },
         }],
         "parameters": {
             "aspectRatio": aspect_ratio,
             "durationSeconds": str(duration_seconds),
-            "numberOfVideos": 1,
             "resolution": resolution,
             "personGeneration": "allow_adult",
         },
@@ -224,7 +228,7 @@ async def generate_veo_video_from_image(
             headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
             json=payload,
         )
-        start.raise_for_status()
+        _raise_for_veo_error(start, "start")
         operation_name = start.json().get("name")
         if not operation_name:
             raise RuntimeError(f"Veo did not return operation name: {start.text}")
@@ -237,7 +241,7 @@ async def generate_veo_video_from_image(
                 f"{base_url}/{operation_name}",
                 headers={"x-goog-api-key": GEMINI_API_KEY},
             )
-            poll.raise_for_status()
+            _raise_for_veo_error(poll, "poll")
             status = poll.json()
             if status.get("done"):
                 break
