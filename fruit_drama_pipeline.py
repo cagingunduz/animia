@@ -319,13 +319,14 @@ async def generate_veo_video_from_image(
         return True
 
 
-def _scene_status(scene: dict, scene_index: int) -> dict:
+def _scene_status(scene: dict, scene_index: int, duration_seconds: int | None = None) -> dict:
     return {
         "scene_index": scene_index,
         "status": "queued",
         "title": scene.get("title") or f"Scene {scene_index}",
         "emotion": scene.get("emotion"),
         "dialogue": _clean_dialogue(scene.get("dialogue")),
+        "duration_seconds": duration_seconds,
         "video_url": None,
         "image_url": None,
         "error": None,
@@ -361,7 +362,7 @@ async def _render_fruit_drama_scene(
 ) -> dict:
     if total_steps and image_step and image_message:
         log(job_id, image_step, total_steps, image_message)
-    _update_scene_record(job_id, scene_index, status="rendering_image", error=None)
+    _update_scene_record(job_id, scene_index, status="rendering_image", error=None, duration_seconds=duration_seconds)
     scene_chars = _scene_characters(scene, characters)
     refs = [character_urls.get(c.get("id")) for c in scene_chars if character_urls.get(c.get("id"))]
     image_prompt = _scene_image_prompt(scene, scene_chars, aspect_ratio)
@@ -391,6 +392,64 @@ async def _render_fruit_drama_scene(
         video_url = upload_bytes_to_r2(f.read(), "fruit-drama-scenes", "mp4", "video/mp4")
     _update_scene_record(job_id, scene_index, status="completed", video_url=video_url)
     return {"image_url": image_url, "video_url": video_url}
+
+
+async def _plan_scene_edit(instruction: str, scenes: list[dict], scene_index: int | None) -> dict:
+    compact = []
+    for i, scene in enumerate(scenes):
+        compact.append({
+            "scene_index": i + 1,
+            "title": scene.get("title"),
+            "location": scene.get("location"),
+            "action": scene.get("action"),
+            "emotion": scene.get("emotion"),
+            "image_direction": scene.get("image_direction"),
+            "video_motion": scene.get("video_motion"),
+            "dialogue": _clean_dialogue(scene.get("dialogue")),
+        })
+
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=2500,
+        messages=[{
+            "role": "user",
+            "content": f"""You are an AI video editor for an already generated Fruit Drama.
+
+User edit request:
+{instruction}
+
+Selected scene index if the user did not specify one: {scene_index or "none"}
+
+Current scenes:
+{json.dumps(compact, ensure_ascii=False)}
+
+Return JSON ONLY:
+{{
+  "scene_index": 1,
+  "summary": "short explanation of what will change",
+  "scene_update": {{
+    "title": "...",
+    "location": "...",
+    "action": "...",
+    "emotion": "...",
+    "image_direction": "...",
+    "video_motion": "...",
+    "dialogue": [
+      {{"speaker": "...", "line": "..."}}
+    ]
+  }}
+}}
+
+Rules:
+- Edit exactly one scene.
+- Keep the same characters and fruit identities.
+- Keep dialogue natural spoken English. Never use all caps, acronyms, or letter-by-letter spelling.
+- If the user asks for timing only, keep the scene_update close to the current scene.
+- Do not add subtitles, text, logos, or watermarks."""
+        }]
+    )
+    return _extract_json(message.content[0].text)
 
 
 async def _compose_fruit_drama_final(clip_urls: list[str]) -> str:
@@ -451,12 +510,16 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
 
         plan["characters"] = characters
         plan["scenes"] = scenes
-        job_store[job_id]["scenes"] = [_scene_status(scene, i + 1) for i, scene in enumerate(scenes)]
+        scene_durations = [duration_seconds for _ in scenes]
+        job_store[job_id]["scenes"] = [
+            _scene_status(scene, i + 1, scene_durations[i]) for i, scene in enumerate(scenes)
+        ]
         job_store[job_id]["fruit_drama"] = {
             "plan": plan,
             "characters": characters,
             "character_urls": {},
             "clip_urls": [None for _ in scenes],
+            "scene_durations": scene_durations,
             "settings": {
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
@@ -487,7 +550,7 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
                 character_urls=character_urls,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,
-                duration_seconds=duration_seconds,
+                duration_seconds=scene_durations[i],
                 total_steps=total_steps,
                 image_step=2 + (idx - 1) * 2 + 1,
                 image_message=f"Sahne {idx}/{scene_count}: görsel oluşturuluyor...",
@@ -512,7 +575,7 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
         job_store[job_id]["traceback"] = tb
 
 
-async def regenerate_fruit_drama_scene(job_id: str, scene_index: int):
+async def regenerate_fruit_drama_scene(job_id: str, scene_index: int, duration_seconds: int | None = None):
     try:
         if job_id not in job_store:
             raise RuntimeError("Fruit drama job not found")
@@ -525,6 +588,9 @@ async def regenerate_fruit_drama_scene(job_id: str, scene_index: int):
         characters = meta.get("characters", [])
         character_urls = meta.get("character_urls", {})
         clip_urls = meta.get("clip_urls", [])
+        scene_durations = meta.setdefault("scene_durations", [
+            int(meta.get("settings", {}).get("duration_seconds_per_scene", 8)) for _ in scenes
+        ])
         settings = meta.get("settings", {})
         idx = int(scene_index)
         if idx < 1 or idx > len(scenes):
@@ -534,7 +600,10 @@ async def regenerate_fruit_drama_scene(job_id: str, scene_index: int):
 
         aspect_ratio = settings.get("aspect_ratio", "9:16")
         resolution = settings.get("resolution", "720p")
-        duration_seconds = int(settings.get("duration_seconds_per_scene", 8))
+        requested_duration = _valid_duration(duration_seconds or scene_durations[idx - 1] or settings.get("duration_seconds_per_scene", 8))
+        if resolution == "1080p":
+            requested_duration = 8
+        scene_durations[idx - 1] = requested_duration
 
         job["status"] = "processing"
         job["step"] = 1
@@ -552,7 +621,7 @@ async def regenerate_fruit_drama_scene(job_id: str, scene_index: int):
             character_urls=character_urls,
             aspect_ratio=aspect_ratio,
             resolution=resolution,
-            duration_seconds=duration_seconds,
+            duration_seconds=requested_duration,
             total_steps=3,
             image_step=1,
             image_message=f"Sahne {idx}: yeni görsel oluşturuluyor...",
@@ -578,5 +647,105 @@ async def regenerate_fruit_drama_scene(job_id: str, scene_index: int):
             job_store[job_id]["traceback"] = tb
             try:
                 _update_scene_record(job_id, int(scene_index), status="failed", error=repr(e))
+            except Exception:
+                pass
+
+
+async def edit_fruit_drama_scene(
+    job_id: str,
+    instruction: str,
+    scene_index: int | None = None,
+    duration_seconds: int | None = None,
+):
+    try:
+        if job_id not in job_store:
+            raise RuntimeError("Fruit drama job not found")
+        job = job_store[job_id]
+        meta = job.get("fruit_drama")
+        if not meta:
+            raise RuntimeError("This job cannot edit scenes")
+
+        scenes = meta.get("plan", {}).get("scenes", [])
+        characters = meta.get("characters", [])
+        character_urls = meta.get("character_urls", {})
+        clip_urls = meta.get("clip_urls", [])
+        scene_durations = meta.setdefault("scene_durations", [
+            int(meta.get("settings", {}).get("duration_seconds_per_scene", 8)) for _ in scenes
+        ])
+        settings = meta.get("settings", {})
+        if any(not url for url in clip_urls):
+            raise RuntimeError("All scenes must finish before editing a single scene")
+
+        job["status"] = "processing"
+        job["step"] = 0
+        job["total_steps"] = 4
+        job["message"] = "AI edit isteği analiz ediliyor..."
+        job["error"] = None
+        job["traceback"] = None
+
+        edit = await _plan_scene_edit(instruction, scenes, scene_index)
+        idx = int(edit.get("scene_index") or scene_index or 1)
+        idx = max(1, min(len(scenes), idx))
+        current = dict(scenes[idx - 1])
+        update = edit.get("scene_update") or {}
+        for key in ("title", "location", "action", "emotion", "image_direction", "video_motion"):
+            if update.get(key):
+                current[key] = update[key]
+        if update.get("dialogue"):
+            current["dialogue"] = _clean_dialogue(update.get("dialogue"))
+        current = _prepare_scene(current)
+        scenes[idx - 1] = current
+
+        requested_duration = _valid_duration(duration_seconds or scene_durations[idx - 1] or settings.get("duration_seconds_per_scene", 8))
+        if settings.get("resolution") == "1080p":
+            requested_duration = 8
+        scene_durations[idx - 1] = requested_duration
+
+        _update_scene_record(
+            job_id,
+            idx,
+            title=current.get("title"),
+            emotion=current.get("emotion"),
+            dialogue=_clean_dialogue(current.get("dialogue")),
+            duration_seconds=requested_duration,
+            status="regenerating",
+            error=None,
+        )
+
+        job["message"] = edit.get("summary") or f"Sahne {idx} AI isteğine göre yeniden düzenleniyor..."
+        result = await _render_fruit_drama_scene(
+            job_id=job_id,
+            scene_index=idx,
+            scene=current,
+            characters=characters,
+            character_urls=character_urls,
+            aspect_ratio=settings.get("aspect_ratio", "9:16"),
+            resolution=settings.get("resolution", "720p"),
+            duration_seconds=requested_duration,
+            total_steps=4,
+            image_step=2,
+            image_message=f"Sahne {idx}: AI edit görseli oluşturuluyor...",
+            video_step=3,
+            video_message=f"Sahne {idx}: AI edit videosu oluşturuluyor...",
+        )
+        clip_urls[idx - 1] = result["video_url"]
+
+        job["step"] = 4
+        job["message"] = "Final video yeniden birleştiriliyor..."
+        final_url = await _compose_fruit_drama_final(clip_urls)
+
+        job["status"] = "completed"
+        job["message"] = "Tamamlandı!"
+        job["final_video_url"] = final_url
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[{job_id}] Fruit drama AI edit hatası: {repr(e)}\n{tb}")
+        if job_id in job_store:
+            job_store[job_id]["status"] = "failed"
+            job_store[job_id]["error"] = repr(e)
+            job_store[job_id]["traceback"] = tb
+            try:
+                _update_scene_record(job_id, int(scene_index or 1), status="failed", error=repr(e))
             except Exception:
                 pass

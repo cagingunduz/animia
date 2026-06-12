@@ -16,7 +16,7 @@ from prompt_generator import get_style_prompt, generate_scene_prompts, generate_
 from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
 from animated_story_pipeline import run_animated_story_pipeline
 from whiteboard_pipeline import run_whiteboard_pipeline
-from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_drama_scene
+from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_drama_scene, edit_fruit_drama_scene
 
 app = FastAPI(title="Animave API v3")
 
@@ -408,6 +408,14 @@ class GenerateFruitDramaRequest(BaseModel):
 class RegenerateFruitDramaSceneRequest(BaseModel):
     job_id: str
     scene_index: int
+    duration_seconds: Optional[Literal[4, 6, 8]] = None
+
+
+class EditFruitDramaSceneRequest(BaseModel):
+    job_id: str
+    instruction: str
+    scene_index: Optional[int] = None
+    duration_seconds: Optional[Literal[4, 6, 8]] = None
 
 
 @app.post("/generate-fruit-drama")
@@ -444,7 +452,32 @@ async def regenerate_fruit_drama_scene_endpoint(req: RegenerateFruitDramaSceneRe
             scene["status"] = "regenerating"
             scene["error"] = None
             break
-    asyncio.create_task(regenerate_fruit_drama_scene(req.job_id, req.scene_index))
+    asyncio.create_task(regenerate_fruit_drama_scene(req.job_id, req.scene_index, req.duration_seconds))
+    return {"job_id": req.job_id, "scene_index": req.scene_index, "status": "queued"}
+
+
+@app.post("/edit-fruit-drama-scene")
+async def edit_fruit_drama_scene_endpoint(req: EditFruitDramaSceneRequest):
+    if req.job_id not in job_store:
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    job = job_store[req.job_id]
+    if job.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="Job su anda isleniyor")
+    if not job.get("fruit_drama"):
+        raise HTTPException(status_code=400, detail="Bu job AI edit desteklemiyor")
+    if len(req.instruction.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Edit istegi cok kisa")
+    job["status"] = "processing"
+    job["step"] = 0
+    job["total_steps"] = 4
+    job["message"] = "AI edit isteği analiz ediliyor..."
+    if req.scene_index:
+        for scene in job.get("scenes", []):
+            if scene.get("scene_index") == req.scene_index:
+                scene["status"] = "regenerating"
+                scene["error"] = None
+                break
+    asyncio.create_task(edit_fruit_drama_scene(req.job_id, req.instruction, req.scene_index, req.duration_seconds))
     return {"job_id": req.job_id, "scene_index": req.scene_index, "status": "queued"}
 
 
