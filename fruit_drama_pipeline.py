@@ -2,6 +2,7 @@ import base64
 import asyncio
 import json
 import os
+import re
 import tempfile
 import time
 import traceback
@@ -16,7 +17,6 @@ from storybook_pipeline import (
     concat_video_files,
     download_file,
     log,
-    set_scene_status,
     upload_bytes_to_r2,
 )
 
@@ -58,6 +58,50 @@ def _raise_for_veo_error(response: httpx.Response, context: str):
         return
     body = response.text[:2000]
     raise RuntimeError(f"Veo {context} failed ({response.status_code}): {body}")
+
+
+def _clean_spoken_line(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(
+        r"\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b",
+        lambda m: m.group(0).replace(" ", "").lower(),
+        text,
+    )
+    text = re.sub(
+        r"\b(?:[A-Za-z]\.){2,}",
+        lambda m: m.group(0).replace(".", "").lower(),
+        text,
+    )
+    replacements = {
+        "AI": "artificial intelligence",
+        "CEO": "boss",
+        "VIP": "important person",
+        "TV": "television",
+        "OMG": "oh my god",
+        "OK": "okay",
+    }
+    for source, target in replacements.items():
+        text = re.sub(rf"\b{source}\b", target, text)
+    text = re.sub(r"\b[A-Z]{2,}\b", lambda m: m.group(0).lower(), text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_dialogue(dialogue) -> list[dict]:
+    cleaned = []
+    for item in dialogue or []:
+        line = _clean_spoken_line(item.get("line", ""))
+        if line:
+            cleaned.append({
+                "speaker": _clean_spoken_line(item.get("speaker", "Character")),
+                "line": line,
+            })
+    return cleaned
+
+
+def _prepare_scene(scene: dict) -> dict:
+    prepared = dict(scene)
+    prepared["dialogue"] = _clean_dialogue(scene.get("dialogue"))
+    return prepared
 
 
 def _character_reference_prompt(character: dict, aspect_ratio: str) -> str:
@@ -110,7 +154,7 @@ Composition must match a dramatic soap-opera short: cinematic lighting, shallow 
 
 def _video_prompt(scene: dict, aspect_ratio: str) -> str:
     orientation = "vertical" if aspect_ratio == "9:16" else "horizontal"
-    dialogue = scene.get("dialogue") or []
+    dialogue = _clean_dialogue(scene.get("dialogue"))
     dialogue_lines = "\n".join([f'{d.get("speaker")}: "{d.get("line")}"' for d in dialogue if d.get("line")])
     return f"""Animate this image as a {orientation} {aspect_ratio} AI Fruit Drama scene with native audio.
 
@@ -120,8 +164,11 @@ Motion:
 Drama direction:
 Emotional soap-opera tension, subtle facial expressions, small body movements, smooth Pixar-style 3D character animation, cinematic lighting, no subtitles, no text, no watermark.
 
-Dialogue with natural character voices:
-{dialogue_lines}
+Dialogue performance:
+Use natural spoken English. Do not spell out any word letter by letter. Do not pronounce speaker labels, punctuation, abbreviations, or capital letters as separate letters. If a word is written in uppercase, say it as a normal word.
+
+Spoken dialogue, performed as character voices:
+{dialogue_lines or "No spoken dialogue. Use only emotional reactions and ambient sound."}
 
 Ambient sound should match the location: {scene.get("location")}."""
 
@@ -184,6 +231,9 @@ Return JSON ONLY with this exact shape:
 Rules:
 - Use only family-safe drama, no explicit/sexual content.
 - Keep dialogue short, punchy, and viral.
+- Dialogue must be written as natural spoken English, never as ALL CAPS.
+- Do not use acronyms, abbreviations, initialisms, or letter-by-letter spelling in dialogue.
+- Never write words with spaces or dots between letters, for example write "new" not "N E W" or "N.E.W.".
 - Every scene should work as an 8-second clip.
 - Keep character outfits consistent across scenes unless the story explicitly requires a change.
 - Use premium Pixar-style 3D animated fruit character design."""
@@ -269,6 +319,102 @@ async def generate_veo_video_from_image(
         return True
 
 
+def _scene_status(scene: dict, scene_index: int) -> dict:
+    return {
+        "scene_index": scene_index,
+        "status": "queued",
+        "title": scene.get("title") or f"Scene {scene_index}",
+        "emotion": scene.get("emotion"),
+        "dialogue": _clean_dialogue(scene.get("dialogue")),
+        "video_url": None,
+        "image_url": None,
+        "error": None,
+    }
+
+
+def _update_scene_record(job_id: str, scene_index: int, **fields):
+    for scene in job_store[job_id].get("scenes", []):
+        if scene.get("scene_index") == scene_index:
+            scene.update(fields)
+            break
+
+
+def _scene_characters(scene: dict, characters: list[dict]) -> list[dict]:
+    wanted = set(scene.get("characters", []))
+    return [c for c in characters if c.get("id") in wanted] or characters
+
+
+async def _render_fruit_drama_scene(
+    job_id: str,
+    scene_index: int,
+    scene: dict,
+    characters: list[dict],
+    character_urls: dict,
+    aspect_ratio: str,
+    resolution: str,
+    duration_seconds: int,
+    total_steps: int | None = None,
+    image_step: int | None = None,
+    image_message: str | None = None,
+    video_step: int | None = None,
+    video_message: str | None = None,
+) -> dict:
+    if total_steps and image_step and image_message:
+        log(job_id, image_step, total_steps, image_message)
+    _update_scene_record(job_id, scene_index, status="rendering_image", error=None)
+    scene_chars = _scene_characters(scene, characters)
+    refs = [character_urls.get(c.get("id")) for c in scene_chars if character_urls.get(c.get("id"))]
+    image_prompt = _scene_image_prompt(scene, scene_chars, aspect_ratio)
+    image_url = await generate_fruit_drama_image(
+        image_prompt,
+        aspect_ratio=aspect_ratio,
+        reference_urls=refs,
+        folder="fruit-drama-scenes",
+    )
+    _update_scene_record(job_id, scene_index, image_url=image_url, status="animating")
+
+    if total_steps and video_step and video_message:
+        log(job_id, video_step, total_steps, video_message)
+    image_bytes = await download_file(image_url)
+    mime = "image/png" if image_url.lower().endswith(".png") else "image/jpeg"
+    out_path = f"{tempfile.mkdtemp()}/fruit_scene_{scene_index}_{uuid.uuid4().hex[:8]}.mp4"
+    await generate_veo_video_from_image(
+        image_bytes=image_bytes,
+        mime_type=mime,
+        prompt=_video_prompt(scene, aspect_ratio),
+        out_path=out_path,
+        aspect_ratio=aspect_ratio,
+        resolution=resolution,
+        duration_seconds=duration_seconds,
+    )
+    with open(out_path, "rb") as f:
+        video_url = upload_bytes_to_r2(f.read(), "fruit-drama-scenes", "mp4", "video/mp4")
+    _update_scene_record(job_id, scene_index, status="completed", video_url=video_url)
+    return {"image_url": image_url, "video_url": video_url}
+
+
+async def _compose_fruit_drama_final(clip_urls: list[str]) -> str:
+    if not clip_urls or any(not url for url in clip_urls):
+        raise RuntimeError("All fruit drama scenes must have videos before final compose")
+    if len(clip_urls) == 1:
+        return clip_urls[0]
+
+    tmp = tempfile.mkdtemp()
+    local_paths = []
+    for i, url in enumerate(clip_urls):
+        data = await download_file(url)
+        path = f"{tmp}/clip_{i}_{uuid.uuid4().hex[:8]}.mp4"
+        with open(path, "wb") as f:
+            f.write(data)
+        local_paths.append(path)
+
+    final_path = f"{tmp}/fruit_final_{uuid.uuid4().hex[:8]}.mp4"
+    if not concat_video_files(local_paths, final_path):
+        raise RuntimeError("Fruit drama concat failed")
+    with open(final_path, "rb") as f:
+        return upload_bytes_to_r2(f.read(), "fruit-drama-final", "mp4", "video/mp4")
+
+
 async def run_fruit_drama_pipeline(job_id: str, payload: dict):
     try:
         title = payload["title"]
@@ -280,6 +426,9 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
             duration_seconds = 8
 
         total_steps = 2 + scene_count * 2 + (1 if scene_count > 1 else 0)
+        job_store[job_id]["resolution"] = resolution
+        job_store[job_id]["duration_seconds_per_scene"] = duration_seconds
+        job_store[job_id]["aspect_ratio"] = aspect_ratio
         job_store[job_id]["total_steps"] = total_steps
         job_store[job_id]["scenes"] = [
             {"scene_index": i + 1, "status": "queued", "video_url": None, "image_url": None}
@@ -296,9 +445,24 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
             scene_count=scene_count,
         )
         characters = plan.get("characters", [])[:3]
-        scenes = plan.get("scenes", [])[:scene_count]
+        scenes = [_prepare_scene(s) for s in plan.get("scenes", [])[:scene_count]]
         if not characters or not scenes:
             raise RuntimeError("Fruit drama plan did not include characters/scenes")
+
+        plan["characters"] = characters
+        plan["scenes"] = scenes
+        job_store[job_id]["scenes"] = [_scene_status(scene, i + 1) for i, scene in enumerate(scenes)]
+        job_store[job_id]["fruit_drama"] = {
+            "plan": plan,
+            "characters": characters,
+            "character_urls": {},
+            "clip_urls": [None for _ in scenes],
+            "settings": {
+                "aspect_ratio": aspect_ratio,
+                "resolution": resolution,
+                "duration_seconds_per_scene": duration_seconds,
+            },
+        }
 
         log(job_id, 2, total_steps, "Karakter referansları oluşturuluyor...")
         character_urls = {}
@@ -310,61 +474,31 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
         job_store[job_id]["characters"] = [
             {**c, "image_url": character_urls.get(c["id"])} for c in characters
         ]
+        job_store[job_id]["fruit_drama"]["character_urls"] = character_urls
 
-        tmp = tempfile.mkdtemp()
-        clip_urls = []
+        clip_urls = job_store[job_id]["fruit_drama"]["clip_urls"]
         for i, scene in enumerate(scenes):
             idx = i + 1
-            set_scene_status(job_id, idx, "processing")
-            log(job_id, 2 + (idx - 1) * 2 + 1, total_steps, f"Sahne {idx}/{scene_count}: görsel oluşturuluyor...")
-            scene_chars = [c for c in characters if c["id"] in scene.get("characters", [])] or characters
-            refs = [character_urls.get(c["id"]) for c in scene_chars if character_urls.get(c["id"])]
-            image_prompt = _scene_image_prompt(scene, scene_chars, aspect_ratio)
-            image_url = await generate_fruit_drama_image(
-                image_prompt,
-                aspect_ratio=aspect_ratio,
-                reference_urls=refs,
-                folder="fruit-drama-scenes",
-            )
-            for s in job_store[job_id]["scenes"]:
-                if s["scene_index"] == idx:
-                    s["image_url"] = image_url
-                    break
-
-            log(job_id, 2 + (idx - 1) * 2 + 2, total_steps, f"Sahne {idx}/{scene_count}: Veo ile animate ediliyor...")
-            image_bytes = await download_file(image_url)
-            mime = "image/png" if image_url.lower().endswith(".png") else "image/jpeg"
-            out_path = f"{tmp}/fruit_scene_{idx}_{uuid.uuid4().hex[:8]}.mp4"
-            await generate_veo_video_from_image(
-                image_bytes=image_bytes,
-                mime_type=mime,
-                prompt=_video_prompt(scene, aspect_ratio),
-                out_path=out_path,
+            result = await _render_fruit_drama_scene(
+                job_id=job_id,
+                scene_index=idx,
+                scene=scene,
+                characters=characters,
+                character_urls=character_urls,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,
                 duration_seconds=duration_seconds,
+                total_steps=total_steps,
+                image_step=2 + (idx - 1) * 2 + 1,
+                image_message=f"Sahne {idx}/{scene_count}: görsel oluşturuluyor...",
+                video_step=2 + (idx - 1) * 2 + 2,
+                video_message=f"Sahne {idx}/{scene_count}: Veo ile animate ediliyor...",
             )
-            with open(out_path, "rb") as f:
-                video_url = upload_bytes_to_r2(f.read(), "fruit-drama-scenes", "mp4", "video/mp4")
-            set_scene_status(job_id, idx, "completed", video_url=video_url)
-            clip_urls.append(video_url)
+            clip_urls[i] = result["video_url"]
 
-        if len(clip_urls) == 1:
-            final_url = clip_urls[0]
-        else:
+        if len(clip_urls) > 1:
             log(job_id, total_steps, total_steps, "Fruit drama sahneleri birleştiriliyor...")
-            local_paths = []
-            for i, url in enumerate(clip_urls):
-                data = await download_file(url)
-                p = f"{tmp}/clip_{i}_{uuid.uuid4().hex[:8]}.mp4"
-                with open(p, "wb") as f:
-                    f.write(data)
-                local_paths.append(p)
-            final_path = f"{tmp}/fruit_final_{uuid.uuid4().hex[:8]}.mp4"
-            if not concat_video_files(local_paths, final_path):
-                raise RuntimeError("Fruit drama concat failed")
-            with open(final_path, "rb") as f:
-                final_url = upload_bytes_to_r2(f.read(), "fruit-drama-final", "mp4", "video/mp4")
+        final_url = await _compose_fruit_drama_final(clip_urls)
 
         job_store[job_id]["status"] = "completed"
         job_store[job_id]["message"] = "Tamamlandı!"
@@ -376,3 +510,73 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
         job_store[job_id]["status"] = "failed"
         job_store[job_id]["error"] = repr(e)
         job_store[job_id]["traceback"] = tb
+
+
+async def regenerate_fruit_drama_scene(job_id: str, scene_index: int):
+    try:
+        if job_id not in job_store:
+            raise RuntimeError("Fruit drama job not found")
+        job = job_store[job_id]
+        meta = job.get("fruit_drama")
+        if not meta:
+            raise RuntimeError("This job cannot regenerate scenes")
+
+        scenes = meta.get("plan", {}).get("scenes", [])
+        characters = meta.get("characters", [])
+        character_urls = meta.get("character_urls", {})
+        clip_urls = meta.get("clip_urls", [])
+        settings = meta.get("settings", {})
+        idx = int(scene_index)
+        if idx < 1 or idx > len(scenes):
+            raise RuntimeError("Scene index is out of range")
+        if any(not url for url in clip_urls):
+            raise RuntimeError("All scenes must finish before regenerating a single scene")
+
+        aspect_ratio = settings.get("aspect_ratio", "9:16")
+        resolution = settings.get("resolution", "720p")
+        duration_seconds = int(settings.get("duration_seconds_per_scene", 8))
+
+        job["status"] = "processing"
+        job["step"] = 1
+        job["total_steps"] = 3
+        job["message"] = f"Sahne {idx} yeniden oluşturuluyor..."
+        job["error"] = None
+        job["traceback"] = None
+        _update_scene_record(job_id, idx, status="regenerating", error=None)
+
+        result = await _render_fruit_drama_scene(
+            job_id=job_id,
+            scene_index=idx,
+            scene=scenes[idx - 1],
+            characters=characters,
+            character_urls=character_urls,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            duration_seconds=duration_seconds,
+            total_steps=3,
+            image_step=1,
+            image_message=f"Sahne {idx}: yeni görsel oluşturuluyor...",
+            video_step=2,
+            video_message=f"Sahne {idx}: Veo ile yeniden animate ediliyor...",
+        )
+        clip_urls[idx - 1] = result["video_url"]
+
+        job["step"] = 3
+        job["message"] = "Final video yeniden birleştiriliyor..."
+        final_url = await _compose_fruit_drama_final(clip_urls)
+
+        job["status"] = "completed"
+        job["message"] = "Tamamlandı!"
+        job["final_video_url"] = final_url
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[{job_id}] Fruit drama regenerate hatası: {repr(e)}\n{tb}")
+        if job_id in job_store:
+            job_store[job_id]["status"] = "failed"
+            job_store[job_id]["error"] = repr(e)
+            job_store[job_id]["traceback"] = tb
+            try:
+                _update_scene_record(job_id, int(scene_index), status="failed", error=repr(e))
+            except Exception:
+                pass

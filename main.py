@@ -16,7 +16,7 @@ from prompt_generator import get_style_prompt, generate_scene_prompts, generate_
 from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
 from animated_story_pipeline import run_animated_story_pipeline
 from whiteboard_pipeline import run_whiteboard_pipeline
-from fruit_drama_pipeline import run_fruit_drama_pipeline
+from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_drama_scene
 
 app = FastAPI(title="Animave API v3")
 
@@ -275,7 +275,9 @@ async def get_status(job_id: str):
         "scenes": job.get("scenes", []),
         "final_video_url": job.get("final_video_url"),
         "resolution": job.get("resolution"),
+        "duration_seconds_per_scene": job.get("duration_seconds_per_scene"),
         "lipsync": job.get("lipsync"),
+        "characters": job.get("characters", []),
         "error": job.get("error"),
         "traceback": job.get("traceback")
     }
@@ -403,6 +405,11 @@ class GenerateFruitDramaRequest(BaseModel):
     duration_seconds_per_scene: Optional[Literal[4, 6, 8]] = 8
 
 
+class RegenerateFruitDramaSceneRequest(BaseModel):
+    job_id: str
+    scene_index: int
+
+
 @app.post("/generate-fruit-drama")
 async def generate_fruit_drama(req: GenerateFruitDramaRequest):
     job_id = str(uuid.uuid4())
@@ -412,9 +419,33 @@ async def generate_fruit_drama(req: GenerateFruitDramaRequest):
         "characters": [],
         "final_video_url": None, "error": None, "traceback": None,
         "aspect_ratio": req.aspect_ratio,
+        "resolution": req.resolution,
+        "duration_seconds_per_scene": req.duration_seconds_per_scene,
     }
     asyncio.create_task(run_fruit_drama_pipeline(job_id, req.model_dump()))
     return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/regenerate-fruit-drama-scene")
+async def regenerate_fruit_drama_scene_endpoint(req: RegenerateFruitDramaSceneRequest):
+    if req.job_id not in job_store:
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    job = job_store[req.job_id]
+    if job.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="Job su anda isleniyor")
+    if not job.get("fruit_drama"):
+        raise HTTPException(status_code=400, detail="Bu job sahne yenilemeyi desteklemiyor")
+    job["status"] = "processing"
+    job["step"] = 0
+    job["total_steps"] = 3
+    job["message"] = f"Sahne {req.scene_index} yeniden oluşturuluyor..."
+    for scene in job.get("scenes", []):
+        if scene.get("scene_index") == req.scene_index:
+            scene["status"] = "regenerating"
+            scene["error"] = None
+            break
+    asyncio.create_task(regenerate_fruit_drama_scene(req.job_id, req.scene_index))
+    return {"job_id": req.job_id, "scene_index": req.scene_index, "status": "queued"}
 
 
 @app.post("/generate-single-scene")
