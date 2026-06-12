@@ -216,7 +216,7 @@ async def generate_veo_video_from_image(
         }],
         "parameters": {
             "aspectRatio": aspect_ratio,
-            "durationSeconds": str(duration_seconds),
+            "durationSeconds": duration_seconds,
             "resolution": resolution,
             "personGeneration": "allow_adult",
         },
