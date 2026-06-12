@@ -315,3 +315,39 @@ async def generate_whiteboard_color_image(
     )
     image_url = _extract_url(output)
     return await _download_and_upload_generated_image(image_url, "whiteboard")
+
+
+async def generate_fruit_drama_image(
+    prompt: str,
+    aspect_ratio: str = "9:16",
+    reference_urls: list[str] | None = None,
+    folder: str = "fruit-drama",
+) -> str:
+    """Generate Fruit Drama character/scene stills with Gemini Flash Image via Replicate.
+
+    Replicate's Gemini image model is used for both clean character references and
+    scene stills. When a reference is available, pass the first one as an image
+    input and repeat all character details in the prompt for consistency.
+    """
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+    ar = ASPECT_RATIO_MAP.get(aspect_ratio, "9:16")
+    input_params = {
+        "prompt": prompt,
+        "aspect_ratio": ar,
+        "output_format": "png",
+    }
+    refs = [u for u in (reference_urls or []) if u]
+    if refs:
+        input_params["image"] = refs[0]
+        if len(refs) > 1:
+            input_params["prompt"] = (
+                f"{prompt}\n\nAdditional character reference image URLs to preserve: "
+                + ", ".join(refs[1:])
+            )
+
+    loop = asyncio.get_event_loop()
+    output = await loop.run_in_executor(
+        None, lambda: _run_with_retry(client, "google/gemini-2.5-flash-image", input_params)
+    )
+    image_url = _extract_url(output)
+    return await _download_and_upload_generated_image(image_url, folder, default_ext="png")

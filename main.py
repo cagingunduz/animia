@@ -16,6 +16,7 @@ from prompt_generator import get_style_prompt, generate_scene_prompts, generate_
 from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
 from animated_story_pipeline import run_animated_story_pipeline
 from whiteboard_pipeline import run_whiteboard_pipeline
+from fruit_drama_pipeline import run_fruit_drama_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -390,6 +391,32 @@ async def generate_whiteboard(req: GenerateWhiteboardRequest):
     return {"job_id": job_id, "status": "queued"}
 
 
+class GenerateFruitDramaRequest(BaseModel):
+    title: str
+    main_fruit: Optional[str] = "peach"
+    main_gender: Optional[Literal["girl", "boy"]] = "girl"
+    second_fruit: Optional[str] = "banana"
+    second_gender: Optional[Literal["girl", "boy"]] = "boy"
+    scene_count: Optional[int] = 5
+    aspect_ratio: Optional[Literal["9:16", "16:9"]] = "9:16"
+    resolution: Optional[Literal["720p", "1080p"]] = "720p"
+    duration_seconds_per_scene: Optional[Literal[4, 6, 8]] = 8
+
+
+@app.post("/generate-fruit-drama")
+async def generate_fruit_drama(req: GenerateFruitDramaRequest):
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "status": "queued", "step": 0, "total_steps": 0,
+        "message": "Kuyrukta bekleniyor...", "scenes": [],
+        "characters": [],
+        "final_video_url": None, "error": None, "traceback": None,
+        "aspect_ratio": req.aspect_ratio,
+    }
+    asyncio.create_task(run_fruit_drama_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
 @app.post("/generate-single-scene")
 async def generate_single_scene_endpoint(req: GenerateSingleSceneRequest):
     """
@@ -462,6 +489,7 @@ async def check_ffmpeg():
 @app.get("/check-env")
 async def check_env():
     keys = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "REPLICATE_API_TOKEN",
+            "GEMINI_API_KEY", "GOOGLE_API_KEY", "VEO_MODEL",
             "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY", "R2_BUCKET"]
     return {k: bool(os.environ.get(k)) for k in keys}
 
