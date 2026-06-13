@@ -5,7 +5,7 @@ import httpx
 import boto3
 from botocore.config import Config
 from jobs import job_store
-from prompt_generator import generate_scene_prompts
+from prompt_generator import generate_2d_animation_plan, generate_scene_prompts
 from image_gen import generate_character_image, generate_scene_image
 from video_gen import animate_scene, calculate_duration
 from tts import generate_speech, get_audio_duration
@@ -38,6 +38,49 @@ def set_scene_status(job_id: str, scene_index: int, status: str, video_url: str 
             if character_urls:
                 s["character_urls"] = character_urls
             break
+
+
+def update_scene_metadata(job_id: str, scene_index: int, **fields):
+    scenes = job_store[job_id]["scenes"]
+    for s in scenes:
+        if s["scene_index"] == scene_index:
+            s.update(fields)
+            break
+
+
+def _planned_scene_to_pipeline_scene(scene: dict, character_defs: dict, aspect_ratio: str, scene_duration: int) -> dict:
+    valid_ids = set(character_defs.keys())
+    scene_char_ids = [cid for cid in (scene.get("characters") or []) if cid in valid_ids] or list(valid_ids)
+    dialogue_by_id = {
+        item.get("speaker_id"): item.get("line")
+        for item in (scene.get("dialogue") or [])
+        if item.get("speaker_id") in valid_ids and item.get("line")
+    }
+    scene_text = (
+        f"Title: {scene.get('title') or 'Scene'}. "
+        f"Location: {scene.get('location') or 'unspecified'}. "
+        f"Action: {scene.get('action') or ''}. "
+        f"Emotion: {scene.get('emotion') or ''}. "
+        f"Image direction: {scene.get('image_direction') or ''}. "
+        f"Video motion: {scene.get('video_motion') or ''}. "
+        "Keep the same approved character identities and outfits. No on-screen text, captions, logos, watermark or subtitles."
+    )
+    return {
+        "scene_text": scene_text,
+        "aspect_ratio": aspect_ratio,
+        "scene_duration": scene_duration,
+        "characters": [
+            {
+                "character_id": cid,
+                "role": "speaking" if dialogue_by_id.get(cid) else "silent",
+                "dialogue": dialogue_by_id.get(cid),
+                "voice_id": None,
+                "framing": "full_body",
+            }
+            for cid in scene_char_ids
+        ],
+        "plan": scene,
+    }
 
 
 def upload_audio_bytes_to_r2(audio_bytes: bytes) -> str:
@@ -155,9 +198,13 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         aspect_ratio=aspect_ratio
     )
 
-    set_scene_status(job_id, scene_index, "processing", character_urls={
-        cid: character_defs[cid]["char_url"] for cid in character_defs
-    })
+    update_scene_metadata(
+        job_id,
+        scene_index,
+        status="processing",
+        image_url=scene_image_url,
+        character_urls={cid: character_defs[cid]["char_url"] for cid in character_defs},
+    )
 
     # No speaking characters: just animate
     if not speaking_chars:
@@ -211,10 +258,15 @@ async def run_pipeline(job_id: str, payload: dict):
         lipsync_enabled = payload.get("lipsync", False)
 
         character_defs = {c["id"]: c for c in characters_list}
+        auto_plan = bool(payload.get("auto_plan"))
+        scene_count = max(1, min(8, int(payload.get("scene_count") or len(scenes_list) or 1)))
+        aspect_ratio = payload.get("aspect_ratio") or "16:9"
+        scene_duration = 8 if resolution == "1080p" else int(payload.get("scene_duration") or 8)
+        scene_duration = scene_duration if scene_duration in (4, 6, 8) else 8
 
         n_chars = len(characters_list)
-        n_scenes = len(scenes_list)
-        total_steps = n_chars + (n_scenes * 4) + (1 if n_scenes > 1 else 0)
+        n_scenes = scene_count if auto_plan else len(scenes_list)
+        total_steps = n_chars + (1 if auto_plan else 0) + (n_scenes * 4) + (1 if n_scenes > 1 else 0)
 
         job_store[job_id]["total_steps"] = total_steps
         step = 0
@@ -236,6 +288,44 @@ async def run_pipeline(job_id: str, payload: dict):
                     photo_url=char.get("photo_url")
                 )
             character_defs[cid]["char_url"] = char_url
+
+        if auto_plan:
+            step += 1
+            log(job_id, step, total_steps, "Mave sahneleri planliyor...")
+            plan = await generate_2d_animation_plan(
+                project_prompt=payload.get("project_prompt") or "",
+                user_direction=payload.get("user_direction") or "",
+                characters=characters_list,
+                scene_count=scene_count,
+                aspect_ratio=aspect_ratio,
+                style=payload.get("style") or characters_list[0].get("style", "anime"),
+                scene_duration=scene_duration,
+            )
+            planned_scenes = plan.get("scenes", [])[:scene_count]
+            if not planned_scenes:
+                raise RuntimeError("2D scene planner did not return scenes")
+            scenes_list = [
+                _planned_scene_to_pipeline_scene(scene, character_defs, aspect_ratio, scene_duration)
+                for scene in planned_scenes
+            ]
+            job_store[job_id]["scenes"] = [
+                {
+                    "scene_index": i + 1,
+                    "status": "queued",
+                    "title": scene.get("title") or f"Scene {i + 1}",
+                    "emotion": scene.get("emotion"),
+                    "dialogue": [
+                        {"speaker": item.get("speaker_id"), "line": item.get("line")}
+                        for item in (scene.get("dialogue") or [])
+                    ],
+                    "duration_seconds": scene_duration,
+                    "video_url": None,
+                    "image_url": None,
+                    "character_urls": {},
+                }
+                for i, scene in enumerate(planned_scenes)
+            ]
+            job_store[job_id]["plan"] = plan
 
         # Process each scene
         scene_video_urls = []

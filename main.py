@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 
 from jobs import job_store
@@ -54,9 +54,16 @@ class Scene(BaseModel):
 
 class GenerateRequest(BaseModel):
     characters: List[CharacterDef]
-    scenes: List[Scene]
+    scenes: List[Scene] = Field(default_factory=list)
     resolution: Optional[Literal["480p", "720p", "1080p"]] = "720p"
     lipsync: Optional[bool] = False
+    auto_plan: Optional[bool] = False
+    project_prompt: Optional[str] = None
+    user_direction: Optional[str] = None
+    scene_count: Optional[int] = None
+    aspect_ratio: Optional[str] = "16:9"
+    scene_duration: Optional[int] = 8
+    style: Optional[str] = None
 
 
 class TTSTestRequest(BaseModel):
@@ -244,9 +251,11 @@ async def generate(req: GenerateRequest):
             )
 
     job_id = str(uuid.uuid4())
+    status_count = req.scene_count if req.auto_plan and req.scene_count else len(req.scenes)
+    status_count = max(1, min(8, int(status_count or 1)))
     scenes_status = [
         {"scene_index": i + 1, "status": "queued", "video_url": None, "character_urls": {}}
-        for i in range(len(req.scenes))
+        for i in range(status_count)
     ]
 
     job_store[job_id] = {

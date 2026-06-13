@@ -1,6 +1,7 @@
 import os
 import anthropic
 import json
+import re
 
 STYLE_PROMPTS = {
     "western_cartoon": "2D western cartoon illustration, bold thick black outlines, flat cel-shaded colors, limited color palette, clean vector-like art style, inspired by Archer FX animated series, no photorealism, no 3D, no blur",
@@ -34,6 +35,41 @@ THEME_CONTEXT = {
 
 def get_style_prompt(style: str) -> str:
     return STYLE_PROMPTS.get(style, STYLE_PROMPTS["western_cartoon"])
+
+
+def _extract_json(text: str):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.strip().startswith("json"):
+            text = text.strip()[4:]
+    return json.loads(text.strip())
+
+
+def _clean_spoken_line(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(
+        r"\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b",
+        lambda m: m.group(0).replace(" ", "").lower(),
+        text,
+    )
+    text = re.sub(
+        r"\b(?:[A-Za-z]\.){2,}",
+        lambda m: m.group(0).replace(".", "").lower(),
+        text,
+    )
+    replacements = {
+        "AI": "artificial intelligence",
+        "CEO": "boss",
+        "VIP": "important person",
+        "TV": "television",
+        "OMG": "oh my god",
+        "OK": "okay",
+    }
+    for source, target in replacements.items():
+        text = re.sub(rf"\b{source}\b", target, text)
+    text = re.sub(r"\b[A-Z]{2,}\b", lambda m: m.group(0).lower(), text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def get_scene_count(duration_minutes: int) -> int:
@@ -138,6 +174,99 @@ OUTPUT FORMAT — respond with a valid JSON array only, no other text:
 
     scenes = json.loads(text)
     return scenes
+
+
+async def generate_2d_animation_plan(
+    project_prompt: str,
+    user_direction: str,
+    characters: list,
+    scene_count: int,
+    aspect_ratio: str,
+    style: str,
+    scene_duration: int = 8,
+) -> dict:
+    """Create a Fruit-Drama-style structured plan for general 2D animation."""
+    scene_count = max(1, min(8, int(scene_count or 3)))
+    style_prompt = get_style_prompt(style or "anime")
+    char_lines = []
+    for c in characters:
+        char_lines.append(
+            f"- id: {c.get('id')}\n"
+            f"  description: {c.get('description', '')}\n"
+            f"  style: {c.get('style', style)}"
+        )
+
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    message = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=5000,
+        messages=[{
+            "role": "user",
+            "content": f"""You are a viral short-form 2D animation director.
+
+Create a structured scene plan. The user gives the topic, but you decide the best visual sequence, actions, camera, pacing, and short dialogue when useful.
+
+Project prompt:
+{project_prompt}
+
+Extra user direction:
+{user_direction or "none"}
+
+Approved characters:
+{chr(10).join(char_lines)}
+
+Settings:
+- Total scenes: {scene_count}
+- Seconds per scene: {scene_duration}
+- Aspect ratio: {aspect_ratio}
+- Visual style: {style_prompt}
+
+Return JSON ONLY with this exact shape:
+{{
+  "scenes": [
+    {{
+      "scene_number": 1,
+      "title": "short title",
+      "location": "clear location",
+      "characters": ["character id"],
+      "action": "clear visible action",
+      "emotion": "specific emotion",
+      "image_direction": "detailed image composition, camera angle, lighting, background, props",
+      "video_motion": "short image-to-video motion direction",
+      "dialogue": [
+        {{"speaker_id": "character id", "line": "short natural spoken line"}}
+      ]
+    }}
+  ]
+}}
+
+Rules:
+- Stay tightly on the user's topic. Do not create a generic scene.
+- Use only the approved character ids.
+- Build one continuous story across scenes with a hook, rising action, climax, and payoff.
+- Keep dialogue optional and short. Use dialogue only when it improves the scene.
+- Dialogue must be natural spoken English. Never use all caps, acronyms, initialisms, or letter-by-letter spelling.
+- Never write words with spaces or dots between letters. Write "new", not "N E W" or "N.E.W.".
+- No written text, captions, signs, UI, logos, watermark, or subtitles inside the visuals.
+- Keep character appearance and outfits consistent across scenes.
+- Every scene must fit in {scene_duration} seconds."""
+        }]
+    )
+    plan = _extract_json(message.content[0].text)
+    scenes = []
+    valid_ids = {c.get("id") for c in characters}
+    for raw in (plan.get("scenes") or [])[:scene_count]:
+        scene = dict(raw)
+        scene["characters"] = [cid for cid in (scene.get("characters") or []) if cid in valid_ids] or [c.get("id") for c in characters]
+        cleaned_dialogue = []
+        for item in scene.get("dialogue") or []:
+            speaker_id = item.get("speaker_id")
+            line = _clean_spoken_line(item.get("line", ""))
+            if speaker_id in valid_ids and line:
+                cleaned_dialogue.append({"speaker_id": speaker_id, "line": line})
+        scene["dialogue"] = cleaned_dialogue[:2]
+        scenes.append(scene)
+    return {"scenes": scenes}
 
 
 async def generate_scene_prompts(
