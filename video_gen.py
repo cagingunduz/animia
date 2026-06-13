@@ -88,6 +88,7 @@ async def animate_scene(
         prompt = (
             f"2D cartoon animation, {scene_description}, "
             f"character speaking naturally for {speak_secs} seconds, "
+            f"speak normal words fluently, never spell words letter by letter, "
             f"mouth moving while talking, expressive hand gestures, "
             f"head nodding slightly, eyes blinking, smooth motion, natural body sway"
         )
@@ -110,7 +111,7 @@ async def animate_scene(
                 "duration": _veo_duration(duration, res),
                 "resolution": res,
                 "aspect_ratio": _veo_aspect(aspect_ratio),
-                "generate_audio": True,  # Veo 3.1 adds its own native audio (dialogue/SFX)
+                "generate_audio": bool(speaking_duration and speaking_duration > 0),
                 "safety_tolerance": "4",
             },
             with_logs=True,

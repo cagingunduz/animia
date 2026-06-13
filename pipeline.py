@@ -140,7 +140,8 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         scene_text=scene_text,
         characters=chars_for_prompt,
         aspect_ratio=aspect_ratio,
-        pre_dialogue_action=pre_action
+        pre_dialogue_action=pre_action,
+        blur_faces=scene_data.get("blur_faces", False)
     )
     movement_duration = prompts["movement_duration"]
 
@@ -213,7 +214,7 @@ async def run_pipeline(job_id: str, payload: dict):
 
         n_chars = len(characters_list)
         n_scenes = len(scenes_list)
-        total_steps = n_chars + (n_scenes * 7) + (1 if n_scenes > 1 else 0)
+        total_steps = n_chars + (n_scenes * 4) + (1 if n_scenes > 1 else 0)
 
         job_store[job_id]["total_steps"] = total_steps
         step = 0

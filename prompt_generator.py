@@ -208,12 +208,15 @@ Generate:
    - Silent characters: neutral, natural pose
 
 2. A SCENE_PROMPT for composing all characters together in the described scene.
+   - The SCENE_PROMPT must preserve the user's requested story, action, mood and setting. Do not replace it with a generic scene.
    - Reference each character's exact appearance for consistency
    - Speaking characters: active, mouth open, gesturing
    - Silent characters: background/side positions, neutral
    - Include environment/background details
    - Apply the dominant style of the scene
    - Face rule: {face_rule}
+   - No written text, captions, logos, signs, UI, watermark or subtitles inside the image
+   - If the scene includes dialogue, keep the spoken words exactly as natural speech. Never spell ordinary words letter-by-letter.
 
 3. MOVEMENT_DURATION: Estimate seconds needed for any pre-dialogue physical action (e.g. standing up, walking, slamming table). If no action, return 0.
 
@@ -230,6 +233,7 @@ MOVEMENT_DURATION: [number]"""
     character_prompts = {}
     scene_prompt = ""
     movement_duration = 0
+    current_key = None
 
     for line in lines:
         if line.startswith("CHARACTER_PROMPT_"):
@@ -237,13 +241,29 @@ MOVEMENT_DURATION: [number]"""
             if len(parts) == 2:
                 char_id = parts[0].replace("CHARACTER_PROMPT_", "").strip()
                 character_prompts[char_id] = parts[1].strip()
+                current_key = ("character", char_id)
         elif line.startswith("SCENE_PROMPT:"):
             scene_prompt = line.replace("SCENE_PROMPT:", "").strip()
+            current_key = ("scene", None)
         elif line.startswith("MOVEMENT_DURATION:"):
             try:
                 movement_duration = int(line.replace("MOVEMENT_DURATION:", "").strip())
             except:
                 movement_duration = 0
+            current_key = None
+        elif line.strip() and current_key:
+            if current_key[0] == "scene":
+                scene_prompt = f"{scene_prompt} {line.strip()}".strip()
+            elif current_key[0] == "character":
+                cid = current_key[1]
+                character_prompts[cid] = f"{character_prompts.get(cid, '')} {line.strip()}".strip()
+
+    if not scene_prompt:
+        style_hint = get_style_prompt(characters[0].get("style", "western_cartoon")) if characters else "high quality 2D animation style"
+        scene_prompt = (
+            f"{scene_text}. {ratio_text}. {style_hint}. "
+            "Use the provided character references consistently. No written text, captions, logos, watermark or subtitles."
+        )
 
     return {
         "character_prompts": character_prompts,
