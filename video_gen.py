@@ -18,7 +18,7 @@ GROK_ASPECT_RATIOS = {"16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"}
 
 
 def _fal_video_model() -> str:
-    return os.environ.get("FAL_VIDEO_MODEL", GROK_TEXT_TO_VIDEO_MODEL)
+    return os.environ.get("FAL_2D_VIDEO_MODEL") or GROK_TEXT_TO_VIDEO_MODEL
 
 
 def _is_text_to_video_model(model: str) -> bool:

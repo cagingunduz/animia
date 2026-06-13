@@ -574,7 +574,7 @@ async def check_ffmpeg():
 @app.get("/check-env")
 async def check_env():
     keys = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "REPLICATE_API_TOKEN",
-            "FAL_KEY", "FAL_IMAGE_MODEL", "FAL_IMAGE_EDIT_MODEL", "FAL_VIDEO_MODEL",
+            "FAL_KEY", "FAL_IMAGE_MODEL", "FAL_IMAGE_EDIT_MODEL", "FAL_VIDEO_MODEL", "FAL_2D_VIDEO_MODEL",
             "GEMINI_API_KEY", "GOOGLE_API_KEY", "VEO_MODEL",
             "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY", "R2_BUCKET"]
     return {k: bool(os.environ.get(k)) for k in keys}
