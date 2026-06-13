@@ -4,6 +4,8 @@ import uuid
 import asyncio
 import replicate
 import boto3
+import base64
+import re
 from botocore.config import Config
 
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
@@ -35,9 +37,29 @@ def get_r2_client():
 def upload_to_r2(image_bytes: bytes, folder: str, ext: str = "png") -> str:
     s3 = get_r2_client()
     key = f"{folder}/{uuid.uuid4()}.{ext}"
-    content_type = "image/png" if ext == "png" else "image/jpeg"
+    content_type = {
+        "png": "image/png",
+        "webp": "image/webp",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+    }.get(ext, "image/jpeg")
     s3.put_object(Bucket=R2_BUCKET, Key=key, Body=image_bytes, ContentType=content_type)
     return f"{R2_PUBLIC_BASE}/{key}"
+
+
+def _upload_data_url_to_r2(data_url: str, folder: str) -> str:
+    match = re.match(r"^data:(image/(?:png|jpeg|jpg|webp));base64,(.+)$", data_url or "", re.DOTALL)
+    if not match:
+        raise ValueError("Unsupported image data URL")
+    mime_type, payload = match.groups()
+    ext = "jpg" if mime_type in ("image/jpeg", "image/jpg") else mime_type.split("/")[-1]
+    return upload_to_r2(base64.b64decode(payload), folder, ext=ext)
+
+
+def materialize_image_reference(image_url: str, folder: str = "uploads") -> str:
+    if image_url and image_url.startswith("data:image/"):
+        return _upload_data_url_to_r2(image_url, folder)
+    return image_url
 
 
 def _extract_url(output) -> str:
@@ -137,7 +159,7 @@ async def generate_character_image(character_prompt: str, photo_url: str = None)
         "aspect_ratio": "9:16",
     }
     if photo_url:
-        input_params["image"] = photo_url
+        input_params["image"] = materialize_image_reference(photo_url, "references")
 
     loop = asyncio.get_event_loop()
     output = await loop.run_in_executor(

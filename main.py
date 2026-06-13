@@ -12,7 +12,7 @@ from pipeline import run_pipeline
 from tts import get_voices, generate_speech
 from lipsync import upload_audio_to_r2
 from image_gen import generate_character_image, generate_scene_image
-from prompt_generator import get_style_prompt, generate_scene_prompts, generate_story_script
+from prompt_generator import describe_character_reference_image, get_style_prompt, generate_scene_prompts, generate_story_script
 from storybook_pipeline import run_storybook_pipeline, generate_single_scene, download_file, concat_video_files, upload_bytes_to_r2
 from animated_story_pipeline import run_animated_story_pipeline
 from whiteboard_pipeline import run_whiteboard_pipeline
@@ -34,6 +34,7 @@ class CharacterDef(BaseModel):
     style: Optional[str] = "western_cartoon"
     photo_url: Optional[str] = None
     char_url: Optional[str] = None
+    character_text: Optional[str] = None
 
 
 class SceneCharacter(BaseModel):
@@ -136,9 +137,15 @@ async def generate_character(req: GenerateCharacterRequest):
             character_prompt=full_prompt,
             photo_url=req.photo_url
         )
+        character_text = await describe_character_reference_image(
+            image_url=char_url,
+            fallback_text=req.description,
+            style=req.style or "western_cartoon",
+        )
         return {
             "success": True,
             "character_image_url": char_url,
+            "character_text": character_text,
             "character_id": f"char-{uuid.uuid4().hex[:8]}"
         }
     except Exception as e:

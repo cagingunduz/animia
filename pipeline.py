@@ -5,9 +5,9 @@ import httpx
 import boto3
 from botocore.config import Config
 from jobs import job_store
-from prompt_generator import generate_2d_animation_plan, generate_scene_prompts
+from prompt_generator import describe_character_reference_image, generate_2d_animation_plan, generate_scene_prompts
 from image_gen import generate_character_image, generate_scene_image
-from video_gen import animate_scene, calculate_duration
+from video_gen import animate_scene, calculate_duration, uses_text_to_video
 from tts import generate_speech, get_audio_duration
 from lipsync import apply_lipsync
 from concat import concat_clips
@@ -81,6 +81,23 @@ def _planned_scene_to_pipeline_scene(scene: dict, character_defs: dict, aspect_r
         ],
         "plan": scene,
     }
+
+
+def _character_reference_text(scene_chars: list, character_defs: dict) -> str:
+    lines = []
+    for sc in scene_chars:
+        cid = sc["character_id"]
+        cdef = character_defs.get(cid, {})
+        reference = cdef.get("character_text") or cdef.get("description", "")
+        if reference:
+            lines.append(f"{cid}: {reference}")
+    if not lines:
+        return ""
+    return (
+        "Exact character references to preserve in the video. "
+        "Whenever a character is mentioned, use that exact identity, face, outfit, colors, and style:\n"
+        + "\n".join(lines)
+    )
 
 
 def upload_audio_bytes_to_r2(audio_bytes: bytes) -> str:
@@ -170,7 +187,8 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         cdef = character_defs.get(cid, {})
         chars_for_prompt.append({
             "id": cid,
-            "description": cdef.get("description", ""),
+            "description": cdef.get("character_text") or cdef.get("description", ""),
+            "character_text": cdef.get("character_text"),
             "style": cdef.get("style", "western_cartoon"),
             "role": sc["role"],
             "framing": sc.get("framing", "full_body")
@@ -187,16 +205,31 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         blur_faces=scene_data.get("blur_faces", False)
     )
     movement_duration = prompts["movement_duration"]
-
-    # Generate scene image
-    step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: Sahne gorseli uretiliyor...")
-    char_urls_ordered = [character_defs[sc["character_id"]]["char_url"] for sc in scene_chars if sc["character_id"] in character_defs]
-    scene_image_url = await generate_scene_image(
-        scene_prompt=prompts["scene_prompt"],
-        character_urls=char_urls_ordered,
-        aspect_ratio=aspect_ratio
+    character_reference_text = _character_reference_text(scene_chars, character_defs)
+    video_scene_text = prompts["scene_prompt"]
+    if character_reference_text:
+        video_scene_text = f"{video_scene_text}\n\n{character_reference_text}"
+    video_scene_text = (
+        f"{video_scene_text}\n\n"
+        "Animate as a finished 2D cartoon scene. Keep the same approved characters consistent across every scene. "
+        "No on-screen text, captions, UI, logos, watermark, or subtitles."
     )
+
+    char_urls_ordered = [character_defs[sc["character_id"]]["char_url"] for sc in scene_chars if sc["character_id"] in character_defs]
+    scene_image_url = None
+
+    if uses_text_to_video():
+        step += 1
+        log(job_id, step, total_steps, f"Sahne {scene_index}: Grok video promptu hazirlaniyor...")
+    else:
+        # Generate scene image for image-to-video backends.
+        step += 1
+        log(job_id, step, total_steps, f"Sahne {scene_index}: Sahne gorseli uretiliyor...")
+        scene_image_url = await generate_scene_image(
+            scene_prompt=prompts["scene_prompt"],
+            character_urls=char_urls_ordered,
+            aspect_ratio=aspect_ratio
+        )
 
     update_scene_metadata(
         job_id,
@@ -211,7 +244,7 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         step += 1
         log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon uretiliyor (sessiz sahne)...")
         video_url = await animate_scene(
-            scene_image_url, scene_text,
+            scene_image_url or "", video_scene_text,
             duration=scene_dur or max(3, movement_duration + 2),
             resolution=resolution,
             aspect_ratio=aspect_ratio
@@ -233,10 +266,10 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
     duration = scene_dur or calculate_duration(movement_duration, spoken_secs)
 
     step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon + ses (Veo) uretiliyor ({duration}sn)...")
+    log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon + ses uretiliyor ({duration}sn)...")
     video_url = await animate_scene(
-        scene_image_url,
-        f"{scene_text}. {dialogue_text}".strip(),
+        scene_image_url or "",
+        f"{video_scene_text}\n\nDialogue/audio direction: {dialogue_text}. Speak the dialogue naturally, never spell words letter by letter.".strip(),
         duration=duration,
         resolution=resolution,
         speaking_duration=spoken_secs,  # drives the "speaking" prompt for lip movement
@@ -288,6 +321,13 @@ async def run_pipeline(job_id: str, payload: dict):
                     photo_url=char.get("photo_url")
                 )
             character_defs[cid]["char_url"] = char_url
+            if not character_defs[cid].get("character_text"):
+                log(job_id, step, total_steps, f"Karakter metni cikariliyor: {cid}...")
+                character_defs[cid]["character_text"] = await describe_character_reference_image(
+                    image_url=char_url,
+                    fallback_text=char.get("description", ""),
+                    style=char.get("style", "western_cartoon"),
+                )
 
         if auto_plan:
             step += 1
@@ -295,7 +335,7 @@ async def run_pipeline(job_id: str, payload: dict):
             plan = await generate_2d_animation_plan(
                 project_prompt=payload.get("project_prompt") or "",
                 user_direction=payload.get("user_direction") or "",
-                characters=characters_list,
+                characters=list(character_defs.values()),
                 scene_count=scene_count,
                 aspect_ratio=aspect_ratio,
                 style=payload.get("style") or characters_list[0].get("style", "anime"),

@@ -13,6 +13,33 @@ RESOLUTION_MAP = {
     "1080p": "1080p"
 }
 
+GROK_TEXT_TO_VIDEO_MODEL = "xai/grok-imagine-video/text-to-video"
+GROK_ASPECT_RATIOS = {"16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"}
+
+
+def _fal_video_model() -> str:
+    return os.environ.get("FAL_VIDEO_MODEL", GROK_TEXT_TO_VIDEO_MODEL)
+
+
+def _is_text_to_video_model(model: str) -> bool:
+    return "text-to-video" in (model or "")
+
+
+def uses_text_to_video() -> bool:
+    return bool(FAL_KEY and _is_text_to_video_model(_fal_video_model()))
+
+
+def _grok_duration(value: int) -> int:
+    return max(2, min(10, int(round(value or 6))))
+
+
+def _grok_resolution(value: str) -> str:
+    return "480p" if value == "480p" else "720p"
+
+
+def _grok_aspect(value: str) -> str:
+    return value if value in GROK_ASPECT_RATIOS else "16:9"
+
 
 def _extract_url(output) -> str:
     if output is None:
@@ -102,9 +129,24 @@ async def animate_scene(
     if FAL_KEY:
         import fal_client
 
+        model = _fal_video_model()
+        if _is_text_to_video_model(model):
+            output = await fal_client.subscribe_async(
+                model,
+                arguments={
+                    "prompt": prompt,
+                    "duration": _grok_duration(duration),
+                    "resolution": _grok_resolution(resolution),
+                    "aspect_ratio": _grok_aspect(aspect_ratio),
+                },
+                with_logs=True,
+                client_timeout=1200,
+            )
+            return _extract_fal_video_url(output)
+
         res = "1080p" if resolution == "1080p" else "720p"
         output = await fal_client.subscribe_async(
-            os.environ.get("FAL_VIDEO_MODEL", "fal-ai/veo3.1/lite/image-to-video"),
+            model,
             arguments={
                 "image_url": scene_image_url,
                 "prompt": prompt,

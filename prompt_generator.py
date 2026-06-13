@@ -2,6 +2,8 @@ import os
 import anthropic
 import json
 import re
+import base64
+import httpx
 
 STYLE_PROMPTS = {
     "western_cartoon": "2D western cartoon illustration, bold thick black outlines, flat cel-shaded colors, limited color palette, clean vector-like art style, inspired by Archer FX animated series, no photorealism, no 3D, no blur",
@@ -70,6 +72,66 @@ def _clean_spoken_line(value: str) -> str:
         text = re.sub(rf"\b{source}\b", target, text)
     text = re.sub(r"\b[A-Z]{2,}\b", lambda m: m.group(0).lower(), text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _fallback_character_text(description: str, style: str) -> str:
+    return (
+        f"{description}. {get_style_prompt(style or 'western_cartoon')}. "
+        "Use the exact same face, body shape, outfit, colors, hair, expression, and 2D animation identity in every shot."
+    )
+
+
+async def describe_character_reference_image(image_url: str, fallback_text: str, style: str) -> str:
+    """Describe a generated character image for downstream text-to-video prompts."""
+    if not image_url:
+        return _fallback_character_text(fallback_text, style)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return _fallback_character_text(fallback_text, style)
+
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            resp = await client.get(image_url)
+            resp.raise_for_status()
+
+        media_type = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+            media_type = "image/jpeg"
+
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        message = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=650,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": base64.b64encode(resp.content).decode("ascii"),
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": f"""Describe this exact generated character for text-to-video reuse.
+
+Original user description:
+{fallback_text}
+
+Visual style:
+{get_style_prompt(style or "western_cartoon")}
+
+Return one compact paragraph only. Include identity, face, hair, body shape, outfit, colors, visible accessories, expression, and art style. Describe only this character, not the background. Make it reusable as an exact character reference in future video prompts."""
+                    },
+                ],
+            }],
+        )
+        text = (message.content[0].text or "").strip()
+        return text or _fallback_character_text(fallback_text, style)
+    except Exception as e:
+        print(f"Character reference description fallback: {repr(e)}")
+        return _fallback_character_text(fallback_text, style)
 
 
 def get_scene_count(duration_minutes: int) -> int:
@@ -193,6 +255,7 @@ async def generate_2d_animation_plan(
         char_lines.append(
             f"- id: {c.get('id')}\n"
             f"  description: {c.get('description', '')}\n"
+            f"  exact_text_to_video_reference: {c.get('character_text') or c.get('description', '')}\n"
             f"  style: {c.get('style', style)}"
         )
 
@@ -243,6 +306,7 @@ Return JSON ONLY with this exact shape:
 Rules:
 - Stay tightly on the user's topic. Do not create a generic scene.
 - Use only the approved character ids.
+- When a scene uses a character, that character's exact_text_to_video_reference will be copied into the final video prompt. Plan scenes that can preserve those exact identities.
 - Build one continuous story across scenes with a hook, rising action, climax, and payoff.
 - Keep dialogue optional and short. Use dialogue only when it improves the scene.
 - Dialogue must be natural spoken English. Never use all caps, acronyms, initialisms, or letter-by-letter spelling.
