@@ -110,7 +110,7 @@ async def animate_scene(
                 "duration": _veo_duration(duration, res),
                 "resolution": res,
                 "aspect_ratio": _veo_aspect(aspect_ratio),
-                "generate_audio": False,
+                "generate_audio": True,  # Veo 3.1 adds its own native audio (dialogue/SFX)
                 "safety_tolerance": "4",
             },
             with_logs=True,

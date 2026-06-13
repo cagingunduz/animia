@@ -173,102 +173,32 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         set_scene_status(job_id, scene_index, "completed", video_url=final_url)
         return final_url
 
-    # One speaking character
-    if len(speaking_chars) == 1:
-        sc = speaking_chars[0]
-
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: Ses uretiliyor...")
-        audio_bytes = await generate_speech(sc["dialogue"], sc["voice_id"])
-        audio_duration = get_audio_duration(audio_bytes)
-        duration = calculate_duration(movement_duration, audio_duration)
-
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon uretiliyor ({duration}sn)...")
-        video_url = await animate_scene(
-            scene_image_url, scene_text,
-            duration=duration,
-            resolution=resolution,
-            speaking_duration=audio_duration,  # mouth movement prompt
-            aspect_ratio=aspect_ratio
-        )
-
-        if lipsync_enabled:
-            step += 1
-            log(job_id, step, total_steps, f"Sahne {scene_index}: Lip sync uygulanıyor (premium)...")
-            video_url = await apply_lipsync(video_url, audio_bytes)
-        else:
-            step += 1
-            log(job_id, step, total_steps, f"Sahne {scene_index}: Ses ekleniyor...")
-            video_url = await merge_audio_video(video_url, audio_bytes)
-
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: Video yukleniyor...")
-        final_url = await upload_final_video(video_url)
-        set_scene_status(job_id, scene_index, "completed", video_url=final_url)
-        return final_url
-
-    # Two speaking characters
-    sc1 = speaking_chars[0]
-    sc2 = speaking_chars[1]
-
-    # K1
-    step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: K1 ses uretiliyor...")
-    audio1_bytes = await generate_speech(sc1["dialogue"], sc1["voice_id"])
-    audio1_duration = get_audio_duration(audio1_bytes)
-    duration1 = calculate_duration(movement_duration, audio1_duration)
+    # Speaking characters → Veo 3.1 voices the dialogue natively (no separate TTS/merge).
+    # We feed the dialogue into the prompt and let Veo generate the audio with the video.
+    dialogue_text = " ".join(
+        f'A character says: "{sc["dialogue"]}"'
+        for sc in speaking_chars if sc.get("dialogue")
+    )
+    words = sum(len((sc.get("dialogue") or "").split()) for sc in speaking_chars)
+    spoken_secs = max(2.0, words / 2.3)  # ~2.3 words/sec
+    duration = calculate_duration(movement_duration, spoken_secs)
 
     step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: K1 animasyon uretiliyor ({duration1}sn)...")
-    video1_url = await animate_scene(
-        scene_image_url, scene_text,
-        duration=duration1, resolution=resolution,
-        speaking_duration=audio1_duration,
-        aspect_ratio=aspect_ratio
+    log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon + ses (Veo) uretiliyor ({duration}sn)...")
+    video_url = await animate_scene(
+        scene_image_url,
+        f"{scene_text}. {dialogue_text}".strip(),
+        duration=duration,
+        resolution=resolution,
+        speaking_duration=spoken_secs,  # drives the "speaking" prompt for lip movement
+        aspect_ratio=aspect_ratio,
     )
 
-    if lipsync_enabled:
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: K1 lip sync uygulanıyor...")
-        clip1_url = await apply_lipsync(video1_url, audio1_bytes)
-    else:
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: K1 ses ekleniyor...")
-        clip1_url = await merge_audio_video(video1_url, audio1_bytes)
-
-    # K2
     step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: K2 ses uretiliyor...")
-    audio2_bytes = await generate_speech(sc2["dialogue"], sc2["voice_id"])
-    audio2_duration = get_audio_duration(audio2_bytes)
-    duration2 = calculate_duration(0, audio2_duration)
-
-    step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: K2 animasyon uretiliyor ({duration2}sn)...")
-    video2_url = await animate_scene(
-        scene_image_url, scene_text,
-        duration=duration2, resolution=resolution,
-        speaking_duration=audio2_duration,
-        aspect_ratio=aspect_ratio
-    )
-
-    if lipsync_enabled:
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: K2 lip sync uygulanıyor...")
-        clip2_url = await apply_lipsync(video2_url, audio2_bytes)
-    else:
-        step += 1
-        log(job_id, step, total_steps, f"Sahne {scene_index}: K2 ses ekleniyor...")
-        clip2_url = await merge_audio_video(video2_url, audio2_bytes)
-
-    # Merge K1 + K2
-    step += 1
-    log(job_id, step, total_steps, f"Sahne {scene_index}: Klipler birlestiriliyor...")
-    merged_url = await concat_clips([clip1_url, clip2_url], output_folder="scenes")
-
-    set_scene_status(job_id, scene_index, "completed", video_url=merged_url)
-    return merged_url
+    log(job_id, step, total_steps, f"Sahne {scene_index}: Video yukleniyor...")
+    final_url = await upload_final_video(video_url)
+    set_scene_status(job_id, scene_index, "completed", video_url=final_url)
+    return final_url
 
 
 async def run_pipeline(job_id: str, payload: dict):
