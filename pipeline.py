@@ -115,6 +115,7 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
     scene_text = scene_data["scene_text"]
     aspect_ratio = scene_data.get("aspect_ratio", "16:9")
     pre_action = scene_data.get("pre_dialogue_action")
+    scene_dur = scene_data.get("scene_duration")  # 4/6/8s from the 2D setup (Veo clamps)
     scene_chars = scene_data["characters"]
     speaking_chars = [c for c in scene_chars if c["role"] == "speaking"]
     step = step_offset
@@ -163,7 +164,7 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon uretiliyor (sessiz sahne)...")
         video_url = await animate_scene(
             scene_image_url, scene_text,
-            duration=max(3, movement_duration + 2),
+            duration=scene_dur or max(3, movement_duration + 2),
             resolution=resolution,
             aspect_ratio=aspect_ratio
         )
@@ -181,7 +182,7 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
     )
     words = sum(len((sc.get("dialogue") or "").split()) for sc in speaking_chars)
     spoken_secs = max(2.0, words / 2.3)  # ~2.3 words/sec
-    duration = calculate_duration(movement_duration, spoken_secs)
+    duration = scene_dur or calculate_duration(movement_duration, spoken_secs)
 
     step += 1
     log(job_id, step, total_steps, f"Sahne {scene_index}: Animasyon + ses (Veo) uretiliyor ({duration}sn)...")

@@ -49,6 +49,7 @@ class Scene(BaseModel):
     characters: List[SceneCharacter]
     aspect_ratio: Optional[str] = "16:9"
     pre_dialogue_action: Optional[str] = None
+    scene_duration: Optional[int] = None  # 4/6/8s from 2D setup (Veo clamps)
 
 
 class GenerateRequest(BaseModel):
