@@ -3,6 +3,7 @@ import replicate
 import os
 
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
+FAL_KEY = os.environ.get("FAL_KEY")
 MAX_DURATION = 11
 MIN_DURATION = 3
 
@@ -21,6 +22,25 @@ def _extract_url(output) -> str:
     if hasattr(output, 'url'):
         return str(output.url)
     return str(output)
+
+
+def _extract_fal_video_url(output: dict) -> str:
+    video = (output or {}).get("video") or {}
+    if isinstance(video, dict) and video.get("url"):
+        return video["url"]
+    raise ValueError(f"fal video output did not include a video URL: {output}")
+
+
+def _veo_duration(value: int, resolution: str) -> str:
+    if resolution == "1080p":
+        return "8s"
+    target = max(4, min(8, int(round(value or 8))))
+    allowed = (4, 6, 8)
+    return f"{min(allowed, key=lambda current: abs(current - target))}s"
+
+
+def _veo_aspect(value: str) -> str:
+    return value if value in ("16:9", "9:16") else "auto"
 
 
 import time
@@ -49,7 +69,8 @@ async def animate_scene(
     scene_description: str,
     duration: int = 5,
     resolution: str = "720p",
-    speaking_duration: float = None
+    speaking_duration: float = None,
+    aspect_ratio: str = "16:9",
 ) -> str:
     # ── Self-hosted LTX-2.3 on RunPod (set VIDEO_BACKEND=runpod to enable) ──
     if os.environ.get("VIDEO_BACKEND") == "runpod":
@@ -61,8 +82,6 @@ async def animate_scene(
             resolution=resolution,
             speaking_duration=speaking_duration,
         )
-
-    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
     if speaking_duration and speaking_duration > 0:
         speak_secs = round(speaking_duration, 1)
@@ -78,6 +97,28 @@ async def animate_scene(
             f"characters standing naturally, subtle breathing motion, "
             f"slight head movement, eyes blinking, smooth motion"
         )
+
+    if FAL_KEY:
+        import fal_client
+
+        res = "1080p" if resolution == "1080p" else "720p"
+        output = await fal_client.subscribe_async(
+            os.environ.get("FAL_VIDEO_MODEL", "fal-ai/veo3.1/lite/image-to-video"),
+            arguments={
+                "image_url": scene_image_url,
+                "prompt": prompt,
+                "duration": _veo_duration(duration, res),
+                "resolution": res,
+                "aspect_ratio": _veo_aspect(aspect_ratio),
+                "generate_audio": False,
+                "safety_tolerance": "4",
+            },
+            with_logs=True,
+            client_timeout=1200,
+        )
+        return _extract_fal_video_url(output)
+
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
     res = RESOLUTION_MAP.get(resolution, "720p")
 

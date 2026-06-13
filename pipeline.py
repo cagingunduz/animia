@@ -164,7 +164,8 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
         video_url = await animate_scene(
             scene_image_url, scene_text,
             duration=max(3, movement_duration + 2),
-            resolution=resolution
+            resolution=resolution,
+            aspect_ratio=aspect_ratio
         )
         step += 1
         log(job_id, step, total_steps, f"Sahne {scene_index}: Video yukleniyor...")
@@ -188,7 +189,8 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
             scene_image_url, scene_text,
             duration=duration,
             resolution=resolution,
-            speaking_duration=audio_duration  # mouth movement prompt
+            speaking_duration=audio_duration,  # mouth movement prompt
+            aspect_ratio=aspect_ratio
         )
 
         if lipsync_enabled:
@@ -222,7 +224,8 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
     video1_url = await animate_scene(
         scene_image_url, scene_text,
         duration=duration1, resolution=resolution,
-        speaking_duration=audio1_duration
+        speaking_duration=audio1_duration,
+        aspect_ratio=aspect_ratio
     )
 
     if lipsync_enabled:
@@ -246,7 +249,8 @@ async def process_scene(job_id: str, scene_data: dict, character_defs: dict, sce
     video2_url = await animate_scene(
         scene_image_url, scene_text,
         duration=duration2, resolution=resolution,
-        speaking_duration=audio2_duration
+        speaking_duration=audio2_duration,
+        aspect_ratio=aspect_ratio
     )
 
     if lipsync_enabled:
@@ -286,13 +290,19 @@ async def run_pipeline(job_id: str, payload: dict):
         # Generate all character images first
         for char in characters_list:
             cid = char["id"]
-            step += 1
-            log(job_id, step, total_steps, f"Karakter gorseli uretiliyor: {cid}...")
-            char_prompt = f"{char['description']}, full body, clean white background, high quality digital illustration"
-            char_url = await generate_character_image(
-                character_prompt=char_prompt,
-                photo_url=char.get("photo_url")
-            )
+            existing_url = char.get("char_url") or char.get("image_url")
+            if existing_url:
+                step += 1
+                log(job_id, step, total_steps, f"Karakter referansi hazirlaniyor: {cid}...")
+                char_url = existing_url
+            else:
+                step += 1
+                log(job_id, step, total_steps, f"Karakter gorseli uretiliyor: {cid}...")
+                char_prompt = f"{char['description']}, full body, clean white background, high quality digital illustration"
+                char_url = await generate_character_image(
+                    character_prompt=char_prompt,
+                    photo_url=char.get("photo_url")
+                )
             character_defs[cid]["char_url"] = char_url
 
         # Process each scene

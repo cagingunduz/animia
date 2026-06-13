@@ -5,8 +5,9 @@ import httpx
 
 
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
-# High-quality multilingual model (handles Turkish + English narration well)
-ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+# Current high-quality multilingual model. Railway can still override this with
+# ELEVENLABS_MODEL if a project needs v2 compatibility.
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")
 
 # Fallback list shown if the ElevenLabs API can't be reached (premade voice ids).
 _FALLBACK_VOICES = [

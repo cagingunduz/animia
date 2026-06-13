@@ -33,6 +33,7 @@ class CharacterDef(BaseModel):
     description: str
     style: Optional[str] = "western_cartoon"
     photo_url: Optional[str] = None
+    char_url: Optional[str] = None
 
 
 class SceneCharacter(BaseModel):
@@ -72,6 +73,7 @@ class GenerateSceneImageRequest(BaseModel):
     scene_text: str
     aspect_ratio: Optional[str] = "16:9"
     characters: List[dict]
+    blur_faces: Optional[bool] = False
 
 
 class GenerateSceneVideoRequest(BaseModel):
@@ -79,6 +81,7 @@ class GenerateSceneVideoRequest(BaseModel):
     scene_text: str
     duration: Optional[int] = 5
     resolution: Optional[Literal["480p", "720p", "1080p"]] = "720p"
+    aspect_ratio: Optional[str] = "16:9"
     characters: Optional[List[dict]] = []
     lipsync: Optional[bool] = False
 
@@ -197,7 +200,8 @@ async def generate_scene_video_endpoint(req: GenerateSceneVideoRequest):
             scene_description=req.scene_text,
             duration=req.duration or 5,
             resolution=req.resolution or "720p",
-            speaking_duration=speaking_duration
+            speaking_duration=speaking_duration,
+            aspect_ratio=req.aspect_ratio or "16:9"
         )
 
         if audio_bytes:
@@ -553,6 +557,7 @@ async def check_ffmpeg():
 @app.get("/check-env")
 async def check_env():
     keys = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "REPLICATE_API_TOKEN",
+            "FAL_KEY", "FAL_IMAGE_MODEL", "FAL_IMAGE_EDIT_MODEL", "FAL_VIDEO_MODEL",
             "GEMINI_API_KEY", "GOOGLE_API_KEY", "VEO_MODEL",
             "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY", "R2_BUCKET"]
     return {k: bool(os.environ.get(k)) for k in keys}

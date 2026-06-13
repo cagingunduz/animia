@@ -7,6 +7,7 @@ import boto3
 from botocore.config import Config
 
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
+FAL_KEY = os.environ.get("FAL_KEY")
 R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
 R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
@@ -47,6 +48,16 @@ def _extract_url(output) -> str:
     if hasattr(output, 'url'):
         return str(output.url)
     return str(output)
+
+
+def _extract_fal_image_url(output: dict) -> str:
+    images = (output or {}).get("images") or []
+    if not images:
+        raise ValueError(f"fal image model returned no images: {output}")
+    first = images[0]
+    if isinstance(first, dict) and first.get("url"):
+        return first["url"]
+    raise ValueError(f"fal image output did not include an image URL: {output}")
 
 
 import time
@@ -146,10 +157,40 @@ async def generate_scene_image(
     character_urls: list,
     aspect_ratio: str = "16:9"
 ) -> str:
-    """Generate scene image with character references using Gemini. Used for 2D Animation mode."""
-    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+    """Generate scene image for 2D Animation mode.
 
+    FAL is preferred when FAL_KEY is present. If character references are present,
+    the Gemini edit endpoint is used because the text-to-image endpoint does not
+    accept reference images.
+    """
     ar = ASPECT_RATIO_MAP.get(aspect_ratio, "16:9")
+
+    if FAL_KEY:
+        import fal_client
+
+        fal_model = os.environ.get("FAL_IMAGE_MODEL", "fal-ai/gemini-25-flash-image")
+        input_params = {
+            "prompt": scene_prompt,
+            "aspect_ratio": ar,
+            "output_format": "png",
+            "num_images": 1,
+            "safety_tolerance": "4",
+        }
+        refs = [u for u in (character_urls or []) if u]
+        if refs:
+            fal_model = os.environ.get("FAL_IMAGE_EDIT_MODEL", f"{fal_model}/edit" if not fal_model.endswith("/edit") else fal_model)
+            input_params["image_urls"] = refs[:4]
+
+        output = await fal_client.subscribe_async(
+            fal_model,
+            arguments=input_params,
+            with_logs=True,
+            client_timeout=420,
+        )
+        image_url = _extract_fal_image_url(output)
+        return await _download_and_upload_generated_image(image_url, "scenes", default_ext="png")
+
+    client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
     input_params = {
         "prompt": scene_prompt,
