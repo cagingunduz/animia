@@ -144,7 +144,8 @@ async def generate_scene_prompts(
     scene_text: str,
     characters: list,
     aspect_ratio: str,
-    pre_dialogue_action: str = None
+    pre_dialogue_action: str = None,
+    blur_faces: bool = False
 ) -> dict:
     """
     Returns:
@@ -212,6 +213,7 @@ Generate:
    - Silent characters: background/side positions, neutral
    - Include environment/background details
    - Apply the dominant style of the scene
+   - Face rule: {face_rule}
 
 3. MOVEMENT_DURATION: Estimate seconds needed for any pre-dialogue physical action (e.g. standing up, walking, slamming table). If no action, return 0.
 
