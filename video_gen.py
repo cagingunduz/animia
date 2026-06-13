@@ -100,7 +100,11 @@ async def animate_scene(
     aspect_ratio: str = "16:9",
 ) -> str:
     # ── Self-hosted LTX-2.3 on RunPod (set VIDEO_BACKEND=runpod to enable) ──
-    if os.environ.get("VIDEO_BACKEND") == "runpod":
+    # 2D Animation now uses FAL text-to-video, which intentionally has no
+    # scene_image_url. Do not route those jobs to image-to-video RunPod workers.
+    if os.environ.get("VIDEO_BACKEND") == "runpod" and not uses_text_to_video():
+        if not scene_image_url or not scene_image_url.startswith(("http://", "https://")):
+            raise RuntimeError("RunPod image-to-video requires a public http(s) scene image URL")
         from runpod_client import animate_scene_runpod
         return await animate_scene_runpod(
             scene_image_url=scene_image_url,
