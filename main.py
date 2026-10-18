@@ -465,6 +465,25 @@ async def generate_motion(req: GenerateMotionRequest):
     return {"job_id": job_id, "status": "queued"}
 
 
+@app.get("/motion-health")
+async def motion_health():
+    """Is the backend wired to the render service? (no secrets in the reply)"""
+    import httpx
+    url = os.environ.get("RENDER_SERVICE_URL", "").rstrip("/")
+    out = {"render_service_url_set": bool(url),
+           "render_service_host": url.split("://")[-1] if url else None,
+           "reachable": False, "detail": None}
+    if url:
+        try:
+            async with httpx.AsyncClient(timeout=8) as c:
+                r = await c.get(f"{url}/health")
+            out["reachable"] = r.status_code == 200
+            out["detail"] = r.text[:200]
+        except Exception as e:
+            out["detail"] = f"{type(e).__name__}: {e}"[:300]
+    return out
+
+
 @app.get("/motion/{job_id}")
 async def motion_status(job_id: str):
     job = job_store.get(job_id)
