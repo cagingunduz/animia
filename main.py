@@ -442,6 +442,7 @@ class GenerateMotionRequest(BaseModel):
     loop: Optional[bool] = False
     auto_approve: Optional[bool] = False
     approval_timeout: Optional[int] = Field(600, ge=30, le=3600)
+    models: Optional[dict] = None  # per-role model override for A/B tests: {"animator": "claude-opus-5-5"}
 
 
 class MotionApproveRequest(BaseModel):
@@ -459,6 +460,7 @@ async def generate_motion(req: GenerateMotionRequest):
         "message": "Kuyrukta bekleniyor...", "scenes": [], "shots": [], "plan": None, "gate": None,
         "activity": [], "style_frame_url": None, "final_video_url": None, "error": None, "traceback": None,
         "aspect_ratio": req.aspect_ratio, "resolution": req.resolution, "auto_approve": bool(req.auto_approve),
+        "models": {k: v for k, v in (req.models or {}).items() if k in ("director", "animator", "critic") and isinstance(v, str) and v.startswith("claude-")},
         "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
     }
     asyncio.create_task(run_motion_pipeline(job_id, req.model_dump()))

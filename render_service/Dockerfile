@@ -27,7 +27,7 @@ ENV HYPERFRAMES_CHROME_PATH=/opt/chrome/chrome-headless-shell \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY server.mjs ./
+COPY server.mjs kit.js kit.css ./
 
 # Run as an unprivileged user.
 RUN useradd -m -u 10001 render && mkdir -p /tmp/hf-home && chown -R render /tmp/hf-home

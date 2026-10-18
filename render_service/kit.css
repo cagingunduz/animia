@@ -1,0 +1,8 @@
+/* Animave motion kit — base styles injected into every composition. */
+html, body { margin: 0; }
+#root { position: relative; overflow: hidden; }
+.k-stage { position: absolute; inset: 0; transform-origin: 50% 50%; }
+.k-m { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.08em; margin-bottom: -0.08em; }
+.k-w { display: inline-block; }
+.k-c { display: inline-block; white-space: pre; }
+.k-grain { position: absolute; inset: 0; pointer-events: none; z-index: 50; }

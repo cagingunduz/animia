@@ -2,18 +2,21 @@
 Motion Graphics pipeline — Claude writes the animation as code, HyperFrames renders it.
 
 Crew (each role is its own Claude call, see motion_prompts.py):
-  Director        references + brand + brief -> design system + shot list
-  Animator        one HyperFrames HTML composition per shot (CSS/SVG + anime.js)
-  Render engineer lint/render failures -> fixed code
+  Director        references + brand + brief -> design system + beat list (shot list)
+  Animator        one HyperFrames composition per SEGMENT (all beats of up to ~15 s),
+                  using the Animave motion kit (render_service/kit.js) to keep code short
+  Render engineer lint/render failures -> small find/replace edits
   Critic          contact sheet / motion strip / phone test / loop test / determinism
-                  -> 0-10 scores; shots under PASS_SCORE are fixed and only they re-render
+                  -> 0-10 scores; a segment under REVISE_BELOW gets one find/replace revision
   Sound designer  music bed + transition SFX (ElevenLabs sound generation)
 
-Approval gates: the shot list and the style frame (shot 1). The job waits for
-POST /motion/{id}/approve, or carries on by itself after `approval_timeout` seconds.
+Cost control: every job has a hard Claude budget (BUDGET_PER_SECOND × length, floor
+BUDGET_MIN). Mandatory calls (director, first animation of each segment) have capped
+output so they always fit; optional calls (critic, revisions, gate revisions, loop test)
+only run when their worst-case cost still fits next to the mandatory work left.
 
-The HTML is rendered by the separate render service (render_service/), which holds no
-secrets. Reference videos arrive as browser-extracted, timestamped frames.
+Approval gates: the shot list and the style frame (a frame of segment 1). The job waits for
+POST /motion/{id}/approve, or carries on by itself after `approval_timeout` seconds.
 """
 
 import asyncio
@@ -33,18 +36,29 @@ import httpx
 
 from jobs import job_store
 from storybook_pipeline import upload_bytes_to_r2, download_file
-from motion_prompts import DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM
+from motion_prompts import (DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM,
+                            EDIT_NOTE)
 
-MOTION_MODEL = os.environ.get("MOTION_MODEL", "claude-opus-5-5")
+# Model per crew role — switchable from Railway without a deploy.
+_DEFAULT_MODEL = os.environ.get("MOTION_MODEL", "claude-opus-5-5")
+ROLE_MODELS = {
+    "director": os.environ.get("MOTION_DIRECTOR_MODEL", _DEFAULT_MODEL),
+    "animator": os.environ.get("MOTION_ANIMATOR_MODEL", _DEFAULT_MODEL),
+    "critic": os.environ.get("MOTION_CRITIC_MODEL", _DEFAULT_MODEL),
+}
 RENDER_SERVICE_URL = os.environ.get("RENDER_SERVICE_URL", "").rstrip("/")
 RENDER_TOKEN = os.environ.get("RENDER_TOKEN", "")
-# $ per million tokens, only used to report the real cost of a job (usage.cost_usd).
-PRICE_IN = float(os.environ.get("MOTION_PRICE_IN_PER_MTOK", "5"))
-PRICE_OUT = float(os.environ.get("MOTION_PRICE_OUT_PER_MTOK", "25"))
+# $ per million tokens (input, output) by model family. Cache writes cost 1.25×, reads 0.1×.
+PRICES = {"opus": (5.0, 25.0), "sonnet": (3.0, 15.0), "haiku": (1.0, 5.0)}
 
-PASS_SCORE = 8.0
-MAX_CRITIC_ROUNDS = int(os.environ.get("MOTION_CRITIC_ROUNDS", "1"))  # critic-driven rewrites per shot
-MAX_RENDER_FIXES = 2       # lint/render repairs per version
+# Hard Claude budget per job: $0.025 per output second → $0.25 for a 10 s video.
+BUDGET_PER_SECOND = float(os.environ.get("MOTION_BUDGET_PER_SECOND", "0.025"))
+BUDGET_MIN = float(os.environ.get("MOTION_BUDGET_MIN", "0.20"))
+SEGMENT_MAX_SECONDS = 15.0
+
+PASS_SCORE = 8.0           # "ships" on the critic's scale
+REVISE_BELOW = float(os.environ.get("MOTION_REVISE_BELOW", "7.5"))
+MAX_RENDER_FIXES = 2
 FPS = 30
 
 FONT_FILE = next((p for p in (
@@ -78,9 +92,11 @@ def _stage(job_id: str, stage: str, step: int):
     j["step"] = step
 
 
-def _shot_state(job_id: str, n: int, **kw):
+def _seg_state(job_id: str, seg: dict, **kw):
+    """Update every beat (shot row) that belongs to this segment."""
+    ns = {s["n"] for s in seg["shots"]}
     for s in _job(job_id).get("shots", []):
-        if s["n"] == n:
+        if s["n"] in ns:
             s.update(kw)
 
 
@@ -115,7 +131,64 @@ async def _gate(job_id: str, stage: str, timeout: int, **data) -> dict:
     return resp
 
 
+
+# ─────────────────────────── budget ───────────────────────────
+
+def _model(job_id: str, role: str) -> str:
+    override = (_job(job_id).get("models") or {}).get(role)
+    return override or ROLE_MODELS[role]
+
+
+def _price(model: str) -> tuple[float, float]:
+    return next((v for k, v in PRICES.items() if k in model), PRICES["opus"])
+
+
+def _image_tokens(b64: str) -> int:
+    try:
+        import cv2
+        import numpy as np
+        im = cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_UNCHANGED)
+        h, w = im.shape[:2]
+        scale = min(1.0, 1568 / max(w, h))
+        return int(w * scale * h * scale / 750) + 1
+    except Exception:
+        return 1600
+
+
+def _input_tokens(system: str, content) -> int:
+    n = int(len(system) / 3.2 * 1.25)  # worst case: a cache write
+    for c in content if isinstance(content, list) else [{"type": "text", "text": str(content)}]:
+        if c.get("type") == "image":
+            n += _image_tokens(c["source"]["data"])
+        else:
+            n += int(len(c.get("text", "")) / 3.2)
+    return n + 200  # tools / framing
+
+
+def _est_cost(job_id: str, role: str, system: str, content, max_out: int) -> float:
+    pin, pout = _price(_model(job_id, role))
+    return (_input_tokens(system, content) * pin + max_out * pout) / 1e6
+
+
+def _budget(job_id: str) -> dict:
+    return _job(job_id).setdefault("budget", {"limit": BUDGET_MIN, "reserved": 0.0, "future": 0.0})
+
+
+def _affordable(job_id: str, est: float) -> bool:
+    b = _budget(job_id)
+    spent = _job(job_id).get("usage", {}).get("cost_usd", 0.0)
+    return spent + b["reserved"] + b["future"] + est <= b["limit"] + 1e-9
+
+
 # ─────────────────────────── Claude ───────────────────────────
+
+class BillingError(RuntimeError):
+    """The Anthropic account is out of credit — no point retrying anything."""
+
+
+class OverBudget(RuntimeError):
+    """An optional step was skipped because it would break the job's cost ceiling."""
+
 
 def _anthropic():
     global _client
@@ -124,23 +197,28 @@ def _anthropic():
     return _client
 
 
-class BillingError(RuntimeError):
-    """The Anthropic account is out of credit — no point retrying anything."""
+async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
+                  tool: dict | None = None, optional: bool = False, mandatory_slot: float = 0.0):
+    """One Claude call under the job's budget.
 
-
-async def _claude(job_id: str, system: str, content, max_tokens: int = 12000, tool: dict | None = None):
-    """Text reply, or — with `tool` — the tool's input dict (structured output that can't be malformed)."""
-    kw = {}
-    if tool:
-        kw = {"tools": [tool], "tool_choice": {"type": "tool", "name": tool["name"]}}
+    optional=True  -> raise OverBudget instead of calling when the worst case doesn't fit.
+    mandatory_slot -> the part of budget["future"] this call was reserved under (released here).
+    Returns the text, or with `tool` the tool's input dict.
+    """
+    est = _est_cost(job_id, role, system, content, max_tokens)
+    b = _budget(job_id)
+    if optional and not _affordable(job_id, est):
+        raise OverBudget(f"{role}: ${est:.3f} would exceed the ${b['limit']:.2f} ceiling")
+    b["future"] = max(0.0, b["future"] - mandatory_slot)
+    b["reserved"] += est
+    kw = {"tools": [tool], "tool_choice": {"type": "tool", "name": tool["name"]}} if tool else {}
+    model = _model(job_id, role)
     try:
         async with _claude_sem:
             async with _anthropic().messages.stream(
-                model=MOTION_MODEL,
-                max_tokens=max_tokens,
+                model=model, max_tokens=max_tokens,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": content}],
-                **kw,
+                messages=[{"role": "user", "content": content}], **kw,
             ) as stream:
                 msg = await stream.get_final_message()
     except anthropic.APIStatusError as e:
@@ -148,20 +226,30 @@ async def _claude(job_id: str, system: str, content, max_tokens: int = 12000, to
             _job(job_id)["billing_exhausted"] = True
             raise BillingError("Anthropic API credit balance is too low") from e
         raise
+    finally:
+        b["reserved"] = max(0.0, b["reserved"] - est)
+
     u = msg.usage
+    pin, pout = _price(model)
+    cw = getattr(u, "cache_creation_input_tokens", 0) or 0
+    cr = getattr(u, "cache_read_input_tokens", 0) or 0
+    cost = ((u.input_tokens or 0) * pin + cw * pin * 1.25 + cr * pin * 0.1 + (u.output_tokens or 0) * pout) / 1e6
     usage = _job(job_id).setdefault("usage", {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
-    tin = (u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0) * 1.25 \
-        + (getattr(u, "cache_read_input_tokens", 0) or 0) * 0.1
     usage["calls"] += 1
-    usage["input_tokens"] += int(tin)
+    usage["input_tokens"] += (u.input_tokens or 0) + cw + cr
     usage["output_tokens"] += u.output_tokens or 0
-    usage["cost_usd"] = round(usage["input_tokens"] / 1e6 * PRICE_IN + usage["output_tokens"] / 1e6 * PRICE_OUT, 4)
+    usage["cost_usd"] = round(usage["cost_usd"] + cost, 5)
+    r = usage.setdefault("by_role", {}).setdefault(role, {"model": model, "calls": 0, "output_tokens": 0, "cost_usd": 0.0})
+    r["calls"] += 1
+    r["output_tokens"] += u.output_tokens or 0
+    r["cost_usd"] = round(r["cost_usd"] + cost, 5)
+
     if tool:
-        for b in msg.content:
-            if getattr(b, "type", "") == "tool_use":
-                return dict(b.input)
+        for blk in msg.content:
+            if getattr(blk, "type", "") == "tool_use":
+                return dict(blk.input)
         raise ValueError("model did not return the structured result")
-    return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+    return "".join(blk.text for blk in msg.content if getattr(blk, "type", "") == "text")
 
 
 _OBJ = {"type": "object"}
@@ -225,12 +313,23 @@ REVIEW_TOOL = {
 }
 
 
-def _parse_json(text: str) -> dict:
-    t = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
-    start, end = t.find("{"), t.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError(f"no JSON in model output: {text[:300]}")
-    return json.loads(t[start:end + 1])
+
+EDIT_TOOL = {
+    "name": "apply_edits",
+    "description": "Exact find/replace edits to apply to the current HTML document, in order.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "edits": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"find": {"type": "string"}, "replace": {"type": "string"}},
+                          "required": ["find", "replace"]},
+            },
+            "note": {"type": "string"},
+        },
+        "required": ["edits"],
+    },
+}
 
 
 def _extract_html(text: str) -> str:
@@ -256,6 +355,16 @@ def _data_url_bytes(data_url: str) -> tuple[bytes, str]:
     if not m:
         raise ValueError("bad data url")
     return base64.b64decode(m.group(2)), m.group(1)
+
+
+def _apply_edits(html: str, edits: list) -> tuple[str, int]:
+    applied = 0
+    for e in edits or []:
+        f, r = e.get("find", ""), e.get("replace", "")
+        if f and f in html:
+            html = html.replace(f, r, 1)
+            applied += 1
+    return html, applied
 
 
 # ─────────────────────────── geometry ───────────────────────────
@@ -305,14 +414,14 @@ def _contact_sheet(video: str, out: str, duration: float, aspect: str) -> bool:
     n = max(2, math.ceil(duration * 2))
     cols = 6 if aspect == "9:16" else 4
     rows = math.ceil(n / cols)
-    tw = 240 if aspect == "9:16" else 400
+    tw = 180 if aspect == "9:16" else 320
     return _sheet(video, out, f"fps=2,scale={tw}:-2", f"tile={cols}x{rows}:padding=4:color=0x222222")
 
 
 def _motion_strip(video: str, out: str, duration: float, aspect: str) -> bool:
     head = min(1.0, duration / 2)
     tail_start = max(head, duration - 0.5)
-    tw = 180 if aspect == "9:16" else 300
+    tw = 140 if aspect == "9:16" else 240
     sel = f"select='lt(t\\,{head:.2f})+gte(t\\,{tail_start:.2f})'"
     return _sheet(video, out, f"fps=10,{sel},scale={tw}:-2", "tile=5x3:padding=3:color=0x222222")
 
@@ -366,7 +475,7 @@ def _reference_sheets(frames: list, tmp: str) -> list[bytes]:
         ok, buf = cv2.imencode(".jpg", np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 82])
         if ok:
             sheets.append(buf.tobytes())
-    return sheets[:4]
+    return sheets[:3]
 
 
 # ─────────────────────────── render service ───────────────────────────
@@ -398,26 +507,50 @@ _FORBIDDEN = [
     (r"requestAnimationFrame", "requestAnimationFrame — the renderer owns the clock"),
     (r"set(Timeout|Interval)\s*\(", "setTimeout/setInterval — build everything synchronously"),
     (r"\bfetch\s*\(|XMLHttpRequest|WebSocket", "network access — no fetching in compositions"),
-    (r"<script[^>]+src=[\"'](?!lib/anime\.umd\.min\.js)", "external script — only lib/anime.umd.min.js is allowed"),
+    (r"<script[^>]+src=[\"'](?!lib/(?:anime\.umd\.min|kit)\.js)", "external script — only lib/anime.umd.min.js and lib/kit.js are allowed"),
     (r"<(video|audio)\b", "video/audio elements — motion graphics are pure HTML/SVG"),
 ]
 
 
 def _static_problems(html: str) -> list[str]:
     probs = [msg for pat, msg in _FORBIDDEN if re.search(pat, html)]
-    if "__hfAnime" not in html:
+    if "__hfAnime" not in html and "K.timeline" not in html:
         probs.append("no timeline registered on window.__hfAnime")
     if 'data-composition-id="shot"' not in html:
         probs.append('root element must have data-composition-id="shot"')
     return probs
 
 
-async def _render_shot(job_id: str, shot: dict, html: str, assets: dict, out_path: str,
-                       fix_ctx: list) -> tuple[str, bool]:
-    """Render with the render-engineer loop. Returns (final_html, ok)."""
+
+# ─────────────────────────── output budgets ───────────────────────────
+
+def _director_max_out(total: float) -> int:
+    return int(min(5000, 1000 + 90 * total))
+
+
+def _animator_max_out(seconds: float) -> int:
+    return int(min(9000, max(3000, 450 * seconds)))
+
+
+CRITIC_MAX_OUT = 700
+EDIT_MAX_OUT = 1500
+
+
+# ─────────────────────────── render with repairs ───────────────────────────
+
+async def _edit(job_id: str, ctx: list, html: str, problem: str, optional: bool = True) -> str | None:
+    """Ask the animator for find/replace edits. Returns the edited HTML, or None."""
+    res = await _claude(job_id, ANIMATOR_SYSTEM, [
+        *ctx, {"type": "text", "text": f"{problem}\n\n{EDIT_NOTE}\n\nCURRENT HTML:\n```html\n{html}\n```"},
+    ], max_tokens=EDIT_MAX_OUT, role="animator", tool=EDIT_TOOL, optional=optional)
+    new, applied = _apply_edits(html, res.get("edits", []))
+    return new if applied else None
+
+
+async def _render(job_id: str, label: str, html: str, assets: dict, out_path: str, ctx: list) -> tuple[str, bool]:
+    """Render; on lint/render errors ask for small fixes (budget permitting)."""
     for attempt in range(MAX_RENDER_FIXES + 1):
         problems = _static_problems(html)
-        error = None
         if not problems:
             r = await _render_call("/render", {**_project(html, assets), "quality": "standard"})
             if r.status_code == 200 and r.content:
@@ -425,20 +558,22 @@ async def _render_shot(job_id: str, shot: dict, html: str, assets: dict, out_pat
                     f.write(r.content)
                 return html, True
             try:
-                err = r.json()
+                error = json.dumps(r.json())[:4000]
             except Exception:
-                err = {"error": r.text[:2000]}
-            error = json.dumps(err)[:4000]
+                error = r.text[:3000]
         else:
             error = "Static check failed:\n- " + "\n- ".join(problems)
         if attempt == MAX_RENDER_FIXES:
             break
-        _say(job_id, "Render engineer", f"Shot {shot['n']}: fixing a render error ({'static check' if problems else 'render'}).")
-        text = await _claude(job_id, ANIMATOR_SYSTEM, [
-            *fix_ctx,
-            {"type": "text", "text": f"{RENDER_ENGINEER_NOTE}\n\nERROR:\n{error}\n\nCURRENT HTML:\n```html\n{html}\n```"},
-        ])
-        html = _extract_html(text)
+        _say(job_id, "Render engineer", f"{label}: fixing a render error.")
+        try:
+            fixed = await _edit(job_id, ctx, html, f"{RENDER_ENGINEER_NOTE}\n\nERROR:\n{error}", optional=True)
+        except OverBudget:
+            _say(job_id, "Render engineer", f"{label}: no budget left for another fix.")
+            break
+        if not fixed:
+            break
+        html = fixed
     return html, False
 
 
@@ -470,8 +605,10 @@ def _brief_text(p: dict) -> str:
     return "\n".join(lines)
 
 
+
 async def _direct(job_id: str, p: dict, ref_images: list[bytes], ref_sheets: list[bytes],
-                  previous: dict | None = None, feedback: str = "") -> dict:
+                  previous: dict | None = None, feedback: str = "", optional: bool = False,
+                  mandatory_slot: float = 0.0) -> dict:
     content = []
     for b in ref_images:
         content.append({"type": "text", "text": "REFERENCE IMAGE (borrow palette/type/texture, not content):"})
@@ -485,8 +622,10 @@ async def _direct(job_id: str, p: dict, ref_images: list[bytes], ref_sheets: lis
     if previous:
         content.append({"type": "text", "text": "YOUR PREVIOUS PLAN:\n" + json.dumps(previous, ensure_ascii=False)
                         + f"\n\nTHE CLIENT'S NOTES — revise the plan accordingly:\n{feedback}"})
-    plan = await _claude(job_id, DIRECTOR_SYSTEM, content, max_tokens=8000, tool=PLAN_TOOL)
-    return _normalise_plan(plan, float(p.get("duration_seconds", 15)))
+    total = float(p.get("duration_seconds", 15))
+    plan = await _claude(job_id, DIRECTOR_SYSTEM, content, max_tokens=_director_max_out(total), role="director",
+                         tool=PLAN_TOOL, optional=optional, mandatory_slot=mandatory_slot)
+    return _normalise_plan(plan, total)
 
 
 def _normalise_plan(plan: dict, total: float) -> dict:
@@ -513,24 +652,47 @@ def _normalise_plan(plan: dict, total: float) -> dict:
     return plan
 
 
-def _shot_brief(p: dict, plan: dict, shot: dict) -> str:
+def _segments(plan: dict) -> list[dict]:
+    """Group consecutive beats into the fewest evenly sized segments (~≤ SEGMENT_MAX_SECONDS):
+    each beat goes to the segment its midpoint falls in."""
+    shots = plan["shots"]
+    total = sum(s["duration"] for s in shots)
+    n = max(1, math.ceil(total / SEGMENT_MAX_SECONDS - 1e-6))
+    target = total / n
+    groups: dict[int, list] = {}
+    t = 0.0
+    for s in shots:
+        groups.setdefault(min(n - 1, int((t + s["duration"] / 2) // target)), []).append(s)
+        t += s["duration"]
+    segs = [groups[k] for k in sorted(groups)]
+    out, t = [], 0.0
+    for i, beats in enumerate(segs):
+        d = round(sum(b["duration"] for b in beats), 2)
+        out.append({"n": i + 1, "shots": beats, "start": round(t, 2), "duration": d})
+        t += d
+    return out
+
+
+def _segment_brief(p: dict, plan: dict, seg: dict, n_segs: int) -> str:
     w, h = _canvas(p.get("aspect_ratio", "16:9"))
     minfont = round(min(w, h) * 0.045)
-    shots = plan["shots"]
-    i = shot["n"] - 1
-    prev_s = shots[i - 1] if i > 0 else None
-    next_s = shots[i + 1] if i + 1 < len(shots) else None
-    return "\n".join([
-        f"CANVAS: W={w} H={h}. DURATION={shot['duration']} seconds. MINFONT={minfont}px.",
+    beats, t = [], 0.0
+    for b in seg["shots"]:
+        beats.append({"beat": b["n"], "starts_at_ms": int(t * 1000), "duration_s": b["duration"],
+                      **{k: b.get(k) for k in ("purpose", "on_screen_text", "visual", "motion", "transition_out")}})
+        t += b["duration"]
+    return "\n".join(filter(None, [
+        f"CANVAS: W={w} H={h}. DURATION={seg['duration']} seconds. MINFONT={minfont}px.",
         f"VIDEO: \"{plan.get('title', '')}\" — {plan.get('concept', '')}",
+        f"BRIEF: {p.get('prompt', '').strip()}",
         "DESIGN SYSTEM: " + json.dumps(plan.get("design", {}), ensure_ascii=False),
-        f"THIS SHOT ({shot['n']} of {len(shots)}): " + json.dumps(
-            {k: shot.get(k) for k in ("purpose", "on_screen_text", "visual", "motion", "transition_out")}, ensure_ascii=False),
-        "PREVIOUS SHOT EXIT: " + (prev_s.get("transition_out", "") if prev_s else "none — this is the opening shot"),
-        "NEXT SHOT: " + (json.dumps({k: next_s.get(k) for k in ("on_screen_text", "visual")}, ensure_ascii=False) if next_s else "none — this is the final shot"),
+        f"SEGMENT {seg['n']} of {n_segs} — its beats, times relative to this composition:",
+        json.dumps(beats, ensure_ascii=False),
+        "PREVIOUS SEGMENT: " + ("ends with: " + str(plan["shots"][seg["shots"][0]["n"] - 2].get("transition_out", ""))
+                                if seg["n"] > 1 else "none — this segment opens the video"),
         "ASSETS: " + ("assets/logo.png (brand logo)" if (p.get("brand") or {}).get("logo_data_url") else "none"),
         _brand_lines(p),
-    ])
+    ]))
 
 
 def _brand_lines(p: dict) -> str:
@@ -538,39 +700,38 @@ def _brand_lines(p: dict) -> str:
     return "BRAND KIT (law):" + brief.split("BRAND KIT (law):", 1)[1] if "BRAND KIT (law):" in brief else ""
 
 
-def _animator_ctx(p: dict, plan: dict, shot: dict, anchor_html: str | None) -> list:
-    ctx = [{"type": "text", "text": _shot_brief(p, plan, shot)}]
+def _animator_ctx(p: dict, plan: dict, seg: dict, n_segs: int, anchor_html: str | None) -> list:
+    ctx = [{"type": "text", "text": _segment_brief(p, plan, seg, n_segs)}]
     if anchor_html:
-        ctx.append({"type": "text", "text": "STYLE ANCHOR — the approved first shot. Match its look, type treatment, "
+        ctx.append({"type": "text", "text": "STYLE ANCHOR — segment 1 as approved. Match its look, type treatment, "
                                             "texture and motion feel exactly (different content):\n```html\n" + anchor_html + "\n```"})
     return ctx
 
 
-async def _animate(job_id: str, ctx: list, extra: str = "") -> str:
-    text = await _claude(job_id, ANIMATOR_SYSTEM, [*ctx, {"type": "text", "text": extra or "Write this shot now."}],
-                         max_tokens=16000)
+async def _animate(job_id: str, ctx: list, seconds: float, mandatory_slot: float) -> str:
+    text = await _claude(job_id, ANIMATOR_SYSTEM, [*ctx, {"type": "text", "text": "Write this segment now."}],
+                         max_tokens=_animator_max_out(seconds), role="animator", mandatory_slot=mandatory_slot)
     return _extract_html(text)
 
 
-async def _critique(job_id: str, p: dict, plan: dict, shot: dict, video: str, tmp: str,
+async def _critique(job_id: str, p: dict, plan: dict, seg: dict, video: str, tmp: str,
                     html: str, assets: dict, loop_pair: bytes | None = None) -> dict:
     aspect = p.get("aspect_ratio", "16:9")
-    d = shot["duration"]
-    base = os.path.join(tmp, f"crit_{shot['n']}_{int(time.time() * 1000)}")
+    d = seg["duration"]
+    base = os.path.join(tmp, f"crit_{seg['n']}_{int(time.time() * 1000)}")
     sheet, strip, phone = base + "_sheet.jpg", base + "_strip.jpg", base + "_phone.jpg"
     _contact_sheet(video, sheet, d, aspect)
     _motion_strip(video, strip, d, aspect)
     _frame_at(video, d * 0.7, phone, _phone_size(aspect))
 
     notes = []
-    # Determinism test: the same frame rendered twice must be byte-identical.
-    try:
+    try:  # determinism: the same frame rendered twice must be byte-identical (no tokens)
         t = round(d * 0.55, 2)
         a, b = await asyncio.gather(_snapshot(html, assets, [t]), _snapshot(html, assets, [t]))
         if a and b and hashlib.sha256(a[0]).digest() != hashlib.sha256(b[0]).digest():
             notes.append(f"DETERMINISM: frame at {t}s differs between two renders (unseeded randomness or clock use).")
     except Exception as e:
-        notes.append(f"determinism test skipped: {e}")
+        print(f"[motion] determinism test skipped: {e}")
 
     content = [{"type": "text", "text": "CONTACT SHEET (2 fps):"}]
     if os.path.exists(sheet):
@@ -582,18 +743,21 @@ async def _critique(job_id: str, p: dict, plan: dict, shot: dict, video: str, tm
     if loop_pair:
         content += [{"type": "text", "text": "LOOP TEST — left: last frame of the video, right: first frame. "
                                              "They must join without a visible jump:"}, _img(loop_pair)]
+    beats = [{k: b.get(k) for k in ("n", "duration", "on_screen_text", "visual", "motion")} for b in seg["shots"]]
     content.append({"type": "text", "text": "\n".join([
-        f"SHOT {shot['n']} of {len(plan['shots'])}, {d}s, purpose: {shot.get('purpose', '')}",
-        "SPEC: " + json.dumps({k: shot.get(k) for k in ("on_screen_text", "visual", "motion", "transition_out")}, ensure_ascii=False),
+        f"SEGMENT {seg['n']}, {d}s. BRIEF: {p.get('prompt', '').strip()[:1200]}",
+        "BEATS: " + json.dumps(beats, ensure_ascii=False),
         "DESIGN SYSTEM: " + json.dumps(plan.get("design", {}), ensure_ascii=False),
         "AUTOMATED FINDINGS: " + ("; ".join(notes) if notes else "none"),
+        "Treat this whole segment as the unit under review.",
     ])})
-    review = await _claude(job_id, CRITIC_SYSTEM, content, max_tokens=2000, tool=REVIEW_TOOL)
+    review = await _claude(job_id, CRITIC_SYSTEM, content, max_tokens=CRITIC_MAX_OUT, role="critic",
+                           tool=REVIEW_TOOL, optional=True)
     try:
         review["overall"] = float(review.get("overall", 0))
     except (TypeError, ValueError):
         review["overall"] = 0.0
-    if notes and any(n.startswith("DETERMINISM") for n in notes):
+    if any(n.startswith("DETERMINISM") for n in notes):
         review["overall"] = min(review["overall"], 6.0)
         review.setdefault("issues", []).insert(0, {"t": None, "problem": notes[0], "fix": "Remove clock/randomness use."})
     return review
@@ -609,74 +773,89 @@ async def _upload_thumb(video: str, t: float, tmp: str, tag: str) -> str | None:
     return None
 
 
-async def _produce_shot(job_id: str, p: dict, plan: dict, shot: dict, assets: dict, tmp: str,
-                        anchor_html: str | None, first_html: str | None = None,
-                        first_video: str | None = None) -> dict:
-    """Animate → render → critique → fix, keeping the best version. Returns a result dict."""
-    n = shot["n"]
-    ctx = _animator_ctx(p, plan, shot, anchor_html)
-    best = None
-    html = first_html
-    critic_notes = ""
-    for round_no in range(MAX_CRITIC_ROUNDS + 1):
-        stop = False
-        try:
-            if html is None:
-                _shot_state(job_id, n, status="animating")
-                _say(job_id, "Animator", f"Shot {n}: writing the animation code" + (" (revision)" if round_no else "") + ".")
-                html = await _animate(job_id, ctx, critic_notes)
-            out = os.path.join(tmp, f"shot_{n}_v{round_no}.mp4")
-            if round_no == 0 and first_video and os.path.exists(first_video):
-                os.replace(first_video, out)  # already rendered for the style frame
-                ok = True
-            else:
-                _shot_state(job_id, n, status="rendering")
-                html, ok = await _render_shot(job_id, shot, html, assets, out, ctx)
-        except BillingError:
-            if best:
-                break  # out of API credit: ship the best version we already have
-            raise
-        except Exception as e:
-            print(f"[motion] shot {n} round {round_no} error: {e!r}")
-            if best:
-                break
-            html, ok = None, False
+
+async def _beat_thumbs(job_id: str, seg: dict, video: str, tmp: str):
+    t = 0.0
+    for b in seg["shots"]:
+        url = await _upload_thumb(video, t + b["duration"] * 0.6, tmp, f"{seg['n']}_{b['n']}")
+        for s in _job(job_id).get("shots", []):
+            if s["n"] == b["n"]:
+                s["thumb_url"] = url
+        t += b["duration"]
+
+
+async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: int, assets: dict, tmp: str,
+                           anchor_html: str | None, first: tuple | None = None) -> dict:
+    """Animate → render → critique → one find/replace revision if needed (budget permitting)."""
+    label = f"Segment {seg['n']}" if n_segs > 1 else "The video"
+    ctx = _animator_ctx(p, plan, seg, n_segs, anchor_html)
+    slot = _job(job_id)["budget"]["slots"].get(seg["n"], 0.0)
+    if first:
+        html, video = first
+    else:
+        _seg_state(job_id, seg, status="animating")
+        _say(job_id, "Animator", f"{label}: writing the animation code.")
+        html = await _animate(job_id, ctx, seg["duration"], slot)
+        _seg_state(job_id, seg, status="rendering")
+        video = os.path.join(tmp, f"seg_{seg['n']}_v1.mp4")
+        html, ok = await _render(job_id, label, html, assets, video, ctx)
         if not ok:
-            _say(job_id, "Render engineer", f"Shot {n}: could not get version {round_no + 1} to render.")
-            html = None
-            critic_notes = "Your previous version could not be rendered. Write a simpler, robust version."
-            continue
-        _shot_state(job_id, n, status="reviewing")
-        _say(job_id, "Critic", f"Shot {n}: reviewing contact sheet, motion strip and phone test.")
+            _seg_state(job_id, seg, status="failed")
+            return {"ok": False}
+
+    best = {"html": html, "video": video, "score": None, "review": None}
+    _seg_state(job_id, seg, status="reviewing")
+    try:
+        _say(job_id, "Critic", f"{label}: reviewing contact sheet, motion strip and phone test.")
+        review = await _critique(job_id, p, plan, seg, video, tmp, html, assets)
+        best.update(score=review["overall"], review=review)
+        _say(job_id, "Critic", f"{label}: {review['overall']:.1f}/10 — {review.get('verdict', '')}")
+        _seg_state(job_id, seg, score=round(review["overall"], 1), scores=review.get("scores", {}),
+                   issues=review.get("issues", [])[:6], attempts=1)
+    except OverBudget as e:
+        _say(job_id, "Critic", f"{label}: review skipped to stay within budget.")
+        print(f"[motion] {e}")
+        review = None
+    except BillingError:
+        raise
+    except Exception as e:
+        print(f"[motion] review failed: {e!r}")
+        review = None
+
+    if review and review["overall"] < REVISE_BELOW and review.get("issues"):
+        _seg_state(job_id, seg, status="revising")
         try:
-            review = await _critique(job_id, p, plan, shot, out, tmp, html, assets)
-        except Exception as e:
-            # Can't judge it — keep this version rather than spend a rewrite blind.
-            stop = True
-            review = {"overall": 7.0, "scores": {}, "issues": [], "verdict": "review unavailable"}
-            print(f"[motion] shot {n} review error: {e!r}")
-        score = review["overall"]
-        _say(job_id, "Critic", f"Shot {n}: {score:.1f}/10 — {review.get('verdict', '')}")
-        if best is None or score > best["score"]:
-            best = {"html": html, "video": out, "score": score, "review": review}
-        _shot_state(job_id, n, score=round(best["score"], 1), scores=review.get("scores", {}),
-                    issues=review.get("issues", [])[:6], attempts=round_no + 1)
-        if stop or score >= PASS_SCORE or round_no == MAX_CRITIC_ROUNDS:
-            break
-        _shot_state(job_id, n, status="revising")
-        critic_notes = ("The director rejected your last version ({:.1f}/10). Fix every issue, keep what works, "
-                        "return the full HTML.\nISSUES:\n{}\n\nYOUR LAST VERSION:\n```html\n{}\n```").format(
-            score, json.dumps(review.get("issues", []), ensure_ascii=False), html)
-        html = None
-    if best is None:
-        _shot_state(job_id, n, status="failed")
-        return {"ok": False}
-    thumb = await _upload_thumb(best["video"], shot["duration"] * 0.6, tmp, f"{n}")
+            _say(job_id, "Animator", f"{label}: fixing the critic's notes (targeted edits).")
+            issues = json.dumps(review.get("issues", []), ensure_ascii=False)
+            fixed = await _edit(job_id, ctx, html, f"The director rejected this version ({review['overall']:.1f}/10). "
+                                                   f"Fix these issues:\n{issues}", optional=True)
+            if fixed:
+                out2 = os.path.join(tmp, f"seg_{seg['n']}_v2.mp4")
+                _seg_state(job_id, seg, status="rendering")
+                fixed, ok = await _render(job_id, label, fixed, assets, out2, ctx)
+                if ok:
+                    best.update(html=fixed, video=out2)
+                    _seg_state(job_id, seg, attempts=2)
+                    try:  # re-score only if the budget still allows it
+                        r2 = await _critique(job_id, p, plan, seg, out2, tmp, fixed, assets)
+                        best.update(score=r2["overall"], review=r2)
+                        _seg_state(job_id, seg, score=round(r2["overall"], 1), scores=r2.get("scores", {}),
+                                   issues=r2.get("issues", [])[:6])
+                        _say(job_id, "Critic", f"{label}: revised version {r2['overall']:.1f}/10.")
+                    except OverBudget:
+                        pass
+        except OverBudget:
+            _say(job_id, "Animator", f"{label}: revision skipped to stay within budget.")
+        except BillingError:
+            pass
+
+    await _beat_thumbs(job_id, seg, best["video"], tmp)
     try:
         vurl = upload_bytes_to_r2(open(best["video"], "rb").read(), "motion-shots", "mp4", "video/mp4")
     except Exception:
         vurl = None
-    _shot_state(job_id, n, status="completed", video_url=vurl, thumb_url=thumb, score=round(best["score"], 1))
+    seg["video_url"] = vurl
+    _seg_state(job_id, seg, status="completed")
     return {"ok": True, **best}
 
 
@@ -768,6 +947,7 @@ def _assemble(videos: list[str], out: str, size: tuple[int, int], total: float,
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", out])
 
 
+
 # ─────────────────────────── main ───────────────────────────
 
 async def run_motion_pipeline(job_id: str, p: dict):
@@ -775,14 +955,17 @@ async def run_motion_pipeline(job_id: str, p: dict):
     timeout = int(p.get("approval_timeout") or 600)
     aspect = p.get("aspect_ratio", "16:9")
     total = float(p.get("duration_seconds") or 15)
+    b = _budget(job_id)
+    b["limit"] = round(max(BUDGET_MIN, BUDGET_PER_SECOND * total), 3)
+    b["slots"] = {}
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            j["total_steps"] = 7
+            j["total_steps"] = 6
 
             # ── 1. References ──
             _stage(job_id, "analyzing", 1)
             ref_images = []
-            for u in (p.get("reference_images") or [])[:3]:
+            for u in (p.get("reference_images") or [])[:2]:
                 try:
                     ref_images.append(_data_url_bytes(u)[0] if u.startswith("data:") else await download_file(u))
                 except Exception as e:
@@ -791,7 +974,6 @@ async def run_motion_pipeline(job_id: str, p: dict):
             if ref_images or ref_sheets:
                 _say(job_id, "Director", f"Studying {len(ref_images)} reference image(s) and "
                                          f"{len(p.get('reference_video_frames') or [])} reference video frame(s).")
-
             assets = {}
             logo = (p.get("brand") or {}).get("logo_data_url")
             if logo:
@@ -800,111 +982,138 @@ async def run_motion_pipeline(job_id: str, p: dict):
                 except Exception:
                     pass
 
+            # Reserve the animator's worst case before anything else is spent.
+            n_guess = max(1, math.ceil(total / SEGMENT_MAX_SECONDS))
+            anim_worst = sum(_est_cost(job_id, "animator", ANIMATOR_SYSTEM, [{"type": "text", "text": "x" * 9000}],
+                                       _animator_max_out(min(SEGMENT_MAX_SECONDS, total / n_guess))) for _ in range(n_guess))
+            b["future"] = anim_worst
+
             # ── 2. Director: plan + shot-list gate ──
             _stage(job_id, "directing", 2)
             _say(job_id, "Director", "Writing the design system and shot list.")
             plan = await _direct(job_id, p, ref_images, ref_sheets)
-            for _ in range(3):
+            for _ in range(2):
                 j["plan"] = plan
                 j["shots"] = [{"n": s["n"], "id": s["id"], "duration": s["duration"], "purpose": s.get("purpose"),
                                "on_screen_text": s.get("on_screen_text"), "status": "queued"} for s in plan["shots"]]
-                _say(job_id, "Director", f"Shot list ready: {len(plan['shots'])} shots, {total:.0f}s.")
+                _say(job_id, "Director", f"Shot list ready: {len(plan['shots'])} beats, {total:.0f}s.")
                 resp = await _gate(job_id, "shot_list", timeout)
                 if resp["approved"] and not resp.get("feedback"):
                     break
-                _say(job_id, "Director", "Revising the shot list with your notes.")
-                plan = await _direct(job_id, p, ref_images, ref_sheets, previous=plan,
-                                     feedback=resp.get("feedback") or "Make it better.")
+                try:
+                    _say(job_id, "Director", "Revising the shot list with your notes.")
+                    plan = await _direct(job_id, p, ref_images, ref_sheets, previous=plan,
+                                         feedback=resp.get("feedback") or "Make it better.", optional=True)
+                except OverBudget:
+                    _say(job_id, "Director", "The revision budget for this video is used up — continuing with this plan.")
+                    break
             j["plan"] = plan
 
-            # ── 3. Style frame (shot 1) + gate ──
+            segs = _segments(plan)
+            j["segments"] = [{"n": s["n"], "start": s["start"], "duration": s["duration"],
+                              "beats": [x["n"] for x in s["shots"]]} for s in segs]
+            # Re-reserve the exact mandatory animator work for the real segments.
+            ctx_probe = {s["n"]: _animator_ctx(p, plan, s, len(segs), "x" * 9000 if s["n"] > 1 else None) for s in segs}
+            for s in segs:
+                b["slots"][s["n"]] = _est_cost(job_id, "animator", ANIMATOR_SYSTEM, ctx_probe[s["n"]],
+                                               _animator_max_out(s["duration"]))
+            b["future"] = sum(b["slots"].values())
+
+            # ── 3. Style frame (segment 1) + gate ──
             _stage(job_id, "style_frame", 3)
-            first = plan["shots"][0]
-            ctx1 = _animator_ctx(p, plan, first, None)
-            _shot_state(job_id, 1, status="animating")
-            _say(job_id, "Animator", "Designing the style frame (shot 1).")
-            anchor = await _animate(job_id, ctx1)
-            for _ in range(3):
-                # Make sure it renders before showing it.
-                probe = os.path.join(tmp, "style_probe.mp4")
-                anchor, ok = await _render_shot(job_id, first, anchor, assets, probe, ctx1)
-                if not ok:
-                    raise RuntimeError("the style frame could not be rendered")
-                frame_t = round(min(first["duration"] - 0.2, max(0.6, first["duration"] * 0.7)), 2)
+            first = segs[0]
+            ctx1 = _animator_ctx(p, plan, first, len(segs), None)
+            _seg_state(job_id, first, status="animating")
+            _say(job_id, "Animator", "Designing the style frame.")
+            anchor = await _animate(job_id, ctx1, first["duration"], b["slots"].pop(first["n"]))
+            probe = os.path.join(tmp, "seg_1_v1.mp4")
+            anchor, ok = await _render(job_id, "Style frame", anchor, assets, probe, ctx1)
+            if not ok:
+                raise RuntimeError("the first segment could not be rendered")
+            for _ in range(2):
+                frame_t = round(min(first["duration"] - 0.2, max(0.6, first["duration"] * 0.35)), 2)
                 png = (await _snapshot(anchor, assets, [frame_t]))[0]
                 j["style_frame_url"] = upload_bytes_to_r2(png, "motion-style-frames", "png", "image/png")
-                _shot_state(job_id, 1, thumb_url=j["style_frame_url"], status="awaiting_approval")
+                _seg_state(job_id, first, thumb_url=j["style_frame_url"], status="awaiting_approval")
                 resp = await _gate(job_id, "style_frame", timeout, image_url=j["style_frame_url"])
                 if resp["approved"] and not resp.get("feedback"):
                     break
-                _say(job_id, "Animator", "Reworking the style frame with your notes.")
-                anchor = await _animate(job_id, ctx1, "The client reviewed this style frame. Their notes:\n"
-                                        f"{resp.get('feedback') or 'Make it better.'}\n\nCURRENT VERSION:\n```html\n{anchor}\n```\n"
-                                        "Apply the notes and return the full HTML.")
+                try:
+                    _say(job_id, "Animator", "Applying your notes to the style frame.")
+                    fixed = await _edit(job_id, ctx1, anchor, "The client reviewed the style frame. Their notes:\n"
+                                        + (resp.get("feedback") or "Make it better."), optional=True)
+                    if fixed:
+                        fixed, ok = await _render(job_id, "Style frame", fixed, assets, probe, ctx1)
+                        if ok:
+                            anchor = fixed
+                except OverBudget:
+                    _say(job_id, "Animator", "The revision budget for this video is used up — continuing with this look.")
+                    break
 
-            # ── 4-5. Animate, render, critique every shot (only failing shots re-render) ──
+            # ── 4. Every segment: animate, render, critique, targeted fix ──
             _stage(job_id, "animating", 4)
-            _say(job_id, "Director", "Style approved. The crew is animating every shot.")
-            tasks = [_produce_shot(job_id, p, plan, plan["shots"][0], assets, tmp, None,
-                                   first_html=anchor, first_video=probe)]
-            for s in plan["shots"][1:]:
-                tasks.append(_produce_shot(job_id, p, plan, s, assets, tmp, anchor))
+            _say(job_id, "Director", "Style approved. The crew is animating.")
+            tasks = [_produce_segment(job_id, p, plan, first, len(segs), assets, tmp, None, first=(anchor, probe))]
+            for s in segs[1:]:
+                tasks.append(_produce_segment(job_id, p, plan, s, len(segs), assets, tmp, anchor))
             results = await asyncio.gather(*tasks, return_exceptions=True)
             done = []
-            for s, r in zip(plan["shots"], results):
+            for s, r in zip(segs, results):
                 if isinstance(r, Exception) or not r.get("ok"):
-                    print(f"[motion] shot {s['n']} failed: {r if isinstance(r, Exception) else 'no version'}")
-                    _shot_state(job_id, s["n"], status="failed")
+                    print(f"[motion] segment {s['n']} failed: {r!r}")
+                    _seg_state(job_id, s, status="failed")
+                    if isinstance(r, BillingError):
+                        raise r
                     continue
                 done.append((s, r))
-            if len(done) < max(1, math.ceil(len(plan["shots"]) / 2)):
-                if j.get("billing_exhausted"):
-                    raise BillingError("Anthropic API credit balance is too low — top up the API account and retry")
-                raise RuntimeError(f"only {len(done)} of {len(plan['shots'])} shots could be produced")
+            if len(done) < len(segs):
+                raise RuntimeError(f"only {len(done)} of {len(segs)} segments could be produced")
 
-            # ── Loop test (optional): last frame must join the first frame ──
-            if p.get("loop") and len(done) > 1:
-                _stage(job_id, "reviewing", 5)
+            # Optional loop test on the joint between the last and the first frame.
+            if p.get("loop"):
                 last_s, last_r = done[-1]
-                a, b, pair = (os.path.join(tmp, x) for x in ("loop_a.jpg", "loop_b.jpg", "loop_pair.jpg"))
-                _frame_at(last_r["video"], max(0.0, last_s["duration"] - 0.04), a, (480, -2) if aspect != "9:16" else (270, -2))
-                _frame_at(done[0][1]["video"], 0.0, b, (480, -2) if aspect != "9:16" else (270, -2))
-                if not j.get("billing_exhausted") and _ff(["-i", a, "-i", b, "-filter_complex", "hstack", pair]):
+                a, bb, pair = (os.path.join(tmp, x) for x in ("loop_a.jpg", "loop_b.jpg", "loop_pair.jpg"))
+                size = (270, -2) if aspect == "9:16" else (480, -2)
+                _frame_at(last_r["video"], max(0.0, last_s["duration"] - 0.04), a, size)
+                _frame_at(done[0][1]["video"], 0.0, bb, size)
+                if _ff(["-i", a, "-i", bb, "-filter_complex", "hstack", pair]):
                     try:
                         review = await _critique(job_id, p, plan, last_s, last_r["video"], tmp, last_r["html"], assets,
                                                  loop_pair=open(pair, "rb").read())
                         _say(job_id, "Critic", f"Loop test: {review['overall']:.1f}/10.")
-                    except Exception as e:
+                    except (OverBudget, Exception) as e:
                         print(f"[motion] loop test skipped: {e!r}")
 
-            # ── 6. Sound ──
-            _stage(job_id, "sound", 6)
+            # ── 5. Sound ──
+            _stage(job_id, "sound", 5)
             music, cues = (None, [])
             if p.get("include_music", True):
                 music, cues = await _sound_design(job_id, plan, sum(s["duration"] for s, _ in done), tmp)
 
-            # ── 7. Assemble ──
-            _stage(job_id, "assembling", 7)
+            # ── 6. Assemble ──
+            _stage(job_id, "assembling", 6)
             _say(job_id, "Render engineer", "Assembling the final cut.")
             final = os.path.join(tmp, "final.mp4")
             size = _output_size(aspect, p.get("resolution", "1080p"))
-            total_done = sum(s["duration"] for s, _ in done)
-            if not _assemble([r["video"] for _, r in done], final, size, total_done, music, cues, tmp):
+            if not _assemble([r["video"] for _, r in done], final, size, sum(s["duration"] for s, _ in done),
+                             music, cues, tmp):
                 raise RuntimeError("final assembly failed")
             url = upload_bytes_to_r2(open(final, "rb").read(), "motion-final", "mp4", "video/mp4")
 
-            scores = [r["score"] for _, r in done]
-            j["average_score"] = round(sum(scores) / len(scores), 1)
+            scores = [r["score"] for _, r in done if r.get("score") is not None]
+            j["average_score"] = round(sum(scores) / len(scores), 1) if scores else None
             j["final_video_url"] = url
             j["status"] = "completed"
             j["stage"] = "done"
             j["step"] = j["total_steps"]
-            _say(job_id, "Director", f"Done. Average shot score {j['average_score']}/10.")
+            cost = j.get("usage", {}).get("cost_usd", 0.0)
+            _say(job_id, "Director", f"Done. Claude cost ${cost:.3f} of a ${b['limit']:.2f} ceiling.")
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[motion {job_id[:8]}] FAILED\n{tb}")
         j["status"] = "failed"
-        j["error"] = str(e) or repr(e)
+        j["error"] = ("Anthropic API credit balance is too low — top up the API account and retry"
+                      if isinstance(e, BillingError) or j.get("billing_exhausted") else (str(e) or repr(e)))
         j["traceback"] = tb
         j["gate"] = None
         _gates.pop(job_id, None)

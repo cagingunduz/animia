@@ -90,9 +90,11 @@ async function writeProject(body) {
     await mkdir(path.dirname(dest), { recursive: true });
     await writeFile(dest, Buffer.from(String(b64), 'base64'));
   }
-  // Compositions load anime.js from here, never from a CDN.
+  // Compositions load anime.js and the Animave motion kit from here, never from a CDN.
   await mkdir(path.join(dir, 'lib'), { recursive: true });
   await copyFile(ANIME_JS, path.join(dir, 'lib', 'anime.umd.min.js'));
+  await copyFile(path.join(HERE, 'kit.js'), path.join(dir, 'lib', 'kit.js'));
+  await copyFile(path.join(HERE, 'kit.css'), path.join(dir, 'lib', 'kit.css'));
   return dir;
 }
 
