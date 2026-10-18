@@ -43,7 +43,7 @@ PRICE_IN = float(os.environ.get("MOTION_PRICE_IN_PER_MTOK", "5"))
 PRICE_OUT = float(os.environ.get("MOTION_PRICE_OUT_PER_MTOK", "25"))
 
 PASS_SCORE = 8.0
-MAX_CRITIC_ROUNDS = 2      # critic-driven rewrites per shot
+MAX_CRITIC_ROUNDS = int(os.environ.get("MOTION_CRITIC_ROUNDS", "1"))  # critic-driven rewrites per shot
 MAX_RENDER_FIXES = 2       # lint/render repairs per version
 FPS = 30
 
@@ -124,15 +124,30 @@ def _anthropic():
     return _client
 
 
-async def _claude(job_id: str, system: str, content, max_tokens: int = 12000) -> str:
-    async with _claude_sem:
-        async with _anthropic().messages.stream(
-            model=MOTION_MODEL,
-            max_tokens=max_tokens,
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": content}],
-        ) as stream:
-            msg = await stream.get_final_message()
+class BillingError(RuntimeError):
+    """The Anthropic account is out of credit — no point retrying anything."""
+
+
+async def _claude(job_id: str, system: str, content, max_tokens: int = 12000, tool: dict | None = None):
+    """Text reply, or — with `tool` — the tool's input dict (structured output that can't be malformed)."""
+    kw = {}
+    if tool:
+        kw = {"tools": [tool], "tool_choice": {"type": "tool", "name": tool["name"]}}
+    try:
+        async with _claude_sem:
+            async with _anthropic().messages.stream(
+                model=MOTION_MODEL,
+                max_tokens=max_tokens,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": content}],
+                **kw,
+            ) as stream:
+                msg = await stream.get_final_message()
+    except anthropic.APIStatusError as e:
+        if "credit balance" in str(e).lower():
+            _job(job_id)["billing_exhausted"] = True
+            raise BillingError("Anthropic API credit balance is too low") from e
+        raise
     u = msg.usage
     usage = _job(job_id).setdefault("usage", {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
     tin = (u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0) * 1.25 \
@@ -141,7 +156,73 @@ async def _claude(job_id: str, system: str, content, max_tokens: int = 12000) ->
     usage["input_tokens"] += int(tin)
     usage["output_tokens"] += u.output_tokens or 0
     usage["cost_usd"] = round(usage["input_tokens"] / 1e6 * PRICE_IN + usage["output_tokens"] / 1e6 * PRICE_OUT, 4)
+    if tool:
+        for b in msg.content:
+            if getattr(b, "type", "") == "tool_use":
+                return dict(b.input)
+        raise ValueError("model did not return the structured result")
     return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+
+
+_OBJ = {"type": "object"}
+PLAN_TOOL = {
+    "name": "submit_plan",
+    "description": "Submit the production plan (design system + shot list).",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "concept": {"type": "string"},
+            "reference_analysis": {"type": "string"},
+            "design": {
+                "type": "object",
+                "properties": {
+                    "palette": _OBJ, "fonts": _OBJ, "texture": {"type": "string"},
+                    "motion_language": {"type": "string"}, "rules": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            "shots": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "duration": {"type": "number"}, "purpose": {"type": "string"},
+                        "on_screen_text": {"type": "string"}, "visual": {"type": "string"},
+                        "motion": {"type": "string"}, "transition_out": {"type": "string"},
+                        "sfx": {"type": "string", "enum": ["none", "whoosh", "impact", "pop", "riser", "click"]},
+                    },
+                    "required": ["duration", "visual", "motion"],
+                },
+            },
+            "sound": {"type": "object", "properties": {"music_prompt": {"type": "string"}, "mood": {"type": "string"}}},
+        },
+        "required": ["title", "concept", "design", "shots"],
+    },
+}
+REVIEW_TOOL = {
+    "name": "submit_review",
+    "description": "Submit the review of this shot.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "scores": {
+                "type": "object",
+                "properties": {k: {"type": "number"} for k in ("hook", "readability", "composition", "brand", "motion")},
+            },
+            "overall": {"type": "number"},
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"t": {"type": ["number", "null"]}, "problem": {"type": "string"}, "fix": {"type": "string"}},
+                    "required": ["problem"],
+                },
+            },
+            "verdict": {"type": "string"},
+        },
+        "required": ["scores", "overall", "issues", "verdict"],
+    },
+}
 
 
 def _parse_json(text: str) -> dict:
@@ -404,7 +485,7 @@ async def _direct(job_id: str, p: dict, ref_images: list[bytes], ref_sheets: lis
     if previous:
         content.append({"type": "text", "text": "YOUR PREVIOUS PLAN:\n" + json.dumps(previous, ensure_ascii=False)
                         + f"\n\nTHE CLIENT'S NOTES — revise the plan accordingly:\n{feedback}"})
-    plan = _parse_json(await _claude(job_id, DIRECTOR_SYSTEM, content, max_tokens=8000))
+    plan = await _claude(job_id, DIRECTOR_SYSTEM, content, max_tokens=8000, tool=PLAN_TOOL)
     return _normalise_plan(plan, float(p.get("duration_seconds", 15)))
 
 
@@ -507,7 +588,7 @@ async def _critique(job_id: str, p: dict, plan: dict, shot: dict, video: str, tm
         "DESIGN SYSTEM: " + json.dumps(plan.get("design", {}), ensure_ascii=False),
         "AUTOMATED FINDINGS: " + ("; ".join(notes) if notes else "none"),
     ])})
-    review = _parse_json(await _claude(job_id, CRITIC_SYSTEM, content, max_tokens=2000))
+    review = await _claude(job_id, CRITIC_SYSTEM, content, max_tokens=2000, tool=REVIEW_TOOL)
     try:
         review["overall"] = float(review.get("overall", 0))
     except (TypeError, ValueError):
@@ -538,17 +619,28 @@ async def _produce_shot(job_id: str, p: dict, plan: dict, shot: dict, assets: di
     html = first_html
     critic_notes = ""
     for round_no in range(MAX_CRITIC_ROUNDS + 1):
-        if html is None:
-            _shot_state(job_id, n, status="animating")
-            _say(job_id, "Animator", f"Shot {n}: writing the animation code" + (" (revision)" if round_no else "") + ".")
-            html = await _animate(job_id, ctx, critic_notes)
-        out = os.path.join(tmp, f"shot_{n}_v{round_no}.mp4")
-        if round_no == 0 and first_video and os.path.exists(first_video):
-            os.replace(first_video, out)  # already rendered for the style frame
-            ok = True
-        else:
-            _shot_state(job_id, n, status="rendering")
-            html, ok = await _render_shot(job_id, shot, html, assets, out, ctx)
+        stop = False
+        try:
+            if html is None:
+                _shot_state(job_id, n, status="animating")
+                _say(job_id, "Animator", f"Shot {n}: writing the animation code" + (" (revision)" if round_no else "") + ".")
+                html = await _animate(job_id, ctx, critic_notes)
+            out = os.path.join(tmp, f"shot_{n}_v{round_no}.mp4")
+            if round_no == 0 and first_video and os.path.exists(first_video):
+                os.replace(first_video, out)  # already rendered for the style frame
+                ok = True
+            else:
+                _shot_state(job_id, n, status="rendering")
+                html, ok = await _render_shot(job_id, shot, html, assets, out, ctx)
+        except BillingError:
+            if best:
+                break  # out of API credit: ship the best version we already have
+            raise
+        except Exception as e:
+            print(f"[motion] shot {n} round {round_no} error: {e!r}")
+            if best:
+                break
+            html, ok = None, False
         if not ok:
             _say(job_id, "Render engineer", f"Shot {n}: could not get version {round_no + 1} to render.")
             html = None
@@ -559,14 +651,17 @@ async def _produce_shot(job_id: str, p: dict, plan: dict, shot: dict, assets: di
         try:
             review = await _critique(job_id, p, plan, shot, out, tmp, html, assets)
         except Exception as e:
-            review = {"overall": 7.5, "scores": {}, "issues": [], "verdict": f"review unavailable: {e}"}
+            # Can't judge it — keep this version rather than spend a rewrite blind.
+            stop = True
+            review = {"overall": 7.0, "scores": {}, "issues": [], "verdict": "review unavailable"}
+            print(f"[motion] shot {n} review error: {e!r}")
         score = review["overall"]
         _say(job_id, "Critic", f"Shot {n}: {score:.1f}/10 — {review.get('verdict', '')}")
         if best is None or score > best["score"]:
             best = {"html": html, "video": out, "score": score, "review": review}
         _shot_state(job_id, n, score=round(best["score"], 1), scores=review.get("scores", {}),
                     issues=review.get("issues", [])[:6], attempts=round_no + 1)
-        if score >= PASS_SCORE or round_no == MAX_CRITIC_ROUNDS:
+        if stop or score >= PASS_SCORE or round_no == MAX_CRITIC_ROUNDS:
             break
         _shot_state(job_id, n, status="revising")
         critic_notes = ("The director rejected your last version ({:.1f}/10). Fix every issue, keep what works, "
@@ -763,6 +858,8 @@ async def run_motion_pipeline(job_id: str, p: dict):
                     continue
                 done.append((s, r))
             if len(done) < max(1, math.ceil(len(plan["shots"]) / 2)):
+                if j.get("billing_exhausted"):
+                    raise BillingError("Anthropic API credit balance is too low — top up the API account and retry")
                 raise RuntimeError(f"only {len(done)} of {len(plan['shots'])} shots could be produced")
 
             # ── Loop test (optional): last frame must join the first frame ──
@@ -772,10 +869,13 @@ async def run_motion_pipeline(job_id: str, p: dict):
                 a, b, pair = (os.path.join(tmp, x) for x in ("loop_a.jpg", "loop_b.jpg", "loop_pair.jpg"))
                 _frame_at(last_r["video"], max(0.0, last_s["duration"] - 0.04), a, (480, -2) if aspect != "9:16" else (270, -2))
                 _frame_at(done[0][1]["video"], 0.0, b, (480, -2) if aspect != "9:16" else (270, -2))
-                if _ff(["-i", a, "-i", b, "-filter_complex", "hstack", pair]):
-                    review = await _critique(job_id, p, plan, last_s, last_r["video"], tmp, last_r["html"], assets,
-                                             loop_pair=open(pair, "rb").read())
-                    _say(job_id, "Critic", f"Loop test: {review['overall']:.1f}/10.")
+                if not j.get("billing_exhausted") and _ff(["-i", a, "-i", b, "-filter_complex", "hstack", pair]):
+                    try:
+                        review = await _critique(job_id, p, plan, last_s, last_r["video"], tmp, last_r["html"], assets,
+                                                 loop_pair=open(pair, "rb").read())
+                        _say(job_id, "Critic", f"Loop test: {review['overall']:.1f}/10.")
+                    except Exception as e:
+                        print(f"[motion] loop test skipped: {e!r}")
 
             # ── 6. Sound ──
             _stage(job_id, "sound", 6)

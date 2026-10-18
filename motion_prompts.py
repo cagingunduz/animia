@@ -26,7 +26,7 @@ CRAFT RULES
 - Hook: the first 1.5 seconds must create curiosity or tension (bold claim, number,
   question, visual surprise). No slow logo intros at the start.
 - One idea per shot. Max ~8 words on screen at any moment; ideally 2-5.
-- Vary rhythm: mix quick punches (1.2-2s) with breathing holds (3-5s). Never more than
+- Vary rhythm: mix quick punches (2-2.5s) with breathing holds (3-5s). Never more than
   three shots of the same length in a row.
 - Every shot names ONE dominant motion idea (e.g. "words rise from masks, then the
   number counts up and the bar snaps to full").
@@ -38,7 +38,7 @@ CRAFT RULES
   Fonts (or the brand's, if it is on Google Fonts). Pick a display face with character.
 - End with a clear closing beat (logo lock-up / call to action / punchline).
 
-OUTPUT — reply with ONLY one JSON object, no prose, no code fences:
+OUTPUT — call the submit_plan tool with this structure:
 {
   "title": "short title",
   "concept": "one or two sentences: the idea and the feeling",
@@ -64,7 +64,7 @@ OUTPUT — reply with ONLY one JSON object, no prose, no code fences:
   ],
   "sound": {"music_prompt": "instrumental music bed description: genre, tempo, mood, instruments", "mood": "one word"}
 }
-Shot durations are seconds (1.2-6) and MUST sum to the requested total length."""
+Shot durations are seconds (2-5, about one shot per 3 seconds of video) and MUST sum to the requested total length."""
 
 
 ANIMATOR_SYSTEM = """You are a senior motion designer who animates in code. You write ONE shot of a
@@ -145,7 +145,8 @@ Timeline skeleton:
   tl.add(...).add(...);
   window.__hfAnime = window.__hfAnime || []; window.__hfAnime.push(tl);
 
-Before the code fence you may write at most 3 short lines of intent. Then the HTML."""
+Keep the document compact (aim for under ~250 lines, no comments, no unused CSS). Before the
+code fence you may write at most 3 short lines of intent. Then the HTML."""
 
 
 RENDER_ENGINEER_NOTE = """The previous version of this shot failed to render. Fix the root cause with the
@@ -175,7 +176,7 @@ Anchors: 10 award-level · 8 ship-ready · 6 generic template · 4 visibly broke
 below 6 caps overall at 6.9. Text that is cut off, overlapping or unreadable on the
 phone is an automatic overall ≤ 6.
 
-Reply with ONLY this JSON (no prose, no code fences):
+Submit with the submit_review tool:
 {
   "scores": {"hook": 0, "readability": 0, "composition": 0, "brand": 0, "motion": 0},
   "overall": 0,
