@@ -1,0 +1,11 @@
+{
+  "name": "animave-render-service",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "animejs": "4.5.0",
+    "hyperframes": "0.8.172"
+  }
+}
