@@ -17,6 +17,7 @@ from storybook_pipeline import run_storybook_pipeline, generate_single_scene, do
 from animated_story_pipeline import run_animated_story_pipeline
 from whiteboard_pipeline import run_whiteboard_pipeline
 from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_drama_scene, edit_fruit_drama_scene
+from motion_pipeline import run_motion_pipeline, submit_gate
 
 app = FastAPI(title="Animave API v3")
 
@@ -412,6 +413,76 @@ async def generate_whiteboard(req: GenerateWhiteboardRequest):
     }
     asyncio.create_task(run_whiteboard_pipeline(job_id, req.model_dump()))
     return {"job_id": job_id, "status": "queued"}
+
+
+class MotionBrand(BaseModel):
+    name: Optional[str] = None
+    colors: Optional[List[str]] = None
+    fonts: Optional[List[str]] = None
+    tone: Optional[str] = None
+    notes: Optional[str] = None
+    logo_data_url: Optional[str] = None
+
+
+class MotionRefFrame(BaseModel):
+    t: float
+    data_url: str
+
+
+class GenerateMotionRequest(BaseModel):
+    prompt: str
+    title: Optional[str] = None
+    duration_seconds: Optional[int] = Field(15, ge=5, le=90)
+    aspect_ratio: Optional[Literal["16:9", "9:16", "1:1"]] = "16:9"
+    resolution: Optional[Literal["720p", "1080p"]] = "1080p"
+    brand: Optional[MotionBrand] = None
+    reference_images: Optional[List[str]] = None          # data URLs or https URLs
+    reference_video_frames: Optional[List[MotionRefFrame]] = None
+    include_music: Optional[bool] = True
+    loop: Optional[bool] = False
+    auto_approve: Optional[bool] = False
+    approval_timeout: Optional[int] = Field(600, ge=30, le=3600)
+
+
+class MotionApproveRequest(BaseModel):
+    approved: Optional[bool] = True
+    feedback: Optional[str] = None
+
+
+@app.post("/generate-motion")
+async def generate_motion(req: GenerateMotionRequest):
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Motion Graphics is not available yet (render service not connected).")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "motion", "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
+        "message": "Kuyrukta bekleniyor...", "scenes": [], "shots": [], "plan": None, "gate": None,
+        "activity": [], "style_frame_url": None, "final_video_url": None, "error": None, "traceback": None,
+        "aspect_ratio": req.aspect_ratio, "resolution": req.resolution, "auto_approve": bool(req.auto_approve),
+        "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(run_motion_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/motion/{job_id}")
+async def motion_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "motion":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "plan", "shots", "gate", "activity",
+            "style_frame_url", "final_video_url", "average_score", "usage", "aspect_ratio", "resolution", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+@app.post("/motion/{job_id}/approve")
+async def motion_approve(job_id: str, req: MotionApproveRequest):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "motion":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    if not submit_gate(job_id, req.approved, req.feedback):
+        raise HTTPException(status_code=409, detail="Nothing is waiting for approval")
+    return {"ok": True}
 
 
 class GenerateFruitDramaRequest(BaseModel):
