@@ -669,7 +669,7 @@ def _brief_text(p: dict) -> str:
         f"Total length: {p.get('duration_seconds', 15)} seconds",
         f"Format: {p.get('aspect_ratio', '16:9')} ({'x'.join(map(str, _canvas(p.get('aspect_ratio', '16:9'))))} px canvas)",
         f"Loop seamlessly: {'yes' if p.get('loop') else 'no'}",
-        f"Narration: {'ON — write a voiceover line for every beat' if p.get('narration') else 'off — leave voiceover empty'}",
+        f"Narration: {'ON — write a voiceover line for every beat (brisk pace, ≈ 2.9 words/second)' if p.get('narration') else 'off — leave voiceover empty'}",
     ]
     if any(brand.get(k) for k in ("name", "colors", "fonts", "tone", "notes", "logo_data_url")):
         lines.append("BRAND KIT (law):")
@@ -1096,7 +1096,8 @@ async def run_motion_pipeline(job_id: str, p: dict):
             # picture never sits silent after the voice ends.
             if p.get("narration") and p.get("narrator_voice_id"):
                 _say(job_id, "Sound designer", "Recording the narration first — scenes will be cut to it.")
-                vo = await motion_sound.narrate_first(plan["shots"], p["narrator_voice_id"], tmp)
+                vo = await motion_sound.narrate_first(plan["shots"], p["narrator_voice_id"], tmp,
+                                                      speed=float(p.get("narrator_speed") or motion_sound.DEFAULT_SPEED))
                 motion_sound.retime(plan["shots"], vo)
                 total = round(sum(s["duration"] for s in plan["shots"]), 2)
                 b["limit"] = round(max(BUDGET_MIN, BUDGET_PER_SECOND * total), 3)  # the voice set the length

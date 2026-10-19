@@ -81,19 +81,21 @@ def _tts_sem():
     return _TTS_SEM
 
 
-async def generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None) -> tuple:
+async def generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None,
+                                speed: float = None) -> tuple:
     import asyncio
     for attempt in range(4):
         async with _tts_sem():
             try:
-                return await _generate_speech_timed(text, voice_id, tone, model)
+                return await _generate_speech_timed(text, voice_id, tone, model, speed)
             except httpx.HTTPStatusError as e:
                 if e.response.status_code not in (429, 500, 502, 503) or attempt == 3:
                     raise
         await asyncio.sleep(1.5 * (attempt + 1))
 
 
-async def _generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None) -> tuple:
+async def _generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None,
+                                 speed: float = None) -> tuple:
     """Narration + word timings in one call (ElevenLabs /with-timestamps, character alignment).
     Returns (mp3 bytes, [{"word", "start", "end"}] in seconds). Falls back to Whisper timings."""
     import base64
@@ -104,6 +106,9 @@ async def _generate_speech_timed(text: str, voice_id: str, tone: str = None, mod
         "voice_settings": {"stability": ts["stability"], "similarity_boost": 0.75, "style": ts["style"],
                            "use_speaker_boost": True},
     }
+    if speed:
+        # ElevenLabs' native pace (0.7-1.2): faster speech without the pitch/timbre cost of atempo.
+        payload["voice_settings"]["speed"] = max(0.7, min(1.2, float(speed)))
     headers = {**_headers(), "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}/with-timestamps",

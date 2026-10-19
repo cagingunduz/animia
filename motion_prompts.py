@@ -42,7 +42,7 @@ CRAFT RULES
 - End with a clear closing beat (logo lock-up / call to action / punchline).
 - NARRATION (only when the brief says narration is on) is the SPINE of the video. Write it
   first, then design the visuals to it:
-  * Continuous voice: 2-3 natural sentences per beat (≈ 2.5 words/second of speech). No beat
+  * Continuous voice: 2-3 natural sentences per beat (brisk pace, ≈ 2.9 words/second). No beat
     is a single throwaway line; no long silences. The recorded voice sets each beat's length.
   * Say what the screen shows: every number, label and comparison on screen is spoken or
     explained, and every spoken key fact gets a visual. On-screen text = the keywords of

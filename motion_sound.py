@@ -153,14 +153,18 @@ VO_TAIL = 0.35
 MIN_BEAT = 1.6
 
 
-async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = "explainer") -> list[dict | None]:
+DEFAULT_SPEED = 1.15  # narration pace for Motion Graphics (ElevenLabs native speed)
+
+
+async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = "explainer",
+                        speed: float = DEFAULT_SPEED) -> list[dict | None]:
     """Record every beat's line BEFORE animating. Returns per beat
     {path, dur, words:[{word, start, end}]} (seconds, relative to the line) or None."""
     async def one(i, b):
         text = (b.get("voiceover") or "").strip()
         if not text:
             return None
-        audio, words = await generate_speech_timed(text, voice_id, tone)
+        audio, words = await generate_speech_timed(text, voice_id, tone, speed=speed)
         p = os.path.join(tmp, f"vo_{i}.mp3")
         open(p, "wb").write(audio)
         p = normalize_voice(p, VOICE_TARGET_LUFS)

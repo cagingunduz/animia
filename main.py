@@ -443,6 +443,7 @@ class GenerateMotionRequest(BaseModel):
     include_sfx: Optional[bool] = True
     narration: Optional[bool] = False
     narrator_voice_id: Optional[str] = None
+    narrator_speed: Optional[float] = Field(1.15, ge=0.7, le=1.2)
     loop: Optional[bool] = False
     auto_approve: Optional[bool] = False
     approval_timeout: Optional[int] = Field(600, ge=30, le=3600)
@@ -506,6 +507,7 @@ class MotionNarrateRequest(BaseModel):
     lines: List[str] = Field(..., max_length=24)
     voice_id: str
     tone: Optional[str] = "explainer"
+    speed: Optional[float] = Field(1.15, ge=0.7, le=1.2)
 
 
 @app.post("/motion/narrate")
@@ -514,7 +516,7 @@ async def motion_narrate(req: MotionNarrateRequest):
     from tts import generate_speech_timed
 
     async def one(text: str):
-        audio, words = await generate_speech_timed(text, req.voice_id, req.tone)
+        audio, words = await generate_speech_timed(text, req.voice_id, req.tone, speed=req.speed)
         return {"text": text, "audio_url": upload_audio_to_r2(audio), "words": words,
                 "duration": round(max((w["end"] for w in words), default=0.0), 3)}
     try:
