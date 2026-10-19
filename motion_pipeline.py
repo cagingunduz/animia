@@ -57,6 +57,9 @@ BUDGET_MIN = float(os.environ.get("MOTION_BUDGET_MIN", "0.20"))
 SEGMENT_MAX_SECONDS = 15.0
 
 PASS_SCORE = 8.0           # "ships" on the critic's scale
+# When the visual critic runs: "suspect" = only if layout QA saw something that might be visible
+# (a transient overlap, poor contrast, or unresolved problems); "always"; or "off".
+CRITIC_MODE = os.environ.get("MOTION_CRITIC_MODE", "suspect")
 REVISE_BELOW = float(os.environ.get("MOTION_REVISE_BELOW", "7.5"))
 MAX_RENDER_FIXES = 2
 MAX_DEFECT_FIXES = int(os.environ.get("MOTION_DEFECT_FIXES", "3"))  # layout-QA repair rounds (always run)
@@ -845,6 +848,22 @@ async def _upload_thumb(video: str, t: float, tmp: str, tag: str) -> str | None:
 
 
 
+def _suspicious(qa: dict) -> list[str]:
+    """QA findings worth a visual review. Mask overflow while words rise and elements sliding out
+    of frame are normal motion; anything passing over text, or unreadable contrast, is not."""
+    reasons = []
+    if not qa.get("ok"):
+        reasons.append(f"{len(qa.get('blocking', []))} unresolved layout problem(s)")
+    for h in qa.get("hints", []):
+        if h.get("code") in ("content_overlap", "text_occluded"):
+            reasons.append(f"{h['code']} at {h.get('time')}s ({h.get('text') or h.get('selector', '')})")
+        elif h.get("code") == "contrast_aa_failure":
+            m = re.search(r"([\d.]+):1", h.get("message", ""))
+            if m and float(m.group(1)) < 2.5:
+                reasons.append(f"low contrast {m.group(1)}:1 ({h.get('text', '')})")
+    return reasons
+
+
 async def _beat_thumbs(job_id: str, seg: dict, video: str, tmp: str):
     t = 0.0
     for b in seg["shots"]:
@@ -875,23 +894,28 @@ async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: 
             return {"ok": False}
 
     best = {"html": html, "video": video, "score": None, "review": None}
-    _seg_state(job_id, seg, status="reviewing")
-    try:
-        _say(job_id, "Critic", f"{label}: reviewing contact sheet, motion strip and phone test.")
-        review = await _critique(job_id, p, plan, seg, video, tmp, html, assets, qa=qa)
-        best.update(score=review["overall"], review=review)
-        _say(job_id, "Critic", f"{label}: {review['overall']:.1f}/10 — {review.get('verdict', '')}")
-        _seg_state(job_id, seg, score=round(review["overall"], 1), scores=review.get("scores", {}),
-                   issues=review.get("issues", [])[:6], attempts=1)
-    except OverBudget as e:
-        _say(job_id, "Critic", f"{label}: review skipped to stay within budget.")
-        print(f"[motion] {e}")
-        review = None
-    except BillingError:
-        raise
-    except Exception as e:
-        print(f"[motion] review failed: {e!r}")
-        review = None
+    reasons = _suspicious(qa)
+    review = None
+    if CRITIC_MODE == "off" or (CRITIC_MODE == "suspect" and not reasons):
+        _say(job_id, "Critic", f"{label}: layout QA is clean — no visual review needed.")
+    else:
+        _seg_state(job_id, seg, status="reviewing")
+        try:
+            _say(job_id, "Critic", f"{label}: reviewing frames" + (f" ({'; '.join(reasons[:2])})" if reasons else "") + ".")
+            review = await _critique(job_id, p, plan, seg, video, tmp, html, assets, qa=qa)
+            best.update(score=review["overall"], review=review)
+            _say(job_id, "Critic", f"{label}: {review['overall']:.1f}/10 — {review.get('verdict', '')}")
+            _seg_state(job_id, seg, score=round(review["overall"], 1), scores=review.get("scores", {}),
+                       issues=review.get("issues", [])[:6], attempts=1)
+        except OverBudget as e:
+            _say(job_id, "Critic", f"{label}: review skipped to stay within budget.")
+            print(f"[motion] {e}")
+            review = None
+        except BillingError:
+            raise
+        except Exception as e:
+            print(f"[motion] review failed: {e!r}")
+            review = None
 
     if review and review["overall"] < REVISE_BELOW and review.get("issues"):
         _seg_state(job_id, seg, status="revising")
