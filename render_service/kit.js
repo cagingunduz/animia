@@ -6,8 +6,18 @@
   const A = window.anime;
   const $$ = (sel) => (typeof sel === 'string' ? Array.from(document.querySelectorAll(sel)) : [].concat(sel));
 
+  // Time hooks: functions of the timeline's current time, re-run on every render/seek, so
+  // text driven by time (counters) is right whatever order the renderer seeks frames in.
+  function runHooks(tl) { const t = tl.currentTime; (tl._kHooks || []).forEach((h) => h(t)); }
+
   function timeline(defaults) {
-    const tl = A.createTimeline({ autoplay: false, defaults: Object.assign({ ease: 'outExpo', duration: 650 }, defaults || {}) });
+    const tl = A.createTimeline({
+      autoplay: false,
+      defaults: Object.assign({ ease: 'outExpo', duration: 650 }, defaults || {}),
+      onRender: () => runHooks(tl),
+      onUpdate: () => runHooks(tl),
+    });
+    tl._kHooks = [];
     window.__hfAnime = window.__hfAnime || [];
     window.__hfAnime.push(tl);
     return tl;
@@ -123,18 +133,34 @@
   }
 
   // Count a number up inside an element. fmt: 'int' | 'comma' | 'pct' | 'money' | function
+  // ease: 'linear' | 'outCubic' | 'inOutSine' | 'outExpo' | 'outQuad' | function(p) -> p'
+  const EASE = {
+    linear: (p) => p,
+    outQuad: (p) => 1 - (1 - p) * (1 - p),
+    outCubic: (p) => 1 - Math.pow(1 - p, 3),
+    outExpo: (p) => (p >= 1 ? 1 : 1 - Math.pow(2, -10 * p)),
+    inOutSine: (p) => -(Math.cos(Math.PI * p) - 1) / 2,
+  };
   function count(tl, sel, to, at, o) {
     o = o || {};
     const el = $$(sel)[0];
     if (!el) return;
-    const s = { v: o.from || 0 };
+    const from = o.from || 0;
+    const dur = o.duration || 1400;
+    const start = at || 0;
+    const ease = typeof o.ease === 'function' ? o.ease : (EASE[o.ease] || EASE.outCubic);
     const f = typeof o.fmt === 'function' ? o.fmt
       : o.fmt === 'pct' ? (v) => Math.round(v) + '%'
         : o.fmt === 'money' ? (v) => '$' + Math.round(v).toLocaleString('en-US')
           : o.fmt === 'int' ? (v) => String(Math.round(v))
             : (v) => Math.round(v).toLocaleString('en-US');
-    el.textContent = f(s.v);
-    tl.add(s, { v: [o.from || 0, to], duration: o.duration || 1400, ease: o.ease || 'outCubic', onUpdate: () => { el.textContent = f(s.v); } }, at || 0);
+    const render = (t) => {
+      const p = Math.min(1, Math.max(0, (t - start) / dur));
+      el.textContent = f(from + (to - from) * ease(p));
+    };
+    render(0);
+    (tl._kHooks = tl._kHooks || []).push(render);
+    tl.add({ k: 0 }, { k: 1, duration: dur, ease: 'linear' }, start);  // keeps the timeline long enough
   }
 
   // Draw SVG strokes (path/line/circle/polyline…).
