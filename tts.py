@@ -69,7 +69,31 @@ async def generate_speech(text: str, voice_id: str, tone: str = None, model: str
         return resp.content
 
 
+# ElevenLabs plans cap concurrent requests; keep narration calls under the cap.
+_TTS_SEM = None
+
+
+def _tts_sem():
+    global _TTS_SEM
+    if _TTS_SEM is None:
+        import asyncio
+        _TTS_SEM = asyncio.Semaphore(int(os.environ.get("ELEVENLABS_CONCURRENCY", "2")))
+    return _TTS_SEM
+
+
 async def generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None) -> tuple:
+    import asyncio
+    for attempt in range(4):
+        async with _tts_sem():
+            try:
+                return await _generate_speech_timed(text, voice_id, tone, model)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (429, 500, 502, 503) or attempt == 3:
+                    raise
+        await asyncio.sleep(1.5 * (attempt + 1))
+
+
+async def _generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None) -> tuple:
     """Narration + word timings in one call (ElevenLabs /with-timestamps, character alignment).
     Returns (mp3 bytes, [{"word", "start", "end"}] in seconds). Falls back to Whisper timings."""
     import base64
@@ -84,6 +108,8 @@ async def generate_speech_timed(text: str, voice_id: str, tone: str = None, mode
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}/with-timestamps",
                                  json=payload, headers=headers, params={"output_format": "mp3_44100_128"})
+    if resp.status_code in (429, 500, 502, 503):
+        resp.raise_for_status()
     if resp.status_code != 200:
         audio = await generate_speech(text, voice_id, tone, model)
         return audio, await get_word_timestamps(audio)
