@@ -1099,6 +1099,7 @@ async def run_motion_pipeline(job_id: str, p: dict):
                 vo = await motion_sound.narrate_first(plan["shots"], p["narrator_voice_id"], tmp)
                 motion_sound.retime(plan["shots"], vo)
                 total = round(sum(s["duration"] for s in plan["shots"]), 2)
+                b["limit"] = round(max(BUDGET_MIN, BUDGET_PER_SECOND * total), 3)  # the voice set the length
                 j["shots"] = [{**row, "duration": next(s["duration"] for s in plan["shots"] if s["n"] == row["n"])}
                               for row in j["shots"]]
                 _say(job_id, "Sound designer", f"Narration recorded: {total:.1f}s; beats re-timed to the voice.")
