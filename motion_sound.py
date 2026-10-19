@@ -21,20 +21,23 @@ from tts import generate_speech
 
 SFX_VERSION = "v1"
 
-# kind -> (ElevenLabs prompt, seconds, gain dB, minimum gap to the previous cue of the same kind in ms)
+# kind -> (ElevenLabs prompt, seconds, gain dB relative to a normalised source,
+#          minimum gap to the previous cue of the same kind in ms)
 SFX_LIBRARY = {
-    "rise":  ("quick soft airy whoosh, clean modern UI motion design, very short", 0.8, -14, 250),
-    "soft":  ("very soft subtle swish of air, gentle, delicate UI movement", 0.6, -22, 500),
-    "out":   ("fast soft swoosh out, airy clean transition", 0.7, -15, 300),
-    "pop":   ("soft rounded bubble pop, clean UI notification, short", 0.5, -12, 90),
-    "grow":  ("short smooth rising slide, soft synth swell, UI element growing", 0.8, -17, 200),
-    "swipe": ("clean quick paper swipe", 0.6, -16, 250),
-    "count": ("fast soft digital ticking, counter numbers rolling up, clean UI", 3.5, -18, 400),
-    "draw":  ("smooth marker pen drawing a long line on paper", 3.5, -16, 400),
-    "type":  ("light keyboard typing, a few quick soft keystrokes", 1.5, -14, 300),
-    "impact": ("soft deep cinematic thump, subtle", 0.9, -12, 400),
-    "chime": ("bright warm positive notification chime, short", 1.0, -14, 400),
+    "rise":  ("quick soft airy whoosh, clean modern UI motion design, very short", 0.8, -9, 250),
+    "soft":  ("very soft subtle swish of air, gentle, delicate UI movement", 0.6, -15, 500),
+    "out":   ("fast soft swoosh out, airy clean transition", 0.7, -10, 300),
+    "pop":   ("soft rounded bubble pop, clean UI notification, short", 0.5, -7, 90),
+    "grow":  ("short smooth rising slide, soft synth swell, UI element growing", 0.8, -12, 200),
+    "swipe": ("clean quick paper swipe", 0.6, -11, 250),
+    "count": ("fast soft digital ticking, counter numbers rolling up, clean UI", 3.5, -13, 400),
+    "draw":  ("smooth marker pen drawing a long line on paper", 3.5, -12, 400),
+    "type":  ("light keyboard typing, a few quick soft keystrokes", 1.5, -10, 300),
+    "impact": ("soft deep cinematic thump, subtle", 0.9, -7, 400),
+    "chime": ("bright warm positive notification chime, short", 1.0, -10, 400),
 }
+SFX_TARGET_DB = -16.0    # mean level every effect is normalised to before its gain
+VOICE_TARGET_DB = -17.0  # mean level of the narration
 # Cues that fall this close to a stronger cue are dropped so the mix doesn't get busy.
 BUSY_MS = 220
 PRIORITY = {"impact": 0, "pop": 1, "count": 2, "draw": 2, "type": 2, "rise": 3, "out": 3,
@@ -133,6 +136,7 @@ async def narrate(lines: list[dict], voice_id: str, tmp: str) -> list[dict]:
         if isinstance(p, Exception):
             print(f"[motion sound] narration failed: {p}")
             continue
+        p = normalize(p, VOICE_TARGET_DB)
         dur = probe(p)
         start = max(ln["start"] + 0.12, cursor + 0.15)
         room = ln["start"] + ln["window"] - start
@@ -140,6 +144,27 @@ async def narrate(lines: list[dict], voice_id: str, tmp: str) -> list[dict]:
         out.append({"path": p, "start": start, "tempo": tempo})
         cursor = start + dur / tempo
     return out
+
+
+def normalize(path: str, target_db: float) -> str:
+    """Bring a clip to a target mean level (peak-safe), in place. Library clips from ElevenLabs
+    vary by 15 dB, so gains only mean something after this."""
+    r = subprocess.run(["ffmpeg", "-v", "info", "-i", path, "-af", "volumedetect", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    import re as _re
+    mean = _re.search(r"mean_volume: (-?[\d.]+) dB", r.stderr)
+    peak = _re.search(r"max_volume: (-?[\d.]+) dB", r.stderr)
+    if not mean or not peak:
+        return path
+    gain = min(target_db - float(mean.group(1)), -1.0 - float(peak.group(1)))
+    if abs(gain) < 0.5:
+        return path
+    tmp = path + ".norm.wav"
+    ok = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-af", f"volume={gain:.2f}dB", tmp]).returncode == 0
+    if ok:
+        os.replace(tmp, path + ".wav")
+        return path + ".wav"
+    return path
 
 
 def probe(path: str) -> float:
@@ -157,7 +182,7 @@ async def fetch_library(kinds: set, tmp: str) -> dict:
     for kind, url in zip(sorted(kinds), urls):
         p = os.path.join(tmp, f"sfx_{kind}.mp3")
         if url and await _download(url, p):
-            files[kind] = p
+            files[kind] = normalize(p, SFX_TARGET_DB)
     return files
 
 
@@ -208,7 +233,8 @@ def mix(video: str, out: str, total: float, events: list[dict], sfx_files: dict,
         chains.append("[ducked][vo2]amix=inputs=2:normalize=0:duration=longest[pre]")
     else:
         chains.append(f"{'[bus]' if sfx_labels else '[vo]'}anull[pre]")
-    chains.append(f"[pre]apad,atrim=0:{total:.2f},alimiter=limit=0.95[a]")
+    # social-media loudness (≈ -16 LUFS), true-peak safe
+    chains.append(f"[pre]apad,atrim=0:{total:.2f},loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100,alimiter=limit=0.89[a]")
     r = subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", ";".join(chains),
                         "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                         "-shortest", out], capture_output=True, text=True)
