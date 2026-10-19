@@ -98,9 +98,22 @@ exact time, captures pixels, and moves on. Nothing plays in real time.
    performance.now, no requestAnimationFrame, no setTimeout/setInterval, no fetch/XHR,
    no event listeners, no video/audio elements. No external images or scripts.
 7. Fonts: Google Fonts via <link href="https://fonts.googleapis.com/css2?family=...&display=block" rel="stylesheet">
-   (display=block). Always give a fallback stack. Icons and illustrations: inline SVG.
-   Only the image files you are told about exist (e.g. assets/logo.png).
-8. Animate transform/opacity/clip-path/stroke where possible; avoid animating
+   (display=block). Always give a fallback stack. Only the image files you are told about
+   exist (e.g. assets/logo.png).
+8. ICONS: never draw icons, pictograms or symbols with SVG paths. Write
+   <i data-icon="NAME"></i> with a Lucide icon name (coins, wallet, piggy-bank, banknote,
+   chart-line, chart-column, trending-up, rocket, zap, sparkles, lightbulb, target, check,
+   circle-check, shield-check, lock, users, user, clock, calendar, globe, heart, star, mail,
+   message-circle, search, settings, play, arrow-right, …). It becomes a crisp SVG; size it
+   with font-size, colour it with color, thinner lines with data-stroke="1.5". Animate it
+   like any element (class/id on the <i>). Hand-written SVG is only for charts, lines and
+   simple geometry (circle, rect, rounded rect).
+9. LAYOUT: group related elements in flex/grid containers; never stack independent text
+   boxes at absolute positions that can collide. Elements that wait to enter must be hidden
+   (opacity 0) until they enter. If an overlap is deliberate (a label on a shape), put
+   data-layout-allow-overlap on that element. An automated QA rejects any visible overlap,
+   clipped or overflowing text, and unknown icon names.
+10. Animate transform/opacity/clip-path/stroke where possible; avoid animating
    width/height/top/left. Use transforms in px or %, rotate in deg.
 
 === CRAFT STANDARD (a ruthless critic scores you; 8/10 ships) ===
@@ -194,3 +207,13 @@ List at most 6 issues, most damaging first. If it ships (≥ 8), issues may be e
 EDIT_NOTE = """Return the SMALLEST set of exact find/replace edits that fixes the problems, using the
 apply_edits tool. Each `find` must be copied verbatim from the current HTML and be unique in
 it; `replace` is its new text. Never rewrite the whole file. Keep everything that works."""
+
+
+DEFECT_NOTE = """Automated layout QA inspected every animation start/end of this composition and found
+the problems below (times in seconds, CSS selectors of the elements involved). Fix EVERY one:
+give colliding blocks their own zones (flex/grid, spacing, smaller size, different timing),
+keep text inside its container and the safe area, keep elements at opacity 0 until they enter,
+replace unknown icon names with one of the suggested Lucide names, and only if an overlap is
+truly intended (a label sitting on a shape) add data-layout-allow-overlap to that element.
+PROBLEMS:
+"""

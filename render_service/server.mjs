@@ -8,6 +8,11 @@
 //   POST /lint      { files, binary_files? }                       -> { ok, findings }
 //   POST /render    { files, binary_files?, quality?, fps? }        -> video/mp4  (422 JSON on failure)
 //   POST /snapshot  { files, binary_files?, at: [seconds] }         -> { frames: [{ at, png }] }
+//   POST /check     { files, binary_files? }                        -> { ok, blocking, hints }  (layout QA)
+//
+// Icons: <i data-icon="lucide-name" class="…" style="…"></i> is replaced by the Lucide SVG
+// (ISC) before anything runs, so the model never hand-draws pictograms. Unknown names fail
+// lint with the closest real names.
 //
 // `files` maps project-relative paths to text (index.html, compositions/*.html, …);
 // `binary_files` maps paths to base64 (logos, reference stills).
@@ -27,6 +32,54 @@ const TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
 const MAX_BODY = 40 * 1024 * 1024;
 const HF_BIN = path.join(HERE, 'node_modules', '.bin', 'hyperframes');
 const ANIME_JS = path.join(HERE, 'node_modules', 'animejs', 'dist', 'bundles', 'anime.umd.min.js');
+const ICON_DIR = path.join(HERE, 'node_modules', 'lucide-static', 'icons');
+let ICON_TAGS = {};
+try { ICON_TAGS = JSON.parse(await readFile(path.join(HERE, 'node_modules', 'lucide-static', 'tags.json'), 'utf8')); } catch { /* optional */ }
+const ICON_NAMES = Object.keys(ICON_TAGS);
+const iconCache = new Map();
+
+async function iconSvg(name) {
+  if (iconCache.has(name)) return iconCache.get(name);
+  let svg = null;
+  if (/^[a-z0-9-]+$/.test(name)) {
+    try { svg = (await readFile(path.join(ICON_DIR, `${name}.svg`), 'utf8')).replace(/<!--[\s\S]*?-->/g, '').trim(); } catch { /* unknown */ }
+  }
+  iconCache.set(name, svg);
+  return svg;
+}
+
+function suggestIcons(name) {
+  const words = name.split('-').filter(Boolean);
+  const score = n => {
+    let sc = 0;
+    if (n.includes(name)) sc += 5;
+    for (const w of words) {
+      if (n.split('-').includes(w)) sc += 3;
+      if ((ICON_TAGS[n] || []).some(t => t.includes(w))) sc += 1;
+    }
+    return sc;
+  };
+  return ICON_NAMES.map(n => [n, score(n)]).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 6).map(x => x[0]);
+}
+
+// <i data-icon="name" …></i>  ->  inline Lucide <svg>, keeping class/style/id and data-* attributes.
+async function inlineIcons(html, unknown) {
+  const re = /<i\b([^>]*?)\bdata-icon=["']([^"']+)["']([^>]*)>\s*<\/i>/gi;
+  const jobs = [];
+  html.replace(re, (m, a, name, b) => { jobs.push([m, a + ' ' + b, name.trim()]); return m; });
+  for (const [m, attrs, name] of jobs) {
+    const svg = await iconSvg(name);
+    if (!svg) { unknown.add(name); continue; }
+    const cls = (attrs.match(/\bclass=["']([^"']*)["']/i) || [])[1] || '';
+    const keep = (attrs.match(/\b(?:id|style|data-[\w-]+)=["'][^"']*["']/gi) || []).join(' ');
+    const sw = (attrs.match(/\bdata-stroke=["']([\d.]+)["']/i) || [])[1];
+    let out = svg.replace(/class="lucide lucide-[^"]*"/, `class="lucide icon ${cls}" data-icon-name="${name}" ${keep}`)
+      .replace(/\s(width|height)="24"/g, '');
+    if (sw) out = out.replace(/stroke-width="2"/, `stroke-width="${sw}"`);
+    html = html.replace(m, out);
+  }
+  return html;
+}
 
 // The child process only ever sees these variables.
 const CHILD_ENV = {
@@ -80,10 +133,12 @@ async function writeProject(body) {
   const files = body.files || {};
   if (!files['index.html']) throw new Error('files["index.html"] is required');
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'hf-')));
+  const unknownIcons = new Set();
   for (const [rel, content] of Object.entries(files)) {
     const dest = path.join(dir, safeRel(rel));
     await mkdir(path.dirname(dest), { recursive: true });
-    await writeFile(dest, String(content));
+    const text = String(content);
+    await writeFile(dest, rel.endsWith('.html') ? await inlineIcons(text, unknownIcons) : text);
   }
   for (const [rel, b64] of Object.entries(body.binary_files || {})) {
     const dest = path.join(dir, safeRel(rel));
@@ -95,12 +150,12 @@ async function writeProject(body) {
   await copyFile(ANIME_JS, path.join(dir, 'lib', 'anime.umd.min.js'));
   await copyFile(path.join(HERE, 'kit.js'), path.join(dir, 'lib', 'kit.js'));
   await copyFile(path.join(HERE, 'kit.css'), path.join(dir, 'lib', 'kit.css'));
-  return dir;
+  return { dir, unknownIcons: [...unknownIcons] };
 }
 
 function tail(s, n = 6000) { return s.length > n ? s.slice(-n) : s; }
 
-async function lint(dir) {
+async function lint(dir, unknownIcons = []) {
   const { code, out } = await run(['lint', '.', '--json'], dir);
   let parsed = null;
   try { parsed = JSON.parse(out.slice(out.indexOf('{'))); } catch { /* not json */ }
@@ -108,38 +163,42 @@ async function lint(dir) {
     code: f.code, severity: f.severity, message: f.message, fixHint: f.fixHint,
     file: f.file ? path.relative(dir, f.file) : undefined,
   }));
-  const ok = parsed ? parsed.ok === true : code === 0;
+  for (const name of unknownIcons) {
+    findings.push({
+      code: 'unknown_icon', severity: 'error', message: `Icon "${name}" does not exist in Lucide.`,
+      fixHint: `Use one of: ${suggestIcons(name).join(', ') || 'a different Lucide icon name'}`,
+    });
+  }
+  const ok = (parsed ? parsed.ok === true : code === 0) && unknownIcons.length === 0;
   return { ok, findings, raw: parsed ? undefined : tail(out) };
 }
 
-async function handleLint(body) {
-  const dir = await writeProject(body);
-  try { return { status: 200, json: await lint(dir) }; }
+async function withProject(body, fn) {
+  const { dir, unknownIcons } = await writeProject(body);
+  try { return await fn(dir, unknownIcons); }
   finally { rm(dir, { recursive: true, force: true }).catch(() => {}); }
 }
 
-async function handleRender(body) {
-  const dir = await writeProject(body);
-  try {
-    const l = await lint(dir);
-    if (!l.ok) return { status: 422, json: { error: 'lint failed', stage: 'lint', findings: l.findings, log: l.raw } };
-    const out = path.join(dir, 'out.mp4');
-    const quality = ['draft', 'standard', 'high'].includes(body.quality) ? body.quality : 'standard';
-    const args = ['render', '.', '--output', out, '--quality', quality, '--workers', '1'];
-    if (body.fps) args.push('--fps', String(Math.max(1, Math.min(60, Number(body.fps) || 30))));
-    const r = await run(args, dir);
-    let video = null;
-    try { video = await readFile(out); } catch { /* missing */ }
-    if (r.code !== 0 || !video) return { status: 422, json: { error: 'render failed', stage: 'render', log: tail(r.out) } };
-    return { status: 200, binary: video, type: 'video/mp4' };
-  } finally { rm(dir, { recursive: true, force: true }).catch(() => {}); }
-}
+const handleLint = body => withProject(body, async (dir, unknown) => ({ status: 200, json: await lint(dir, unknown) }));
 
-async function handleSnapshot(body) {
+const handleRender = body => withProject(body, async (dir, unknown) => {
+  const l = await lint(dir, unknown);
+  if (!l.ok) return { status: 422, json: { error: 'lint failed', stage: 'lint', findings: l.findings, log: l.raw } };
+  const out = path.join(dir, 'out.mp4');
+  const quality = ['draft', 'standard', 'high'].includes(body.quality) ? body.quality : 'standard';
+  const args = ['render', '.', '--output', out, '--quality', quality, '--workers', '1'];
+  if (body.fps) args.push('--fps', String(Math.max(1, Math.min(60, Number(body.fps) || 30))));
+  const r = await run(args, dir);
+  let video = null;
+  try { video = await readFile(out); } catch { /* missing */ }
+  if (r.code !== 0 || !video) return { status: 422, json: { error: 'render failed', stage: 'render', log: tail(r.out) } };
+  return { status: 200, binary: video, type: 'video/mp4' };
+});
+
+const handleSnapshot = body => {
   const at = (Array.isArray(body.at) ? body.at : []).map(Number).filter(n => Number.isFinite(n) && n >= 0).slice(0, 24);
   if (!at.length) return { status: 400, json: { error: 'at: [seconds] required' } };
-  const dir = await writeProject(body);
-  try {
+  return withProject(body, async dir => {
     const outDir = path.join(dir, 'snaps');
     const r = await run(['snapshot', '.', '--at', at.join(','), '--no-end', '--output', outDir, '--describe', 'false'], dir);
     let names = [];
@@ -150,10 +209,43 @@ async function handleSnapshot(body) {
       frames.push({ at: at[i] ?? null, png: (await readFile(path.join(outDir, names[i]))).toString('base64') });
     }
     return { status: 200, json: { frames } };
-  } finally { rm(dir, { recursive: true, force: true }).catch(() => {}); }
-}
+  });
+};
 
-const ROUTES = { '/lint': handleLint, '/render': handleRender, '/snapshot': handleSnapshot };
+// Layout QA without rendering: HyperFrames `check` samples every tween start/end and reports
+// overlaps, overflow, clipping, occlusion and contrast. Held (≥ ~0.5 s) problems block.
+const QA_KEYS = ['code', 'severity', 'time', 'firstSeen', 'lastSeen', 'heldMs', 'selector', 'containerSelector', 'text', 'message', 'fixHint'];
+const slim = f => Object.fromEntries(QA_KEYS.filter(k => f[k] !== undefined).map(k => [k, typeof f[k] === 'number' ? Math.round(f[k] * 100) / 100 : f[k]]));
+
+const handleCheck = body => withProject(body, async (dir, unknown) => {
+  const l = await lint(dir, unknown);
+  if (!l.ok) {
+    return { status: 200, json: { ok: false, blocking: l.findings.filter(f => f.severity === 'error'), hints: [], stage: 'lint' } };
+  }
+  const { out } = await run(['check', '.', '--json', '--at-transitions', '--frame-check', '--max-issues', '200'], dir);
+  let d = null;
+  try { d = JSON.parse(out.slice(out.indexOf('{'))); } catch { /* not json */ }
+  if (!d) return { status: 200, json: { ok: false, blocking: [{ code: 'check_failed', severity: 'error', message: tail(out, 1500) }], hints: [] } };
+  const all = [];
+  for (const sec of ['runtime', 'layout', 'motion', 'contrast']) {
+    const v = d[sec];
+    for (const f of (Array.isArray(v) ? v : v?.findings || [])) all.push({ ...f, section: sec });
+  }
+  const blocking = [], hints = [];
+  for (const f of all) {
+    const held = (f.heldMs ?? 0) >= 500;
+    const isBlocking = f.section === 'runtime'
+      || (f.section === 'layout' && f.severity === 'error')
+      || (f.section === 'layout' && ['content_overlap', 'text_occluded', 'text_box_overflow'].includes(f.code) && held);
+    (isBlocking ? blocking : hints).push({ ...slim(f), section: f.section });
+  }
+  const seen = new Set();
+  const dedupe = list => list.filter(f => { const k = `${f.code}|${f.selector}|${f.containerSelector}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  const b = dedupe(blocking);
+  return { status: 200, json: { ok: b.length === 0, blocking: b.slice(0, 25), hints: dedupe(hints).filter(h => h.code !== 'canvas_overflow').slice(0, 15) } };
+});
+
+const ROUTES = { '/lint': handleLint, '/render': handleRender, '/snapshot': handleSnapshot, '/check': handleCheck };
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

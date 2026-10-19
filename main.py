@@ -492,7 +492,8 @@ async def motion_status(job_id: str):
     if not job or job.get("kind") != "motion":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "plan", "shots", "gate", "activity",
-            "style_frame_url", "final_video_url", "average_score", "usage", "aspect_ratio", "resolution", "error"]
+            "style_frame_url", "final_video_url", "average_score", "usage", "aspect_ratio", "resolution", "error",
+            "qa_problems", "segments", "budget"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 

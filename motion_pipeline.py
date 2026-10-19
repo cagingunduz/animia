@@ -37,7 +37,7 @@ import httpx
 from jobs import job_store
 from storybook_pipeline import upload_bytes_to_r2, download_file
 from motion_prompts import (DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM,
-                            EDIT_NOTE)
+                            EDIT_NOTE, DEFECT_NOTE)
 
 # Model per crew role — switchable from Railway without a deploy.
 _DEFAULT_MODEL = os.environ.get("MOTION_MODEL", "claude-opus-5-5")
@@ -59,6 +59,7 @@ SEGMENT_MAX_SECONDS = 15.0
 PASS_SCORE = 8.0           # "ships" on the critic's scale
 REVISE_BELOW = float(os.environ.get("MOTION_REVISE_BELOW", "7.5"))
 MAX_RENDER_FIXES = 2
+MAX_DEFECT_FIXES = int(os.environ.get("MOTION_DEFECT_FIXES", "3"))  # layout-QA repair rounds (always run)
 FPS = 30
 
 FONT_FILE = next((p for p in (
@@ -547,8 +548,72 @@ async def _edit(job_id: str, ctx: list, html: str, problem: str, optional: bool 
     return new if applied else None
 
 
-async def _render(job_id: str, label: str, html: str, assets: dict, out_path: str, ctx: list) -> tuple[str, bool]:
-    """Render; on lint/render errors ask for small fixes (budget permitting)."""
+async def _qa(html: str, assets: dict) -> dict:
+    """Layout QA on the render service (no tokens): overlaps, overflow, clipping, unknown icons."""
+    try:
+        r = await _render_call("/check", _project(html, assets), timeout=300)
+        if r.status_code == 200:
+            return r.json()
+        print(f"[motion] QA unavailable: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"[motion] QA unavailable: {e!r}")
+    return {"ok": True, "blocking": [], "hints": [], "unavailable": True}
+
+
+async def _fix_defects(job_id: str, label: str, html: str, assets: dict,
+                       ctx: list | None = None, seconds: float | None = None) -> tuple[str, dict]:
+    """Zero-defect gate: QA → targeted edits until no blocking problem remains. These fixes
+    always run (quality beats the cost ceiling), but each is a small find/replace edit."""
+    qa = await _qa(html, assets)
+    for _ in range(MAX_DEFECT_FIXES):
+        if qa.get("ok"):
+            break
+        n = len(qa.get("blocking", []))
+        _say(job_id, "Render engineer", f"{label}: QA found {n} layout problem(s) — fixing them.")
+        try:
+            fixed = await _edit(job_id, [], html, DEFECT_NOTE + json.dumps(qa["blocking"][:12], ensure_ascii=False),
+                                optional=False)
+        except BillingError:
+            raise
+        except Exception as e:
+            print(f"[motion] defect fix failed: {e!r}")
+            break
+        if not fixed:
+            continue
+        new_qa = await _qa(fixed, assets)
+        if len(new_qa.get("blocking", [])) <= n:
+            html, qa = fixed, new_qa
+    if not qa.get("ok") and ctx is not None and seconds:
+        # Last resort: rewrite the composition with the QA findings as constraints.
+        _say(job_id, "Animator", f"{label}: rewriting the layout so nothing collides.")
+        try:
+            text = await _claude(job_id, ANIMATOR_SYSTEM, [*ctx, {"type": "text", "text":
+                "A previous version failed automated layout QA with these problems:\n"
+                + json.dumps(qa["blocking"][:12], ensure_ascii=False)
+                + "\nWrite this segment again from scratch with a layout where none of this can happen "
+                  "(own zones per element, flex/grid groups, hidden until entering)."}],
+                max_tokens=_animator_max_out(seconds), role="animator")
+            fresh = _extract_html(text)
+            fresh_qa = await _qa(fresh, assets)
+            if len(fresh_qa.get("blocking", [])) < len(qa.get("blocking", [])):
+                html, qa = fresh, fresh_qa
+        except BillingError:
+            raise
+        except Exception as e:
+            print(f"[motion] rewrite failed: {e!r}")
+    if qa.get("ok"):
+        if not qa.get("unavailable"):
+            _say(job_id, "Render engineer", f"{label}: layout QA passed — no overlaps, overflow or broken icons.")
+    else:
+        _say(job_id, "Render engineer", f"{label}: {len(qa.get('blocking', []))} layout problem(s) remain after fixes.")
+        _job(job_id).setdefault("qa_problems", []).append({"label": label, "problems": qa.get("blocking", [])[:5]})
+    return html, qa
+
+
+async def _render(job_id: str, label: str, html: str, assets: dict, out_path: str, ctx: list,
+                  seconds: float | None = None) -> tuple[str, bool, dict]:
+    """Zero-defect QA, then render; on lint/render errors ask for small fixes (budget permitting)."""
+    html, qa = await _fix_defects(job_id, label, html, assets, ctx, seconds)
     for attempt in range(MAX_RENDER_FIXES + 1):
         problems = _static_problems(html)
         if not problems:
@@ -556,7 +621,7 @@ async def _render(job_id: str, label: str, html: str, assets: dict, out_path: st
             if r.status_code == 200 and r.content:
                 with open(out_path, "wb") as f:
                     f.write(r.content)
-                return html, True
+                return html, True, qa
             try:
                 error = json.dumps(r.json())[:4000]
             except Exception:
@@ -574,7 +639,7 @@ async def _render(job_id: str, label: str, html: str, assets: dict, out_path: st
         if not fixed:
             break
         html = fixed
-    return html, False
+    return html, False, qa
 
 
 # ─────────────────────────── crew ───────────────────────────
@@ -715,7 +780,7 @@ async def _animate(job_id: str, ctx: list, seconds: float, mandatory_slot: float
 
 
 async def _critique(job_id: str, p: dict, plan: dict, seg: dict, video: str, tmp: str,
-                    html: str, assets: dict, loop_pair: bytes | None = None) -> dict:
+                    html: str, assets: dict, loop_pair: bytes | None = None, qa: dict | None = None) -> dict:
     aspect = p.get("aspect_ratio", "16:9")
     d = seg["duration"]
     base = os.path.join(tmp, f"crit_{seg['n']}_{int(time.time() * 1000)}")
@@ -725,6 +790,10 @@ async def _critique(job_id: str, p: dict, plan: dict, seg: dict, video: str, tmp
     _frame_at(video, d * 0.7, phone, _phone_size(aspect))
 
     notes = []
+    if qa and qa.get("blocking"):
+        notes.append(f"LAYOUT QA FAILED ({len(qa['blocking'])} problems): " + json.dumps(qa["blocking"][:6], ensure_ascii=False))
+    if qa and qa.get("hints"):
+        notes.append("QA hints (transient, check them in the frames): " + json.dumps(qa["hints"][:6], ensure_ascii=False))
     try:  # determinism: the same frame rendered twice must be byte-identical (no tokens)
         t = round(d * 0.55, 2)
         a, b = await asyncio.gather(_snapshot(html, assets, [t]), _snapshot(html, assets, [t]))
@@ -757,6 +826,8 @@ async def _critique(job_id: str, p: dict, plan: dict, seg: dict, video: str, tmp
         review["overall"] = float(review.get("overall", 0))
     except (TypeError, ValueError):
         review["overall"] = 0.0
+    if qa and qa.get("blocking"):
+        review["overall"] = min(review["overall"], 6.0)
     if any(n.startswith("DETERMINISM") for n in notes):
         review["overall"] = min(review["overall"], 6.0)
         review.setdefault("issues", []).insert(0, {"t": None, "problem": notes[0], "fix": "Remove clock/randomness use."})
@@ -791,14 +862,14 @@ async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: 
     ctx = _animator_ctx(p, plan, seg, n_segs, anchor_html)
     slot = _job(job_id)["budget"]["slots"].get(seg["n"], 0.0)
     if first:
-        html, video = first
+        html, video, qa = first
     else:
         _seg_state(job_id, seg, status="animating")
         _say(job_id, "Animator", f"{label}: writing the animation code.")
         html = await _animate(job_id, ctx, seg["duration"], slot)
         _seg_state(job_id, seg, status="rendering")
         video = os.path.join(tmp, f"seg_{seg['n']}_v1.mp4")
-        html, ok = await _render(job_id, label, html, assets, video, ctx)
+        html, ok, qa = await _render(job_id, label, html, assets, video, ctx, seg["duration"])
         if not ok:
             _seg_state(job_id, seg, status="failed")
             return {"ok": False}
@@ -807,7 +878,7 @@ async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: 
     _seg_state(job_id, seg, status="reviewing")
     try:
         _say(job_id, "Critic", f"{label}: reviewing contact sheet, motion strip and phone test.")
-        review = await _critique(job_id, p, plan, seg, video, tmp, html, assets)
+        review = await _critique(job_id, p, plan, seg, video, tmp, html, assets, qa=qa)
         best.update(score=review["overall"], review=review)
         _say(job_id, "Critic", f"{label}: {review['overall']:.1f}/10 — {review.get('verdict', '')}")
         _seg_state(job_id, seg, score=round(review["overall"], 1), scores=review.get("scores", {}),
@@ -832,12 +903,13 @@ async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: 
             if fixed:
                 out2 = os.path.join(tmp, f"seg_{seg['n']}_v2.mp4")
                 _seg_state(job_id, seg, status="rendering")
-                fixed, ok = await _render(job_id, label, fixed, assets, out2, ctx)
-                if ok:
+                fixed, ok, qa2 = await _render(job_id, label, fixed, assets, out2, ctx)  # no rewrite for a revision
+                # never trade a clean layout for a revision that still has defects
+                if ok and (qa2.get("ok") or not qa.get("ok")):
                     best.update(html=fixed, video=out2)
                     _seg_state(job_id, seg, attempts=2)
                     try:  # re-score only if the budget still allows it
-                        r2 = await _critique(job_id, p, plan, seg, out2, tmp, fixed, assets)
+                        r2 = await _critique(job_id, p, plan, seg, out2, tmp, fixed, assets, qa=qa2)
                         best.update(score=r2["overall"], review=r2)
                         _seg_state(job_id, seg, score=round(r2["overall"], 1), scores=r2.get("scores", {}),
                                    issues=r2.get("issues", [])[:6])
@@ -1027,7 +1099,7 @@ async def run_motion_pipeline(job_id: str, p: dict):
             _say(job_id, "Animator", "Designing the style frame.")
             anchor = await _animate(job_id, ctx1, first["duration"], b["slots"].pop(first["n"]))
             probe = os.path.join(tmp, "seg_1_v1.mp4")
-            anchor, ok = await _render(job_id, "Style frame", anchor, assets, probe, ctx1)
+            anchor, ok, anchor_qa = await _render(job_id, "Style frame", anchor, assets, probe, ctx1, first["duration"])
             if not ok:
                 raise RuntimeError("the first segment could not be rendered")
             for _ in range(2):
@@ -1043,9 +1115,11 @@ async def run_motion_pipeline(job_id: str, p: dict):
                     fixed = await _edit(job_id, ctx1, anchor, "The client reviewed the style frame. Their notes:\n"
                                         + (resp.get("feedback") or "Make it better."), optional=True)
                     if fixed:
-                        fixed, ok = await _render(job_id, "Style frame", fixed, assets, probe, ctx1)
-                        if ok:
-                            anchor = fixed
+                        probe2 = os.path.join(tmp, "seg_1_v1b.mp4")
+                        fixed, ok, fixed_qa = await _render(job_id, "Style frame", fixed, assets, probe2, ctx1)
+                        if ok and (fixed_qa.get("ok") or not anchor_qa.get("ok")):
+                            anchor, anchor_qa = fixed, fixed_qa
+                            os.replace(probe2, probe)
                 except OverBudget:
                     _say(job_id, "Animator", "The revision budget for this video is used up — continuing with this look.")
                     break
@@ -1053,7 +1127,7 @@ async def run_motion_pipeline(job_id: str, p: dict):
             # ── 4. Every segment: animate, render, critique, targeted fix ──
             _stage(job_id, "animating", 4)
             _say(job_id, "Director", "Style approved. The crew is animating.")
-            tasks = [_produce_segment(job_id, p, plan, first, len(segs), assets, tmp, None, first=(anchor, probe))]
+            tasks = [_produce_segment(job_id, p, plan, first, len(segs), assets, tmp, None, first=(anchor, probe, anchor_qa))]
             for s in segs[1:]:
                 tasks.append(_produce_segment(job_id, p, plan, s, len(segs), assets, tmp, anchor))
             results = await asyncio.gather(*tasks, return_exceptions=True)

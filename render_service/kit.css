@@ -6,3 +6,4 @@ html, body { margin: 0; }
 .k-w { display: inline-block; }
 .k-c { display: inline-block; white-space: pre; }
 .k-grain { position: absolute; inset: 0; pointer-events: none; z-index: 50; }
+.lucide.icon { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; flex-shrink: 0; }
