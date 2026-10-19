@@ -71,6 +71,7 @@ class GenerateRequest(BaseModel):
 class TTSTestRequest(BaseModel):
     text: str
     voice_id: str
+    tone: Optional[str] = None
 
 
 class GenerateCharacterRequest(BaseModel):
@@ -317,7 +318,7 @@ async def voices():
 @app.post("/tts-test")
 async def tts_test(req: TTSTestRequest):
     try:
-        audio_bytes = await generate_speech(req.text, req.voice_id)
+        audio_bytes = await generate_speech(req.text, req.voice_id, req.tone)
         audio_url = upload_audio_to_r2(audio_bytes)
         return {"audio_url": audio_url}
     except Exception as e:

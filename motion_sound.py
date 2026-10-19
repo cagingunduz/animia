@@ -36,8 +36,9 @@ SFX_LIBRARY = {
     "impact": ("soft deep cinematic thump, subtle", 0.9, -7, 400),
     "chime": ("bright warm positive notification chime, short", 1.0, -10, 400),
 }
-SFX_TARGET_DB = -16.0    # mean level every effect is normalised to before its gain
-VOICE_TARGET_DB = -17.0  # mean level of the narration
+SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain
+VOICE_TARGET_LUFS = -18.0  # integrated loudness of every narration line
+MASTER_LUFS = -16.0        # final mix (social media), applied as ONE static gain
 # Cues that fall this close to a stronger cue are dropped so the mix doesn't get busy.
 BUSY_MS = 220
 PRIORITY = {"impact": 0, "pop": 1, "count": 2, "draw": 2, "type": 2, "rise": 3, "out": 3,
@@ -121,7 +122,7 @@ def plan_events(cues: list[dict]) -> list[dict]:
 async def narrate(lines: list[dict], voice_id: str, tmp: str) -> list[dict]:
     """lines: [{start (s), window (s), text, tone?}] -> [{path, start, tempo}] scheduled without overlaps."""
     async def one(i, ln):
-        data = await generate_speech(ln["text"], voice_id, ln.get("tone"))
+        data = await generate_speech(ln["text"], voice_id, ln.get("tone") or "explainer")
         p = os.path.join(tmp, f"vo_{i}.mp3")
         open(p, "wb").write(data)
         return p
@@ -136,7 +137,7 @@ async def narrate(lines: list[dict], voice_id: str, tmp: str) -> list[dict]:
         if isinstance(p, Exception):
             print(f"[motion sound] narration failed: {p}")
             continue
-        p = normalize(p, VOICE_TARGET_DB)
+        p = normalize_voice(p, VOICE_TARGET_LUFS)
         dur = probe(p)
         start = max(ln["start"] + 0.12, cursor + 0.15)
         room = ln["start"] + ln["window"] - start
@@ -165,6 +166,31 @@ def normalize(path: str, target_db: float) -> str:
         os.replace(tmp, path + ".wav")
         return path + ".wav"
     return path
+
+
+def loudness(path: str) -> tuple[float | None, float | None]:
+    """(integrated LUFS, true peak dBTP) of a file."""
+    import re as _re
+    r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", path, "-af", "ebur128=peak=true", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    summary = r.stderr[r.stderr.rfind("Summary:"):]
+    i = _re.search(r"I:\s+(-?[\d.]+) LUFS", summary)
+    tp = _re.search(r"Peak:\s+(-?[\d.]+) dBFS", summary)
+    return (float(i.group(1)) if i else None, float(tp.group(1)) if tp else None)
+
+
+def normalize_voice(path: str, target_lufs: float) -> str:
+    """Speech is matched on perceived loudness (LUFS) with a single static gain per line —
+    never a dynamic compressor, so the voice can't swell or dip inside a sentence."""
+    i, tp = loudness(path)
+    if i is None or i < -60:
+        return path
+    gain = target_lufs - i
+    if tp is not None:
+        gain = min(gain, -1.0 - tp)
+    out = path + ".voice.wav"
+    ok = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-af", f"volume={gain:.2f}dB", out]).returncode == 0
+    return out if ok else path
 
 
 def probe(path: str) -> float:
@@ -233,11 +259,27 @@ def mix(video: str, out: str, total: float, events: list[dict], sfx_files: dict,
         chains.append("[ducked][vo2]amix=inputs=2:normalize=0:duration=longest[pre]")
     else:
         chains.append(f"{'[bus]' if sfx_labels else '[vo]'}anull[pre]")
-    # social-media loudness (≈ -16 LUFS), true-peak safe
-    chains.append(f"[pre]apad,atrim=0:{total:.2f},loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100,alimiter=limit=0.89[a]")
+    chains.append(f"[pre]apad,atrim=0:{total:.2f},aresample=44100[a]")
+    premaster = out + ".premaster.wav"
     r = subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", ";".join(chains),
-                        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                        "-shortest", out], capture_output=True, text=True)
+                        "-map", "[a]", "-c:a", "pcm_s16le", premaster], capture_output=True, text=True)
     if r.returncode != 0:
         print("[motion sound] mix failed:", r.stderr[-1500:])
+        return False
+    # Mastering: measure once, then ONE static gain to MASTER_LUFS (true-peak capped). No
+    # loudnorm in dynamic mode — that rides the level up and down inside sentences.
+    i, tp = loudness(premaster)
+    gain = 0.0 if i is None else MASTER_LUFS - i
+    if tp is not None:
+        gain = min(gain, -1.5 - tp)
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", video, "-i", premaster,
+                        "-filter:a", f"volume={gain:.2f}dB", "-map", "0:v", "-map", "1:a",
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", out],
+                       capture_output=True, text=True)
+    try:
+        os.remove(premaster)
+    except OSError:
+        pass
+    if r.returncode != 0:
+        print("[motion sound] master failed:", r.stderr[-1500:])
     return r.returncode == 0
