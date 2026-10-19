@@ -158,6 +158,8 @@ MIN_BEAT = 1.6
 
 
 DEFAULT_SPEED = 1.0  # narration pace for Motion Graphics (ElevenLabs native speed, 0.7-1.2)
+# Approved narrator for Motion Graphics: Matilda — knowledgeable, professional (ElevenLabs).
+DEFAULT_VOICE_ID = os.environ.get("MOTION_DEFAULT_VOICE_ID", "XrExE9yKIg1WjnnlVkGX")
 
 
 async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = "explainer",

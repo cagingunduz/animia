@@ -1094,6 +1094,8 @@ async def run_motion_pipeline(job_id: str, p: dict):
 
             # Audio first: record the narration, then let it set every beat's length so the
             # picture never sits silent after the voice ends.
+            if p.get("narration") and not p.get("narrator_voice_id"):
+                p["narrator_voice_id"] = motion_sound.DEFAULT_VOICE_ID
             if p.get("narration") and p.get("narrator_voice_id"):
                 _say(job_id, "Sound designer", "Recording the narration first — scenes will be cut to it.")
                 vo = await motion_sound.narrate_first(plan["shots"], p["narrator_voice_id"], tmp,
