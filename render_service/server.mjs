@@ -9,6 +9,7 @@
 //   POST /render    { files, binary_files?, quality?, fps? }        -> video/mp4  (422 JSON on failure)
 //   POST /snapshot  { files, binary_files?, at: [seconds] }         -> { frames: [{ at, png }] }
 //   POST /check     { files, binary_files? }                        -> { ok, blocking, hints }  (layout QA)
+//   POST /cues      { files, binary_files? }                        -> { cues: [{ t, kind, dur, n }] }  (sound cues)
 //
 // Icons: <i data-icon="lucide-name" class="…" style="…"></i> is replaced by the Lucide SVG
 // (ISC) before anything runs, so the model never hand-draws pictograms. Unknown names fail
@@ -22,7 +23,8 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, copyFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import puppeteer from 'puppeteer-core';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -245,7 +247,32 @@ const handleCheck = body => withProject(body, async (dir, unknown) => {
   return { status: 200, json: { ok: b.length === 0, blocking: b.slice(0, 25), hints: dedupe(hints).filter(h => h.code !== 'canvas_overflow').slice(0, 15) } };
 });
 
-const ROUTES = { '/lint': handleLint, '/render': handleRender, '/snapshot': handleSnapshot, '/check': handleCheck };
+// Sound cues: load the composition once and read what the motion kit recorded (window.__kCues).
+let chromeExe = process.env.HYPERFRAMES_CHROME_PATH || null;
+async function chromePath() {
+  if (chromeExe) return chromeExe;
+  const { out } = await run(['browser', 'path'], HERE);
+  chromeExe = out.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('/')).pop();
+  return chromeExe;
+}
+
+const handleCues = body => withProject(body, async dir => {
+  const browser = await puppeteer.launch({
+    executablePath: await chromePath(), headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--allow-file-access-from-files'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1080, height: 1920 });
+    await page.goto(pathToFileURL(path.join(dir, 'index.html')).href, { waitUntil: 'load', timeout: 30000 });
+    const cues = await page.evaluate(() => (window.__kCues || []).slice(0, 500));
+    return { status: 200, json: { cues } };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
+const ROUTES = { '/lint': handleLint, '/render': handleRender, '/snapshot': handleSnapshot, '/check': handleCheck, '/cues': handleCues };
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

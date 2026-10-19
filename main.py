@@ -438,7 +438,10 @@ class GenerateMotionRequest(BaseModel):
     brand: Optional[MotionBrand] = None
     reference_images: Optional[List[str]] = None          # data URLs or https URLs
     reference_video_frames: Optional[List[MotionRefFrame]] = None
-    include_music: Optional[bool] = True
+    include_music: Optional[bool] = False
+    include_sfx: Optional[bool] = True
+    narration: Optional[bool] = False
+    narrator_voice_id: Optional[str] = None
     loop: Optional[bool] = False
     auto_approve: Optional[bool] = False
     approval_timeout: Optional[int] = Field(600, ge=30, le=3600)
@@ -484,6 +487,18 @@ async def motion_health():
         except Exception as e:
             out["detail"] = f"{type(e).__name__}: {e}"[:300]
     return out
+
+
+@app.get("/motion/sfx/{kind}")
+async def motion_sfx(kind: str):
+    """Library sound effect for motion graphics (generated once with ElevenLabs, cached in R2)."""
+    import motion_sound
+    if kind not in motion_sound.SFX_LIBRARY:
+        raise HTTPException(status_code=404, detail="unknown effect")
+    url = await motion_sound.sfx_url(kind)
+    if not url:
+        raise HTTPException(status_code=502, detail="effect could not be generated")
+    return {"kind": kind, "url": url}
 
 
 @app.get("/motion/{job_id}")

@@ -36,6 +36,7 @@ import httpx
 
 from jobs import job_store
 from storybook_pipeline import upload_bytes_to_r2, download_file
+import motion_sound
 from motion_prompts import (DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM,
                             EDIT_NOTE, DEFECT_NOTE)
 
@@ -281,6 +282,7 @@ PLAN_TOOL = {
                         "duration": {"type": "number"}, "purpose": {"type": "string"},
                         "on_screen_text": {"type": "string"}, "visual": {"type": "string"},
                         "motion": {"type": "string"}, "transition_out": {"type": "string"},
+                        "voiceover": {"type": "string"},
                         "sfx": {"type": "string", "enum": ["none", "whoosh", "impact", "pop", "riser", "click"]},
                     },
                     "required": ["duration", "visual", "motion"],
@@ -497,6 +499,18 @@ def _project(html: str, assets: dict) -> dict:
     return {"files": {"index.html": html}, "binary_files": assets}
 
 
+async def _cues(html: str, assets: dict) -> list[dict]:
+    """Sound cues the motion kit recorded in this composition (ms on its own timeline)."""
+    try:
+        r = await _render_call("/cues", _project(html, assets), timeout=120)
+        if r.status_code == 200:
+            return r.json().get("cues", [])
+        print(f"[motion] cues unavailable: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"[motion] cues unavailable: {e!r}")
+    return []
+
+
 async def _snapshot(html: str, assets: dict, at: list[float]) -> list[bytes]:
     r = await _render_call("/snapshot", {**_project(html, assets), "at": at}, timeout=300)
     if r.status_code != 200:
@@ -655,6 +669,7 @@ def _brief_text(p: dict) -> str:
         f"Total length: {p.get('duration_seconds', 15)} seconds",
         f"Format: {p.get('aspect_ratio', '16:9')} ({'x'.join(map(str, _canvas(p.get('aspect_ratio', '16:9'))))} px canvas)",
         f"Loop seamlessly: {'yes' if p.get('loop') else 'no'}",
+        f"Narration: {'ON — write a voiceover line for every beat' if p.get('narration') else 'off — leave voiceover empty'}",
     ]
     if any(brand.get(k) for k in ("name", "colors", "fonts", "tone", "notes", "logo_data_url")):
         lines.append("BRAND KIT (law):")
@@ -974,40 +989,6 @@ async def _sound_gen(text: str, seconds: float) -> bytes | None:
     return None
 
 
-SFX_PROMPTS = {
-    "whoosh": "short clean whoosh transition, modern motion graphics",
-    "impact": "short punchy low impact hit, cinematic, tight",
-    "pop": "short soft UI pop, playful",
-    "riser": "short tension riser into a hit",
-    "click": "crisp UI click",
-}
-
-
-async def _sound_design(job_id: str, plan: dict, total: float, tmp: str) -> tuple[str | None, list]:
-    """Returns (music_path, [(time, sfx_path)])."""
-    music_prompt = (plan.get("sound") or {}).get("music_prompt") or "minimal modern instrumental motion graphics music bed, steady pulse"
-    _say(job_id, "Sound designer", "Scoring a music bed and transition sounds.")
-    music_task = _sound_gen(f"Instrumental music, no vocals: {music_prompt}", min(22.0, total))
-    kinds = sorted({s.get("sfx") for s in plan["shots"][1:] if s.get("sfx") in SFX_PROMPTS})
-    sfx_bytes = await asyncio.gather(music_task, *[_sound_gen(SFX_PROMPTS[k], 1.2) for k in kinds])
-    music = sfx_bytes[0]
-    music_path = None
-    if music:
-        music_path = os.path.join(tmp, "music.mp3")
-        open(music_path, "wb").write(music)
-    files = {}
-    for k, b in zip(kinds, sfx_bytes[1:]):
-        if b:
-            files[k] = os.path.join(tmp, f"sfx_{k}.mp3")
-            open(files[k], "wb").write(b)
-    cues, t = [], 0.0
-    for s in plan["shots"]:
-        if s["n"] > 1 and s.get("sfx") in files:
-            cues.append((max(0.0, t - 0.15), files[s["sfx"]]))
-        t += s["duration"]
-    return music_path, cues
-
-
 # ─────────────────────────── assembly ───────────────────────────
 
 def _assemble(videos: list[str], out: str, size: tuple[int, int], total: float,
@@ -1182,20 +1163,51 @@ async def run_motion_pipeline(job_id: str, p: dict):
                     except (OverBudget, Exception) as e:
                         print(f"[motion] loop test skipped: {e!r}")
 
-            # ── 5. Sound ──
-            _stage(job_id, "sound", 5)
-            music, cues = (None, [])
-            if p.get("include_music", True):
-                music, cues = await _sound_design(job_id, plan, sum(s["duration"] for s, _ in done), tmp)
-
-            # ── 6. Assemble ──
-            _stage(job_id, "assembling", 6)
+            # ── 5. Assemble the picture ──
+            _stage(job_id, "assembling", 5)
             _say(job_id, "Render engineer", "Assembling the final cut.")
-            final = os.path.join(tmp, "final.mp4")
+            picture = os.path.join(tmp, "picture.mp4")
             size = _output_size(aspect, p.get("resolution", "1080p"))
-            if not _assemble([r["video"] for _, r in done], final, size, sum(s["duration"] for s, _ in done),
-                             music, cues, tmp):
+            total_done = sum(s["duration"] for s, _ in done)
+            if not _assemble([r["video"] for _, r in done], picture, size, total_done, None, [], tmp):
                 raise RuntimeError("final assembly failed")
+
+            # ── 6. Sound: animation-synced effects + narration, ducked ──
+            _stage(job_id, "sound", 6)
+            final = picture
+            try:
+                events, sfx_files, voice, music = [], {}, [], None
+                if p.get("include_sfx", True):
+                    _say(job_id, "Sound designer", "Placing an effect on every animation.")
+                    all_cues = []
+                    for s, r in done:
+                        for c in await _cues(r["html"], assets):
+                            all_cues.append({**c, "t": c["t"] + int(s["start"] * 1000)})
+                    events = motion_sound.plan_events(all_cues)
+                    sfx_files = await motion_sound.fetch_library({e["kind"] for e in events}, tmp)
+                if p.get("narration") and p.get("narrator_voice_id"):
+                    _say(job_id, "Sound designer", "Recording the narration.")
+                    t, lines = 0.0, []
+                    for beat in plan["shots"]:
+                        lines.append({"start": t, "window": beat["duration"], "text": (beat.get("voiceover") or "").strip()})
+                        t += beat["duration"]
+                    voice = await motion_sound.narrate(lines, p["narrator_voice_id"], tmp)
+                if p.get("include_music"):
+                    mp = (plan.get("sound") or {}).get("music_prompt") or "minimal modern instrumental bed"
+                    mb = await _sound_gen(f"Instrumental music, no vocals: {mp}", min(22.0, total_done))
+                    if mb:
+                        music = os.path.join(tmp, "music.mp3")
+                        open(music, "wb").write(mb)
+                if events or voice or music:
+                    mixed = os.path.join(tmp, "final.mp4")
+                    if motion_sound.mix(picture, mixed, total_done, events,
+                                        {k: v for k, v in sfx_files.items()}, voice, music):
+                        final = mixed
+                        _say(job_id, "Sound designer", f"Mixed {len(events)} effects"
+                             + (f" and {len(voice)} narration lines" if voice else "") + ".")
+            except Exception as e:
+                print(f"[motion] sound failed, delivering picture only: {e!r}")
+
             url = upload_bytes_to_r2(open(final, "rb").read(), "motion-final", "mp4", "video/mp4")
 
             scores = [r["score"] for _, r in done if r.get("score") is not None]

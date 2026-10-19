@@ -25,6 +25,9 @@ USING REFERENCES
 CRAFT RULES
 - Hook: the first 1.5 seconds must create curiosity or tension (bold claim, number,
   question, visual surprise). No slow logo intros at the start.
+- Explainers OPEN WITH THE QUESTION the video answers ("What is compound interest?") as its
+  own short first beat (2.5-3.5 s), then answer it step by step. Don't keep the topic as a
+  permanent title on screen afterwards.
 - One idea per shot. Max ~8 words on screen at any moment; ideally 2-5.
 - Vary rhythm: mix quick punches (2-2.5s) with breathing holds (3-5s). Never more than
   three shots of the same length in a row.
@@ -37,6 +40,11 @@ CRAFT RULES
 - Design system: 1 background, 1 ink, 1-2 accents (+ neutrals). Fonts must be Google
   Fonts (or the brand's, if it is on Google Fonts). Pick a display face with character.
 - End with a clear closing beat (logo lock-up / call to action / punchline).
+- NARRATION (only when the brief says narration is on): one voiceover line per beat, spoken
+  English at ≤ 2.5 words per second of the beat. Conversational, warm, never a robotic list;
+  it explains what the screen shows instead of reading the on-screen text word for word.
+  Say numbers the way people speak them ("a thousand dollars"). Leave it empty for a beat that
+  should breathe.
 
 OUTPUT — call the submit_plan tool with this structure:
 {
@@ -59,6 +67,7 @@ OUTPUT — call the submit_plan tool with this structure:
       "visual": "what is on screen: layout, elements, scale, positions",
       "motion": "the dominant motion idea, beat by beat with rough timings",
       "transition_out": "how this shot ends / hands over to the next",
+      "voiceover": "what the narrator says during this beat (only if narration is on)",
       "sfx": "none | whoosh | impact | pop | riser | click"
     }
   ],

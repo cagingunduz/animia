@@ -63,6 +63,14 @@
 
   const set = (t, v) => A.utils.set(t, v);
 
+  // Sound cues: every helper records what happened and when (ms on its timeline). The sound
+  // designer reads window.__kCues and drops a matching effect exactly there.
+  window.__kCues = window.__kCues || [];
+  function cue(t, kind, dur, n) {
+    window.__kCues.push({ t: Math.round(t || 0), kind, dur: Math.round(dur || 0), n: n || 1 });
+  }
+  const count0 = (sel) => $$(sel).length;
+
   // Words rise out of masks.
   function rise(tl, sel, at, o) {
     o = o || {};
@@ -70,6 +78,7 @@
     const t = $$(sel).flatMap((el) => Array.from(el.querySelectorAll('.k-w')));
     // Hidden words are also transparent, so layout QA does not count them as visible text.
     set(t, { y: '110%', opacity: 0 });
+    cue(at, 'rise', o.duration || 700, t.length);
     tl.add(t, {
       y: ['110%', '0%'], opacity: { from: 0, to: 1, duration: 1 },
       duration: o.duration || 700, delay: A.stagger(o.stagger || 70), ease: o.ease || 'outExpo',
@@ -82,6 +91,7 @@
     split(sel, 'chars');
     const t = $$(sel).flatMap((el) => Array.from(el.querySelectorAll('.k-c')));
     set(t, { opacity: 0 });
+    cue(at, 'type', t.length * (o.perChar || 40), t.length);
     tl.add(t, { opacity: [0, 1], duration: 1, delay: A.stagger(o.perChar || 40) }, at || 0);
   }
 
@@ -91,6 +101,7 @@
     split(sel, 'chars');
     const t = $$(sel).flatMap((el) => Array.from(el.querySelectorAll('.k-c')));
     set(t, { opacity: 0, y: o.dy || 40 });
+    cue(at, 'rise', (o.duration || 500) + t.length * (o.stagger || 25), t.length);
     tl.add(t, { opacity: [0, 1], y: [o.dy || 40, 0], duration: o.duration || 500, delay: A.stagger(o.stagger || 25) }, at || 0);
   }
 
@@ -98,6 +109,7 @@
     o = o || {};
     const t = $$(sel);
     set(t, { opacity: 0, y: o.dy || 40 });
+    cue(at, 'soft', o.duration || 600, t.length);
     tl.add(t, { opacity: [0, 1], y: [o.dy || 40, 0], duration: o.duration || 600, delay: A.stagger(o.stagger || 80) }, at || 0);
   }
 
@@ -106,6 +118,7 @@
     o = o || {};
     const t = $$(sel);
     set(t, { opacity: 0, scale: o.from || 0.6 });
+    t.forEach((_, i) => cue((at || 0) + i * (o.stagger || 70), 'pop', 200, 1));
     tl.add(t, { opacity: [0, 1], scale: [o.from || 0.6, 1], duration: o.duration || 550, ease: 'outBack(1.7)', delay: A.stagger(o.stagger || 70) }, at || 0);
   }
 
@@ -119,6 +132,7 @@
     const c = CLIP[o.dir || 'right'];
     const t = $$(sel);
     set(t, { clipPath: c[0] });
+    cue(at, 'swipe', o.duration || 600, t.length);
     tl.add(t, { clipPath: c, duration: o.duration || 600, ease: o.ease || 'inOutQuart', delay: A.stagger(o.stagger || 0) }, at || 0);
   }
 
@@ -129,6 +143,7 @@
     const prop = (o.axis || 'x') === 'x' ? 'scaleX' : 'scaleY';
     t.forEach((el) => { el.style.transformOrigin = o.origin || ((o.axis || 'x') === 'x' ? 'left center' : 'center bottom'); });
     set(t, { [prop]: 0 });
+    cue(at, 'grow', o.duration || 700, t.length);
     tl.add(t, { [prop]: [0, 1], duration: o.duration || 700, ease: o.ease || 'outExpo', delay: A.stagger(o.stagger || 60) }, at || 0);
   }
 
@@ -159,6 +174,7 @@
       el.textContent = f(from + (to - from) * ease(p));
     };
     render(0);
+    cue(start, 'count', dur, 1);
     (tl._kHooks = tl._kHooks || []).push(render);
     tl.add({ k: 0 }, { k: 1, duration: dur, ease: 'linear' }, start);  // keeps the timeline long enough
   }
@@ -168,6 +184,7 @@
     o = o || {};
     const d = A.svg.createDrawable(sel);
     set(d, { draw: '0 0' });
+    cue(at, 'draw', o.duration || 1200, 1);
     tl.add(d, { draw: ['0 0', '0 1'], duration: o.duration || 1200, ease: o.ease || 'inOutSine', delay: A.stagger(o.stagger || 0) }, at || 0);
   }
 
@@ -188,6 +205,7 @@
       wipe: { clipPath: ['inset(0 0 0 0%)', 'inset(0 0 0 100%)'] }, zoom: { scale: [1, 1.25], opacity: [1, 0] },
       blur: { filter: ['blur(0px)', 'blur(24px)'], opacity: [1, 0] },
     }[k] || { opacity: [1, 0] };
+    cue(at, 'out', d, count0(sel));
     tl.add(sel, Object.assign({ duration: d, ease: 'inQuart', delay: A.stagger(o.stagger || 0) }, props), at);
     if (k === 'wipe') tl.add(sel, { opacity: 0, duration: 1 }, at + d + 1);  // fully gone for layout QA
   }
@@ -203,5 +221,5 @@
       '<rect width="100%" height="100%" filter="url(#k-n)"/></svg>');
   }
 
-  window.K = { timeline, split, rise, typeOn, charsUp, fadeUp, pop, wipe, grow, count, draw, push, exit, grain, set };
+  window.K = { timeline, split, rise, typeOn, charsUp, fadeUp, pop, wipe, grow, count, draw, push, exit, grain, set, cue };
 })();
