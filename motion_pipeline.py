@@ -669,7 +669,7 @@ def _brief_text(p: dict) -> str:
         f"Total length: {p.get('duration_seconds', 15)} seconds",
         f"Format: {p.get('aspect_ratio', '16:9')} ({'x'.join(map(str, _canvas(p.get('aspect_ratio', '16:9'))))} px canvas)",
         f"Loop seamlessly: {'yes' if p.get('loop') else 'no'}",
-        f"Narration: {'ON — write a voiceover line for every beat (brisk pace, ≈ 2.9 words/second)' if p.get('narration') else 'off — leave voiceover empty'}",
+        f"Narration: {'ON — write a voiceover line for every beat (≈ 2.5 words/second)' if p.get('narration') else 'off — leave voiceover empty'}",
     ]
     if any(brand.get(k) for k in ("name", "colors", "fonts", "tone", "notes", "logo_data_url")):
         lines.append("BRAND KIT (law):")

@@ -157,7 +157,7 @@ PAUSE_COMMA = 0.14
 MIN_BEAT = 1.6
 
 
-DEFAULT_SPEED = 1.15  # narration pace for Motion Graphics (ElevenLabs native speed)
+DEFAULT_SPEED = 1.0  # narration pace for Motion Graphics (ElevenLabs native speed, 0.7-1.2)
 
 
 async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = "explainer",
