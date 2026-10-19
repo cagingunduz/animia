@@ -69,6 +69,46 @@ async def generate_speech(text: str, voice_id: str, tone: str = None, model: str
         return resp.content
 
 
+async def generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None) -> tuple:
+    """Narration + word timings in one call (ElevenLabs /with-timestamps, character alignment).
+    Returns (mp3 bytes, [{"word", "start", "end"}] in seconds). Falls back to Whisper timings."""
+    import base64
+    ts = TONE_SETTINGS.get((tone or "").strip().lower(), DEFAULT_TONE)
+    payload = {
+        "text": text,
+        "model_id": model or TONE_MODELS.get((tone or "").strip().lower(), ELEVENLABS_MODEL),
+        "voice_settings": {"stability": ts["stability"], "similarity_boost": 0.75, "style": ts["style"],
+                           "use_speaker_boost": True},
+    }
+    headers = {**_headers(), "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}/with-timestamps",
+                                 json=payload, headers=headers, params={"output_format": "mp3_44100_128"})
+    if resp.status_code != 200:
+        audio = await generate_speech(text, voice_id, tone, model)
+        return audio, await get_word_timestamps(audio)
+    data = resp.json()
+    audio = base64.b64decode(data["audio_base64"])
+    al = data.get("alignment") or data.get("normalized_alignment") or {}
+    chars = al.get("characters") or []
+    starts = al.get("character_start_times_seconds") or []
+    ends = al.get("character_end_times_seconds") or []
+    words, cur, w0, w1 = [], "", None, None
+    for ch, a, b in zip(chars, starts, ends):
+        if ch.isspace():
+            if cur:
+                words.append({"word": cur, "start": w0, "end": w1})
+            cur, w0, w1 = "", None, None
+            continue
+        if not cur:
+            w0 = a
+        cur += ch
+        w1 = b
+    if cur:
+        words.append({"word": cur, "start": w0, "end": w1})
+    return audio, words
+
+
 def get_audio_duration(audio_bytes: bytes) -> float:
     """Get MP3 duration in seconds using mutagen."""
     try:

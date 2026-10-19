@@ -17,7 +17,7 @@ import subprocess
 import httpx
 
 from storybook_pipeline import get_r2_client, R2_BUCKET, R2_PUBLIC_BASE
-from tts import generate_speech
+from tts import generate_speech, generate_speech_timed
 
 SFX_VERSION = "v1"
 
@@ -145,6 +145,43 @@ async def narrate(lines: list[dict], voice_id: str, tmp: str) -> list[dict]:
         out.append({"path": p, "start": start, "tempo": tempo})
         cursor = start + dur / tempo
     return out
+
+
+# Audio-first timing: a narrated beat lasts exactly lead + speech + tail.
+VO_LEAD = 0.25
+VO_TAIL = 0.35
+MIN_BEAT = 1.6
+
+
+async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = "explainer") -> list[dict | None]:
+    """Record every beat's line BEFORE animating. Returns per beat
+    {path, dur, words:[{word, start, end}]} (seconds, relative to the line) or None."""
+    async def one(i, b):
+        text = (b.get("voiceover") or "").strip()
+        if not text:
+            return None
+        audio, words = await generate_speech_timed(text, voice_id, tone)
+        p = os.path.join(tmp, f"vo_{i}.mp3")
+        open(p, "wb").write(audio)
+        p = normalize_voice(p, VOICE_TARGET_LUFS)
+        return {"path": p, "dur": probe(p), "words": words}
+    res = await asyncio.gather(*[one(i, b) for i, b in enumerate(beats)], return_exceptions=True)
+    out = []
+    for r in res:
+        if isinstance(r, Exception):
+            print(f"[motion sound] narration failed: {r!r}")
+            out.append(None)
+        else:
+            out.append(r)
+    return out
+
+
+def retime(beats: list[dict], vo: list[dict | None]) -> None:
+    """Set each narrated beat's duration from its recording, in place."""
+    for b, v in zip(beats, vo):
+        if v:
+            b["duration"] = round(max(MIN_BEAT, VO_LEAD + v["dur"] + VO_TAIL), 2)
+            b["vo"] = v
 
 
 def normalize(path: str, target_db: float) -> str:

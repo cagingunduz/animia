@@ -502,6 +502,27 @@ async def motion_sfx(kind: str):
     return {"kind": kind, "url": url}
 
 
+class MotionNarrateRequest(BaseModel):
+    lines: List[str] = Field(..., max_length=24)
+    voice_id: str
+    tone: Optional[str] = "explainer"
+
+
+@app.post("/motion/narrate")
+async def motion_narrate(req: MotionNarrateRequest):
+    """Audio-first preview: record lines with word timings (ElevenLabs with-timestamps)."""
+    from tts import generate_speech_timed
+
+    async def one(text: str):
+        audio, words = await generate_speech_timed(text, req.voice_id, req.tone)
+        return {"text": text, "audio_url": upload_audio_to_r2(audio), "words": words,
+                "duration": round(max((w["end"] for w in words), default=0.0), 3)}
+    try:
+        return {"lines": await asyncio.gather(*[one(t) for t in req.lines if t.strip()])}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
 @app.get("/motion/{job_id}")
 async def motion_status(job_id: str):
     job = job_store.get(job_id)

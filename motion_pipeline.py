@@ -761,8 +761,14 @@ def _segment_brief(p: dict, plan: dict, seg: dict, n_segs: int) -> str:
     minfont = round(min(w, h) * 0.045)
     beats, t = [], 0.0
     for b in seg["shots"]:
-        beats.append({"beat": b["n"], "starts_at_ms": int(t * 1000), "duration_s": b["duration"],
-                      **{k: b.get(k) for k in ("purpose", "on_screen_text", "visual", "motion", "transition_out")}})
+        row = {"beat": b["n"], "starts_at_ms": int(t * 1000), "duration_s": b["duration"],
+               **{k: b.get(k) for k in ("purpose", "on_screen_text", "visual", "motion", "transition_out")}}
+        v = b.get("vo")
+        if v:
+            base = (t + motion_sound.VO_LEAD) * 1000
+            row["narration"] = b.get("voiceover")
+            row["narration_words_ms"] = [[w["word"], int(base + w["start"] * 1000)] for w in v.get("words", [])]
+        beats.append(row)
         t += b["duration"]
     return "\n".join(filter(None, [
         f"CANVAS: W={w} H={h}. DURATION={seg['duration']} seconds. MINFONT={minfont}px.",
@@ -1086,6 +1092,17 @@ async def run_motion_pipeline(job_id: str, p: dict):
                     break
             j["plan"] = plan
 
+            # Audio first: record the narration, then let it set every beat's length so the
+            # picture never sits silent after the voice ends.
+            if p.get("narration") and p.get("narrator_voice_id"):
+                _say(job_id, "Sound designer", "Recording the narration first — scenes will be cut to it.")
+                vo = await motion_sound.narrate_first(plan["shots"], p["narrator_voice_id"], tmp)
+                motion_sound.retime(plan["shots"], vo)
+                total = round(sum(s["duration"] for s in plan["shots"]), 2)
+                j["shots"] = [{**row, "duration": next(s["duration"] for s in plan["shots"] if s["n"] == row["n"])}
+                              for row in j["shots"]]
+                _say(job_id, "Sound designer", f"Narration recorded: {total:.1f}s; beats re-timed to the voice.")
+
             segs = _segments(plan)
             j["segments"] = [{"n": s["n"], "start": s["start"], "duration": s["duration"],
                               "beats": [x["n"] for x in s["shots"]]} for s in segs]
@@ -1186,12 +1203,11 @@ async def run_motion_pipeline(job_id: str, p: dict):
                     events = motion_sound.plan_events(all_cues)
                     sfx_files = await motion_sound.fetch_library({e["kind"] for e in events}, tmp)
                 if p.get("narration") and p.get("narrator_voice_id"):
-                    _say(job_id, "Sound designer", "Recording the narration.")
-                    t, lines = 0.0, []
+                    t = 0.0
                     for beat in plan["shots"]:
-                        lines.append({"start": t, "window": beat["duration"], "text": (beat.get("voiceover") or "").strip()})
+                        if beat.get("vo"):
+                            voice.append({"path": beat["vo"]["path"], "start": t + motion_sound.VO_LEAD, "tempo": 1.0})
                         t += beat["duration"]
-                    voice = await motion_sound.narrate(lines, p["narrator_voice_id"], tmp)
                 if p.get("include_music"):
                     mp = (plan.get("sound") or {}).get("music_prompt") or "minimal modern instrumental bed"
                     mb = await _sound_gen(f"Instrumental music, no vocals: {mp}", min(22.0, total_done))

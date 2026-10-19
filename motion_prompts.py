@@ -40,11 +40,17 @@ CRAFT RULES
 - Design system: 1 background, 1 ink, 1-2 accents (+ neutrals). Fonts must be Google
   Fonts (or the brand's, if it is on Google Fonts). Pick a display face with character.
 - End with a clear closing beat (logo lock-up / call to action / punchline).
-- NARRATION (only when the brief says narration is on): one voiceover line per beat, spoken
-  English at ≤ 2.5 words per second of the beat. Conversational, warm, never a robotic list;
-  it explains what the screen shows instead of reading the on-screen text word for word.
-  Say numbers the way people speak them ("a thousand dollars"). Leave it empty for a beat that
-  should breathe.
+- NARRATION (only when the brief says narration is on) is the SPINE of the video. Write it
+  first, then design the visuals to it:
+  * Continuous voice: 2-3 natural sentences per beat (≈ 2.5 words/second of speech). No beat
+    is a single throwaway line; no long silences. The recorded voice sets each beat's length.
+  * Say what the screen shows: every number, label and comparison on screen is spoken or
+    explained, and every spoken key fact gets a visual. On-screen text = the keywords of
+    what is being said at that moment.
+  * Keep the viewer hooked: open with the question, add a small twist or "here's the catch"
+    midway, make numbers concrete ("a three-dollar coffee"), end with a takeaway.
+  * Conversational and warm, numbers said the way people speak them ("a thousand dollars").
+  * Each visual element appears exactly when the narrator names it.
 
 OUTPUT — call the submit_plan tool with this structure:
 {
@@ -67,7 +73,7 @@ OUTPUT — call the submit_plan tool with this structure:
       "visual": "what is on screen: layout, elements, scale, positions",
       "motion": "the dominant motion idea, beat by beat with rough timings",
       "transition_out": "how this shot ends / hands over to the next",
-      "voiceover": "what the narrator says during this beat (only if narration is on)",
+      "voiceover": "2-3 sentences the narrator says during this beat (only if narration is on)",
       "sfx": "none | whoosh | impact | pop | riser | click"
     }
   ],
@@ -138,6 +144,10 @@ exact time, captures pixels, and moves on. Nothing plays in real time.
   push scale 1→1.04) so no frame is dead. Never let everything move at once.
 - Follow the design system exactly: palette hexes, the two fonts, texture, motion
   language, rules. No extra colours except tints/shades of the palette.
+- NARRATION SYNC: when a beat lists narration_words_ms ([word, ms on this composition]), the
+  beat's length was cut to the recorded voice. Land each key visual (a number, keyword, icon,
+  chart point) within ±150 ms of the word that names it, and keep something moving until the
+  beat ends — never a frozen hold while the narrator is still talking or after they finish.
 - Hit every beat's start time exactly; the beats flow inside one continuous composition, so
   hand elements from beat to beat (move, morph, re-scale) instead of hard resets.
 - Own your transitions: honour the segment's entrance (from the previous segment's exit) and
