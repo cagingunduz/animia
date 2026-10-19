@@ -148,8 +148,12 @@ async def narrate(lines: list[dict], voice_id: str, tmp: str) -> list[dict]:
 
 
 # Audio-first timing: a narrated beat lasts exactly lead + speech + tail.
-VO_LEAD = 0.25
-VO_TAIL = 0.35
+VO_LEAD = 0.12
+VO_TAIL = 0.18
+# Pauses left inside a narrated line (ElevenLabs leaves 0.4-0.75 s): a breath after a sentence,
+# a beat after a comma.
+PAUSE_SENTENCE = 0.24
+PAUSE_COMMA = 0.14
 MIN_BEAT = 1.6
 
 
@@ -167,6 +171,7 @@ async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = 
         audio, words = await generate_speech_timed(text, voice_id, tone, speed=speed)
         p = os.path.join(tmp, f"vo_{i}.mp3")
         open(p, "wb").write(audio)
+        p, words = tighten(p, words)
         p = normalize_voice(p, VOICE_TARGET_LUFS)
         return {"path": p, "dur": probe(p), "words": words}
     res = await asyncio.gather(*[one(i, b) for i, b in enumerate(beats)], return_exceptions=True)
@@ -178,6 +183,57 @@ async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = 
         else:
             out.append(r)
     return out
+
+
+def tighten(path: str, words: list[dict]) -> tuple[str, list[dict]]:
+    """Shorten long pauses inside a line to `keep` seconds and trim leading/trailing silence;
+    word timings are shifted by whatever was cut before them, so visual sync survives."""
+    import re as _re
+    dur = probe(path)
+    r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", path, "-af", "silencedetect=noise=-42dB:d=0.18",
+                        "-f", "null", "-"], capture_output=True, text=True)
+    starts = [float(x) for x in _re.findall(r"silence_start: (-?[\d.]+)", r.stderr)]
+    ends = [float(x) for x in _re.findall(r"silence_end: ([\d.]+)", r.stderr)]
+    if len(ends) < len(starts):
+        ends.append(dur)
+    cuts = []  # (cut_from, cut_to) in source time
+    for a, b in zip(starts, ends):
+        a = max(0.0, a)
+        if a <= 0.02:                       # leading silence: keep 30 ms
+            if b - a > 0.05:
+                cuts.append((a, b - 0.03))
+        elif b >= dur - 0.02:               # trailing silence: keep 30 ms
+            if b - a > 0.05:
+                cuts.append((a + 0.03, b))
+        else:                               # inner pause: sentence vs comma breath, centred
+            before = [w for w in words if w["start"] < a]  # the word spoken just before the pause
+            keep = PAUSE_SENTENCE if before and before[-1]["word"].rstrip()[-1:] in ".?!:;" else PAUSE_COMMA
+            if b - a <= keep + 0.04:
+                continue
+            mid = (a + b) / 2
+            cuts.append((mid - (b - a - keep) / 2, mid + (b - a - keep) / 2))
+    if not cuts:
+        return path, words
+    keepers, t = [], 0.0
+    for a, b in cuts:
+        if a > t:
+            keepers.append((t, a))
+        t = b
+    if t < dur:
+        keepers.append((t, dur))
+    parts = "".join(f"[0:a]atrim={a:.3f}:{b:.3f},asetpts=PTS-STARTPTS,afade=t=in:d=0.008,"
+                    f"afade=t=out:st={max(0.0, b - a - 0.008):.3f}:d=0.008[p{i}];" for i, (a, b) in enumerate(keepers))
+    out = path.rsplit(".", 1)[0] + ".tight.wav"
+    ok = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-filter_complex",
+                         parts + "".join(f"[p{i}]" for i in range(len(keepers))) + f"concat=n={len(keepers)}:v=0:a=1[a]",
+                         "-map", "[a]", out]).returncode == 0
+    if not ok:
+        return path, words
+
+    def shift(x: float) -> float:
+        return x - sum(min(b, x) - a for a, b in cuts if a < x)
+    return out, [{**w, "start": round(max(0.0, shift(w["start"])), 3), "end": round(max(0.0, shift(w["end"])), 3)}
+                 for w in words]
 
 
 def retime(beats: list[dict], vo: list[dict | None]) -> None:
