@@ -13,20 +13,41 @@
     return tl;
   }
 
-  // Wrap text into animatable pieces. mode: 'words' (masked) | 'chars'
+  // Wrap text into animatable pieces. mode: 'words' (masked) | 'chars'.
+  // Only text nodes are wrapped, so nested styling (<b>, coloured spans, font sizes) survives.
   function split(sel, mode) {
     $$(sel).forEach((el) => {
       if (el.dataset.kitSplit) return;
       el.dataset.kitSplit = mode || 'words';
-      const lines = el.innerHTML.split(/<br\s*\/?>/i);
-      el.innerHTML = lines.map((line) => {
-        const text = line.replace(/<[^>]+>/g, '');
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach((node) => {
+        const text = node.nodeValue;
+        if (!text.trim()) return;
+        const frag = document.createDocumentFragment();
         if (mode === 'chars') {
-          return text.split('').map((c) => `<span class="k-c">${c === ' ' ? '&nbsp;' : c}</span>`).join('');
+          for (const c of text) {
+            const sp = document.createElement('span');
+            sp.className = 'k-c';
+            sp.textContent = c === ' ' ? '\u00a0' : c;
+            frag.appendChild(sp);
+          }
+        } else {
+          text.split(/(\s+)/).forEach((part) => {
+            if (!part) return;
+            if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(' ')); return; }
+            const m = document.createElement('span');
+            m.className = 'k-m';
+            const w = document.createElement('span');
+            w.className = 'k-w';
+            w.textContent = part;
+            m.appendChild(w);
+            frag.appendChild(m);
+          });
         }
-        return text.split(/\s+/).filter(Boolean)
-          .map((w) => `<span class="k-m"><span class="k-w">${w}</span></span>`).join(' ');
-      }).join('<br>');
+        node.parentNode.replaceChild(frag, node);
+      });
     });
   }
 
@@ -37,8 +58,12 @@
     o = o || {};
     split(sel, 'words');
     const t = $$(sel).flatMap((el) => Array.from(el.querySelectorAll('.k-w')));
-    set(t, { y: '110%' });
-    tl.add(t, { y: ['110%', '0%'], duration: o.duration || 700, delay: A.stagger(o.stagger || 70), ease: o.ease || 'outExpo' }, at || 0);
+    // Hidden words are also transparent, so layout QA does not count them as visible text.
+    set(t, { y: '110%', opacity: 0 });
+    tl.add(t, {
+      y: ['110%', '0%'], opacity: { from: 0, to: 1, duration: 1 },
+      duration: o.duration || 700, delay: A.stagger(o.stagger || 70), ease: o.ease || 'outExpo',
+    }, at || 0);
   }
 
   // Characters type on.
@@ -138,6 +163,7 @@
       blur: { filter: ['blur(0px)', 'blur(24px)'], opacity: [1, 0] },
     }[k] || { opacity: [1, 0] };
     tl.add(sel, Object.assign({ duration: d, ease: 'inQuart', delay: A.stagger(o.stagger || 0) }, props), at);
+    if (k === 'wipe') tl.add(sel, { opacity: 0, duration: 1 }, at + d + 1);  // fully gone for layout QA
   }
 
   // Static, deterministic film grain over the root.
