@@ -441,6 +441,7 @@ class GenerateMotionRequest(BaseModel):
     reference_video_frames: Optional[List[MotionRefFrame]] = None
     include_music: Optional[bool] = False
     include_sfx: Optional[bool] = True
+    look: Optional[Literal["motion", "cinematic3d"]] = "motion"
     narration: Optional[bool] = False
     narrator_voice_id: Optional[str] = None
     narrator_speed: Optional[float] = Field(1.0, ge=0.7, le=1.2)

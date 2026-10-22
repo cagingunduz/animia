@@ -36,9 +36,10 @@ import httpx
 
 from jobs import job_store
 from storybook_pipeline import upload_bytes_to_r2, download_file
+import motion_images
 import motion_sound
 from motion_prompts import (DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM,
-                            EDIT_NOTE, DEFECT_NOTE)
+                            EDIT_NOTE, DEFECT_NOTE, CINEMATIC_DIRECTOR, CINEMATIC_ANIMATOR)
 
 # Model per crew role — switchable from Railway without a deploy.
 _DEFAULT_MODEL = os.environ.get("MOTION_MODEL", "claude-opus-5-5")
@@ -283,12 +284,14 @@ PLAN_TOOL = {
                         "on_screen_text": {"type": "string"}, "visual": {"type": "string"},
                         "motion": {"type": "string"}, "transition_out": {"type": "string"},
                         "voiceover": {"type": "string"},
+                        "still_prompt": {"type": "string"},
                         "sfx": {"type": "string", "enum": ["none", "whoosh", "impact", "pop", "riser", "click"]},
                     },
                     "required": ["duration", "visual", "motion"],
                 },
             },
             "sound": {"type": "object", "properties": {"music_prompt": {"type": "string"}, "mood": {"type": "string"}}},
+            "character_anchor": {"type": "string"},
         },
         "required": ["title", "concept", "design", "shots"],
     },
@@ -496,7 +499,8 @@ async def _render_call(path: str, payload: dict, timeout: float = 900.0) -> http
 
 
 def _project(html: str, assets: dict) -> dict:
-    return {"files": {"index.html": html}, "binary_files": assets}
+    # Stills are large: only send the files this composition references.
+    return {"files": {"index.html": html}, "binary_files": {k: v for k, v in assets.items() if k in html}}
 
 
 async def _cues(html: str, assets: dict) -> list[dict]:
@@ -670,6 +674,7 @@ def _brief_text(p: dict) -> str:
         f"Format: {p.get('aspect_ratio', '16:9')} ({'x'.join(map(str, _canvas(p.get('aspect_ratio', '16:9'))))} px canvas)",
         f"Loop seamlessly: {'yes' if p.get('loop') else 'no'}",
         f"Narration: {'ON — write a voiceover line for every beat (≈ 2.5 words/second)' if p.get('narration') else 'off — leave voiceover empty'}",
+        CINEMATIC_DIRECTOR if p.get("look") == "cinematic3d" else "LOOK = MOTION DESIGN (typography, shapes, icons, data drawn in code).",
     ]
     if any(brand.get(k) for k in ("name", "colors", "fonts", "tone", "notes", "logo_data_url")):
         lines.append("BRAND KIT (law):")
@@ -763,6 +768,8 @@ def _segment_brief(p: dict, plan: dict, seg: dict, n_segs: int) -> str:
     for b in seg["shots"]:
         row = {"beat": b["n"], "starts_at_ms": int(t * 1000), "duration_s": b["duration"],
                **{k: b.get(k) for k in ("purpose", "on_screen_text", "visual", "motion", "transition_out")}}
+        if b.get("still"):
+            row["still"] = b["still"]
         v = b.get("vo")
         if v:
             base = (t + motion_sound.VO_LEAD) * 1000
@@ -780,6 +787,7 @@ def _segment_brief(p: dict, plan: dict, seg: dict, n_segs: int) -> str:
         "PREVIOUS SEGMENT: " + ("ends with: " + str(plan["shots"][seg["shots"][0]["n"] - 2].get("transition_out", ""))
                                 if seg["n"] > 1 else "none — this segment opens the video"),
         "ASSETS: " + ("assets/logo.png (brand logo)" if (p.get("brand") or {}).get("logo_data_url") else "none"),
+        CINEMATIC_ANIMATOR if p.get("look") == "cinematic3d" else "",
         _brand_lines(p),
     ]))
 
@@ -1107,6 +1115,18 @@ async def run_motion_pipeline(job_id: str, p: dict):
                               for row in j["shots"]]
                 _say(job_id, "Sound designer", f"Narration recorded: {total:.1f}s; beats re-timed to the voice.")
 
+            if p.get("look") == "cinematic3d":
+                _say(job_id, "Director", f"Rendering {len(plan['shots'])} 3D stills (one per beat).")
+                stills = await motion_images.generate_stills(plan, aspect, tmp)
+                for s, (path_key, b64) in zip(plan["shots"], stills):
+                    if b64:
+                        assets[path_key] = b64
+                        s["still"] = path_key
+                usage = j.setdefault("usage", {})
+                usage["images"] = sum(1 for _, b64 in stills if b64)
+                usage["images_cost_usd"] = round(usage["images"] * motion_images.IMAGE_COST, 3)
+                _say(job_id, "Director", f"{usage['images']} stills ready.")
+
             segs = _segments(plan)
             j["segments"] = [{"n": s["n"], "start": s["start"], "duration": s["duration"],
                               "beats": [x["n"] for x in s["shots"]]} for s in segs]
@@ -1212,6 +1232,9 @@ async def run_motion_pipeline(job_id: str, p: dict):
                         if beat.get("vo"):
                             voice.append({"path": beat["vo"]["path"], "start": t + motion_sound.VO_LEAD, "tempo": 1.0})
                         t += beat["duration"]
+                if p.get("look") == "cinematic3d" and p.get("include_sfx", True) and not p.get("include_music"):
+                    bed = await motion_sound.fetch_library({"drone"}, tmp)
+                    music = bed.get("drone")
                 if p.get("include_music"):
                     mp = (plan.get("sound") or {}).get("music_prompt") or "minimal modern instrumental bed"
                     mb = await _sound_gen(f"Instrumental music, no vocals: {mp}", min(22.0, total_done))

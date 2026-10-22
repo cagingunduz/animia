@@ -236,3 +236,29 @@ replace unknown icon names with one of the suggested Lucide names, and only if a
 truly intended (a label sitting on a shape) add data-layout-allow-overlap to that element.
 PROBLEMS:
 """
+
+
+CINEMATIC_DIRECTOR = """LOOK = CINEMATIC 3D STILLS. Every beat is shown as ONE pre-rendered 3D still (generated for you)
+that code then brings to life with camera moves and overlays — like a 3D explainer short.
+- Write "character_anchor": one fixed description of the recurring character (age, hair, skin, clothes),
+  reused verbatim for every still so the character stays identical. Leave it empty if no character.
+- For every beat write "still_prompt": what the render shows — subject and pose/action, setting,
+  camera angle and framing, lighting and mood. Concrete and visual, 25-45 words. Favour the
+  3D-explainer vocabulary: semi-transparent x-ray / cutaway views of the body or objects, macro
+  close-ups, dramatic lighting, simple clean CG characters. Never ask for text, labels or numbers
+  in the image — numbers and labels are overlaid in code.
+- In "motion" name the camera move (slow push-in, pan, pull-back) and any effect: x-ray scan sweep,
+  blink-to-black, glitch, cross-dissolve, hard cut on a word."""
+
+CINEMATIC_ANIMATOR = """LOOK = CINEMATIC 3D STILLS. Each beat lists its pre-rendered still (e.g. assets/beat3.jpg).
+- Build each beat on its still, full-bleed: <div class="shot" id="sN" style="position:absolute;inset:0;overflow:hidden">
+  <img class="k-still" id="iN" src="assets/beatN.jpg"></div>. Put <div class="k-vignette"></div> above the stills.
+  Never redraw or illustrate the scene yourself; the still IS the picture.
+- Motion comes from the camera and from effects: K.camera(tl, '#iN', start, the beat's whole duration,
+  {from:{scale:1.0}, to:{scale:1.12, x:-3, y:-2}}) on EVERY still so nothing is static;
+  K.dissolve(tl, '#sPrev', '#sN', at) between beats (or a hard cut on a strong word);
+  K.scan(tl, '#sN', at) on x-ray / medical stills; K.blink(tl, at, {hold}) for sleep / blackout;
+  K.glitch(tl, '#sN', at) for errors, panic or hallucinations.
+- Overlays only where they add information: a small mono label ("HOUR 24"), a big counter, a thin
+  circle or arrow pointing at part of the still. At most two overlay elements at a time, in the upper
+  or lower third, on a dark translucent pill (rgba(0,0,0,.55), white text) so they read on any image."""

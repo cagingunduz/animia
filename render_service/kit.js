@@ -221,5 +221,70 @@
       '<rect width="100%" height="100%" filter="url(#k-n)"/></svg>');
   }
 
-  window.K = { timeline, split, rise, typeOn, charsUp, fadeUp, pop, wipe, grow, count, draw, push, exit, grain, set, cue };
+  // ─── Cinematic helpers (image-based looks: a still per beat, motion added in code) ───
+
+  // Slow camera move over a still (Ken Burns). from/to: {scale, x, y} with x/y in % of the frame.
+  function camera(tl, sel, at, duration, o) {
+    o = o || {};
+    const f = Object.assign({ scale: 1.0, x: 0, y: 0 }, o.from || {});
+    const t = Object.assign({ scale: 1.12, x: 0, y: 0 }, o.to || {});
+    $$(sel).forEach((el) => { el.style.transformOrigin = o.origin || '50% 50%'; });
+    set(sel, { scale: f.scale, x: f.x + '%', y: f.y + '%' });
+    tl.add(sel, { scale: [f.scale, t.scale], x: [f.x + '%', t.x + '%'], y: [f.y + '%', t.y + '%'],
+      duration, ease: o.ease || 'inOutSine' }, at || 0);
+  }
+
+  // Cross-dissolve one still into the next (both full-bleed, stacked).
+  function dissolve(tl, outSel, inSel, at, o) {
+    o = o || {};
+    const d = o.duration || 600;
+    set(inSel, { opacity: 0 });
+    cue(at, 'whoosh', d, 1);
+    tl.add(inSel, { opacity: [0, 1], duration: d, ease: 'inOutSine' }, at);
+    if (outSel) tl.add(outSel, { opacity: [1, 0], duration: d, ease: 'inOutSine' }, at + d * 0.3);
+  }
+
+  // A glowing scan line sweeping over an element (x-ray / medical look). Needs a .k-scan child.
+  function scan(tl, sel, at, o) {
+    o = o || {};
+    const host = $$(sel)[0];
+    if (!host) return;
+    const line = document.createElement('div');
+    line.className = 'k-scan';
+    line.style.setProperty('--k-scan', o.color || '#5FE3FF');
+    host.appendChild(line);
+    const h = host.offsetHeight || 1920;  // sweep the host's full height (translate % would be the line's own 6 px)
+    set(line, { opacity: 0, y: -20 });
+    cue(at, 'scan', o.duration || 1600, 1);
+    tl.add(line, { opacity: [0, 1, 1, 0], y: [-20, h + 20], duration: o.duration || 1600, ease: 'inOutSine' }, at);
+  }
+
+  // Eyelid blink to black (microsleep / cut). Adds a full-frame black layer.
+  function blink(tl, at, o) {
+    o = o || {};
+    const root = $$(o.root || '#root')[0];
+    const lid = document.createElement('div');
+    lid.className = 'k-lid';
+    root.appendChild(lid);
+    set(lid, { opacity: 0 });
+    const hold = o.hold || 500;
+    cue(at, 'heartbeat', hold + 400, 1);
+    tl.add(lid, { opacity: [0, 1], duration: 160, ease: 'inQuad' }, at)
+      .add(lid, { opacity: [1, 0], duration: 260, ease: 'outQuad' }, at + 160 + hold);
+  }
+
+  // Short deterministic glitch: horizontal jitter + colour split on an element.
+  function glitch(tl, sel, at, o) {
+    o = o || {};
+    const n = o.steps || 6;
+    const rnd = A.createSeededRandom(o.seed || 11);
+    const xs = Array.from({ length: n }, (_, i) => (i === n - 1 ? 0 : (rnd() - 0.5) * (o.amount || 40)));
+    cue(at, 'glitch', 120 * n, 1);
+    tl.add(sel, { x: xs.map((v) => v + 'px'), filter: xs.map((v, i) => (i === n - 1 ? 'none'
+      : `drop-shadow(${v / 4}px 0 0 rgba(255,0,80,.7)) drop-shadow(${-v / 4}px 0 0 rgba(0,220,255,.7))`)),
+      duration: 120 * n, ease: 'linear' }, at);
+  }
+
+  window.K = { timeline, split, rise, typeOn, charsUp, fadeUp, pop, wipe, grow, count, draw, push, exit, grain, set, cue,
+    camera, dissolve, scan, blink, glitch };
 })();
