@@ -40,3 +40,11 @@ Railway variables without a deploy.
 | Icons | Lucide only (`<i data-icon="…">`), never hand-drawn | — |
 | Critic | Only when QA reports something suspicious | `MOTION_CRITIC_MODE` = `suspect` / `always` / `off` |
 | Budget | $0.025 per second of output (≥ $0.20), re-derived from the narration-set length | `MOTION_BUDGET_PER_SECOND`, `MOTION_BUDGET_MIN` |
+
+## Looks
+| Look | What it is | Extra cost |
+|---|---|---|
+| `motion` (default) | Typography, Lucide icons, charts and shapes drawn in code | — |
+| `cinematic3d` | One 3D-rendered still per beat (FAL Gemini Flash Image; first still = character reference for the rest), animated with `K.camera` on every shot, `K.dissolve`, `K.scan`, `K.blink`, `K.glitch`, sparse overlay labels; low `drone` bed under the mix | ≈ $0.039 per still (`MOTION_IMAGE_COST_USD`), ~8–10 stills per minute |
+
+Cinematic effects in the library (generated once on first use): `tick`, `heartbeat`, `whoosh`, `scan`, `glitch`, `drone`.
