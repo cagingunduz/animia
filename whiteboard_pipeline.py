@@ -18,7 +18,7 @@ import anthropic
 
 from jobs import job_store
 from image_gen import generate_whiteboard_image, generate_whiteboard_color_image
-from tts import generate_speech, get_audio_duration, get_word_timestamps
+from tts import generate_speech, generate_speech_timed, get_audio_duration, get_word_timestamps
 from storybook_pipeline import (
     concat_video_files,
     download_file,
@@ -581,12 +581,12 @@ async def generate_single_whiteboard_scene(
     narrator_speed: float = 1.0,
     colored: bool = False,
     render_style: str = "classic",
+    is_last: bool = False,
 ) -> dict:
     tmp = tempfile.mkdtemp()
     run_id = uuid.uuid4().hex[:8]
     concept = scene.get("visual_concept", "") or scene.get("title", "")
     narrator_text = scene.get("narrator_text", "")
-    tone = scene.get("tone", "informative")
 
     # 1) Drawing — black line-art, or colour illustration with black outlines
     if colored:
@@ -604,34 +604,71 @@ async def generate_single_whiteboard_scene(
     audio_bytes = None
     audio_path = None
     clip_dur = 6.0
+    use_vector = bool(os.environ.get("RENDER_SERVICE_URL"))
+    erase = use_vector and not is_last          # every scene but the last is wiped off the board
     if do_narrator:
         try:
             from animated_story_pipeline import _speed_audio
-            audio_bytes = await generate_speech(narrator_text, narrator_voice_id, tone=tone)
-            audio_bytes = _speed_audio(audio_bytes, narrator_speed, tmp, run_id)
-            audio_dur = get_audio_duration(audio_bytes)
-            clip_dur = max(4.0, audio_dur + 0.6)
+            import motion_sound
+            # approved narration: steady explainer tone, tightened pauses, static level
+            raw, words = await generate_speech_timed(narrator_text, narrator_voice_id, "explainer")
+            raw_path = f"{tmp}/voice_{run_id}.mp3"
+            with open(raw_path, "wb") as f:
+                f.write(raw)
+            tight, _ = motion_sound.tighten(raw_path, words)
+            tight = motion_sound.normalize_voice(tight, motion_sound.VOICE_TARGET_LUFS)
+            mp3_path = f"{tmp}/voice_{run_id}_final.mp3"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", tight, "-b:a", "192k", mp3_path], check=True)
+            audio_bytes = _speed_audio(open(mp3_path, "rb").read(), narrator_speed, tmp, run_id)
             audio_path = f"{tmp}/audio_{run_id}.mp3"
             with open(audio_path, "wb") as f:
                 f.write(audio_bytes)
+            audio_dur = motion_sound.probe(audio_path)
+            # the voice plays first; the wipe comes after it (no silent hold before the next scene)
+            clip_dur = max(4.0, audio_dur + 0.35 + (1.4 if erase else 0.6))
         except Exception as e:
             print(f"[WARN] whiteboard narration failed: {repr(e)}")
             audio_bytes = None
 
-    # 3) Whiteboard "being drawn" animation
+    # 3) Whiteboard "being drawn" animation: vector pen reveal (+ wipe) on the render service,
+    #    falling back to the OpenCV reveal when no render service is configured.
     reveal_path = f"{tmp}/reveal_{run_id}.mp4"
-    if not _whiteboard_draw(
+    drawn = False
+    if use_vector:
+        try:
+            import whiteboard_vector
+            from motion_pipeline import _render_call
+            W, H = _dims(aspect_ratio, resolution)
+            vec = whiteboard_vector.vectorize(img_path, int(W * 0.9), int(H * 0.88))
+            r = await _render_call("/render", {**whiteboard_vector.scene_project(vec, (W, H), clip_dur, colored, erase),
+                                               "quality": "high"})
+            if r.status_code == 200 and r.content:
+                with open(reveal_path, "wb") as f:
+                    f.write(r.content)
+                drawn = True
+            else:
+                print(f"[WARN] vector whiteboard render failed: {r.status_code} {r.text[:300]}")
+        except Exception as e:
+            print(f"[WARN] vector whiteboard failed, using OpenCV: {repr(e)}")
+    if not drawn and not _whiteboard_draw(
         img_path, reveal_path, clip_dur, aspect_ratio, resolution,
         colored=colored, render_style=render_style,
     ):
         raise RuntimeError("Whiteboard draw render failed")
     final_path = reveal_path
 
-    # 4) Merge narration (xfade output is silent already)
+    # 4) Merge narration — pad the voice with silence to the picture's length; a plain
+    #    -shortest merge would cut the wipe that plays after the narrator stops.
     if audio_bytes and audio_path:
         merged = f"{tmp}/merged_{run_id}.mp4"
-        if merge_video_audio(reveal_path, audio_path, merged):
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", reveal_path, "-i", audio_path,
+                            "-filter_complex", "[1:a]apad[a]", "-map", "0:v:0", "-map", "[a]",
+                            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", merged],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
             final_path = merged
+        else:
+            print(f"[WARN] whiteboard merge failed: {r.stderr[-400:]}")
 
     # 5) Captions
     if include_subtitles and audio_bytes:
@@ -700,6 +737,7 @@ async def run_whiteboard_pipeline(job_id: str, payload: dict):
                 narrator_speed=narrator_speed,
                 colored=colored,
                 render_style=render_style,
+                is_last=(idx == total),
             )
             for s in job_store[job_id]["scenes"]:
                 if s["scene_index"] == idx:
