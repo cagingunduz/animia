@@ -13,3 +13,7 @@ html, body { margin: 0; }
 .k-lid { position: absolute; inset: 0; background: #000; z-index: 60; pointer-events: none; }
 .k-vignette { position: absolute; inset: 0; pointer-events: none; z-index: 30;
   background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%); }
+.k-erase { position: absolute; left: 0; top: 0; z-index: 55; pointer-events: none; }
+.k-eraser { position: absolute; left: 0; top: 0; z-index: 56; pointer-events: none; border-radius: 14px;
+  background: linear-gradient(#2F6BFF 0 60%, #F2F2F2 60% 66%, #3A3A3A 66% 100%); box-shadow: 0 12px 26px rgba(0,0,0,.28);
+  transform-origin: 50% 50%; }

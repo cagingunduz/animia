@@ -285,6 +285,83 @@
       duration: 120 * n, ease: 'linear' }, at);
   }
 
+  // Whiteboard eraser: an eraser scrubs the board in a zig-zag; where it passes the drawing is
+  // painted over with the board colour. The eraser rides the stroke's leading edge.
+  function erase(tl, at, o) {
+    o = o || {};
+    const root = $$(o.root || '#root')[0];
+    const W = root.offsetWidth || 1080, H = root.offsetHeight || 1920;
+    const dur = o.duration || 1800;
+    const band = o.band || Math.round(Math.min(W, H) * 0.22);      // eraser stroke width
+    const rows = Math.ceil((H + band) / (band * 0.68));
+    // Hand-erasing path: wavy, slightly irregular passes (seeded, so every render is identical);
+    // turns stay inside the frame so an eraser tool would stay visible.
+    const rnd = A.createSeededRandom(o.seed || 7);
+    const xl = Math.round(band * 0.35), xr = W - xl;
+    const stepX = band * 0.5;
+    const wave = (x, r) => Math.sin(x / (band * 1.6) + r * 1.7) * band * 0.14 + (rnd() - 0.5) * band * 0.12;
+    let d = `M ${xl} ${-band / 4}`;
+    for (let r = 0; r <= rows; r++) {
+      const y = -band / 4 + r * band * 0.68;
+      const ltr = r % 2 === 0;
+      for (let x = xl + stepX; x <= xr; x += stepX) {
+        const px = ltr ? x : W - x;
+        d += ` L ${px.toFixed(1)} ${(y + wave(px, r)).toFixed(1)}`;
+      }
+      if (r < rows) d += ` L ${ltr ? xr : xl} ${(y + band * 0.68).toFixed(1)}`;
+    }
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'k-erase');
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    // ragged eraser edge: displace the wide stroke with seeded noise
+    const rough = Math.round(band * (o.rough == null ? 0.22 : o.rough));
+    svg.innerHTML = `<defs><filter id="k-rough" x="-10%" y="-10%" width="120%" height="120%">`
+      + `<feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="${o.seed || 7}"/>`
+      + `<feDisplacementMap in="SourceGraphic" scale="${rough}" xChannelSelector="R" yChannelSelector="G"/></filter></defs>`
+      + `<path class="k-erase-path" d="${d}" fill="none" stroke="${o.board || '#FFFFFF'}" stroke-width="${band}" `
+      + `stroke-linecap="round" stroke-linejoin="round" filter="url(#k-rough)"/>`;
+    root.appendChild(svg);
+    const path = svg.querySelector('path');
+    const [drawable] = A.svg.createDrawable(path);
+    set(drawable, { draw: '0 0' });
+    cue(at, 'erase', dur, 1);
+    tl.add(drawable, { draw: ['0 0', '0 1'], duration: dur, ease: 'linear' }, at);
+    // the eraser block follows the leading edge of the stroke (tool: false = just the wipe)
+    if (o.tool === false) {
+      if (o.clearAfter !== false) {
+        const targets = o.clear ? $$(o.clear) : [];
+        if (targets.length) tl.add(targets, { opacity: 0, duration: 1 }, at + dur);
+        tl.add(svg, { opacity: [1, 0], duration: 1 }, at + dur + 2);
+      }
+      return;
+    }
+    const er = document.createElement('div');
+    er.className = 'k-eraser';
+    const ew = Math.round(band * 1.15), eh = Math.round(band * 0.55);
+    er.style.width = ew + 'px';
+    er.style.height = eh + 'px';
+    er.style.marginLeft = -ew / 2 + 'px';  // centre the eraser on the stroke
+    er.style.marginTop = -eh / 2 + 'px';
+    root.appendChild(er);
+    set(er, { opacity: 0 });
+    // follow the path's position only — an eraser stays upright, with a little hand wobble
+    const mp = A.svg.createMotionPath(path);
+    const wob = A.createSeededRandom(o.seed || 5);
+    const steps = Math.max(8, Math.round(dur / 120));
+    tl.add(er, { opacity: [0, 1], duration: 120 }, at)
+      .add(er, { translateX: mp.translateX, translateY: mp.translateY, duration: dur, ease: 'linear' }, at)
+      .add(er, { rotate: Array.from({ length: steps }, () => (wob() - 0.5) * 10), duration: dur, ease: 'linear' }, at)
+      .add(er, { opacity: [1, 0], duration: 200 }, at + dur);
+    if (o.clearAfter !== false) {
+      // once wiped, hide the board's content for good so QA and later beats see a clean board
+      const targets = o.clear ? $$(o.clear) : [];
+      if (targets.length) tl.add(targets, { opacity: 0, duration: 1 }, at + dur);
+      tl.add(svg, { opacity: [1, 0], duration: 1 }, at + dur + 2);
+    }
+  }
+
   window.K = { timeline, split, rise, typeOn, charsUp, fadeUp, pop, wipe, grow, count, draw, push, exit, grain, set, cue,
-    camera, dissolve, scan, blink, glitch };
+    camera, dissolve, scan, blink, glitch, erase };
 })();

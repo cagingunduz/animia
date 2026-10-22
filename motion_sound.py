@@ -42,6 +42,7 @@ SFX_LIBRARY = {
     "scan": ("sci-fi medical scanner sweep, soft electronic hum rising then settling", 1.6, -12, 600),
     "glitch": ("short digital glitch stutter, electronic static burst", 0.6, -11, 300),
     "drone": ("dark low cinematic ambient drone, tense, steady, no melody, seamless", 12.0, -16, 99999),
+    "erase": ("whiteboard eraser rubbing quickly across a board, dry felt scrubbing, close", 2.6, -11, 800),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain
 VOICE_TARGET_LUFS = -18.0  # integrated loudness of every narration line
