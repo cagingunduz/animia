@@ -35,6 +35,13 @@ SFX_LIBRARY = {
     "type":  ("light keyboard typing, a few quick soft keystrokes", 1.5, -10, 300),
     "impact": ("soft deep cinematic thump, subtle", 0.9, -7, 400),
     "chime": ("bright warm positive notification chime, short", 1.0, -10, 400),
+    # cinematic / 3D-explainer kit
+    "tick": ("single crisp mechanical clock tick, close and dry", 0.5, -9, 350),
+    "heartbeat": ("slow deep human heartbeat, two heavy thumps, cinematic, close", 1.4, -6, 900),
+    "whoosh": ("deep cinematic whoosh transition, big smooth air movement", 1.2, -8, 500),
+    "scan": ("sci-fi medical scanner sweep, soft electronic hum rising then settling", 1.6, -12, 600),
+    "glitch": ("short digital glitch stutter, electronic static burst", 0.6, -11, 300),
+    "drone": ("dark low cinematic ambient drone, tense, steady, no melody, seamless", 12.0, -16, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain
 VOICE_TARGET_LUFS = -18.0  # integrated loudness of every narration line
