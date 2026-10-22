@@ -503,6 +503,24 @@ async def motion_sfx(kind: str):
     return {"kind": kind, "url": url}
 
 
+class MotionImageRequest(BaseModel):
+    prompt: str = Field(..., max_length=4000)
+    aspect_ratio: Optional[Literal["16:9", "9:16", "1:1"]] = "9:16"
+    reference_urls: Optional[List[str]] = None
+
+
+@app.post("/motion/image")
+async def motion_image(req: MotionImageRequest):
+    """Scene still for image-based (hybrid) motion themes: FAL Gemini Flash Image, with optional
+    reference images (edit model) so a recurring character stays the same across shots."""
+    try:
+        url = await generate_scene_image(scene_prompt=req.prompt, character_urls=(req.reference_urls or [])[:4],
+                                         aspect_ratio=req.aspect_ratio or "9:16")
+        return {"image_url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=repr(e))
+
+
 class MotionNarrateRequest(BaseModel):
     lines: List[str] = Field(..., max_length=24)
     voice_id: str
