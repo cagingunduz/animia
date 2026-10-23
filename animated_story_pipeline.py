@@ -18,7 +18,7 @@ import tempfile
 import traceback
 import subprocess
 
-import anthropic
+import prompt_llm
 
 from jobs import job_store
 from image_gen import generate_scene_image_grok
@@ -85,10 +85,7 @@ async def generate_animated_story_script(
         scene_count = get_scene_count(duration_minutes)
     style_prompt = get_style_prompt(style)
     char_lines = "\n".join(f"- {c.get('id', 'char')}: {c.get('description', '')}" for c in characters)
-
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    message = client.messages.create(
-        model="claude-opus-4-5",
+    message = prompt_llm.create(
         max_tokens=8000,
         messages=[{
             "role": "user",

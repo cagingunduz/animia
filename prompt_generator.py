@@ -1,5 +1,5 @@
 import os
-import anthropic
+import prompt_llm
 import json
 import re
 import base64
@@ -96,10 +96,7 @@ async def describe_character_reference_image(image_url: str, fallback_text: str,
         media_type = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
         if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
             media_type = "image/jpeg"
-
-        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-        message = client.messages.create(
-            model="claude-sonnet-4-5",
+        message = prompt_llm.create(
             max_tokens=650,
             messages=[{
                 "role": "user",
@@ -169,10 +166,7 @@ async def generate_story_script(
         else "Characters may have visible faces, natural and realistic expressions"
     )
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-    message = client.messages.create(
-        model="claude-opus-4-5",
+    message = prompt_llm.create(
         max_tokens=8000,
         messages=[{
             "role": "user",
@@ -258,10 +252,7 @@ async def generate_2d_animation_plan(
             f"  exact_text_to_video_reference: {c.get('character_text') or c.get('description', '')}\n"
             f"  style: {c.get('style', style)}"
         )
-
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    message = client.messages.create(
-        model="claude-opus-4-5",
+    message = prompt_llm.create(
         max_tokens=5000,
         messages=[{
             "role": "user",
@@ -377,10 +368,7 @@ async def generate_scene_prompts(
         else "Characters may have visible faces, natural and realistic expressions"
     )
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-    message = client.messages.create(
-        model="claude-sonnet-4-5",
+    message = prompt_llm.create(
         max_tokens=2000,
         messages=[{
             "role": "user",

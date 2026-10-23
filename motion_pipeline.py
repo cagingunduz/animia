@@ -41,12 +41,14 @@ import motion_sound
 from motion_prompts import (DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM,
                             EDIT_NOTE, DEFECT_NOTE, CINEMATIC_DIRECTOR, CINEMATIC_ANIMATOR)
 
-# Model per crew role — switchable from Railway without a deploy.
+# Model per crew role — switchable from Railway without a deploy. Planning and review run on
+# Sonnet; only the animator, which writes the composition code, stays on Opus.
 _DEFAULT_MODEL = os.environ.get("MOTION_MODEL", "claude-opus-5-5")
+_PLANNING_MODEL = os.environ.get("PROMPT_MODEL", "claude-sonnet-5-5")
 ROLE_MODELS = {
-    "director": os.environ.get("MOTION_DIRECTOR_MODEL", _DEFAULT_MODEL),
+    "director": os.environ.get("MOTION_DIRECTOR_MODEL", _PLANNING_MODEL),
     "animator": os.environ.get("MOTION_ANIMATOR_MODEL", _DEFAULT_MODEL),
-    "critic": os.environ.get("MOTION_CRITIC_MODEL", _DEFAULT_MODEL),
+    "critic": os.environ.get("MOTION_CRITIC_MODEL", _PLANNING_MODEL),
 }
 RENDER_SERVICE_URL = os.environ.get("RENDER_SERVICE_URL", "").rstrip("/")
 RENDER_TOKEN = os.environ.get("RENDER_TOKEN", "")
@@ -56,7 +58,7 @@ PRICES = {"opus-5-5": (4.0, 20.0), "sonnet-5-5": (2.0, 10.0), "haiku-5-5": (0.1,
 # Current models always think; effort is the only knob (Opus 5.5 defaults to medium).
 EFFORT = {"director": os.environ.get("MOTION_DIRECTOR_EFFORT", "medium"),
           "animator": os.environ.get("MOTION_ANIMATOR_EFFORT", "medium"),
-          "critic": os.environ.get("MOTION_CRITIC_EFFORT", "low")}
+          "critic": os.environ.get("MOTION_CRITIC_EFFORT", "medium")}
 THINK_ROOM = {"low": 3000, "medium": 10000, "high": 16000}  # max_tokens covers thinking too
 
 # Hard Claude budget per job: $0.025 per output second → $0.25 for a 10 s video.

@@ -14,7 +14,7 @@ import tempfile
 import traceback
 import subprocess
 
-import anthropic
+import prompt_llm
 
 from jobs import job_store
 from image_gen import generate_whiteboard_image, generate_whiteboard_color_image
@@ -515,8 +515,6 @@ async def generate_whiteboard_script(title: str, duration_minutes: int,
     plus the narration that explains it."""
     if scene_count is None:
         scene_count = whiteboard_scene_count(duration_minutes)
-
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     if render_style == "illustrated":
         visual_rules = """- "visual_concept": ONE rich illustrated explainer tableau that can be revealed in
   3-7 visual components (28-45 words). Include characters, props, arrows, symbols,
@@ -536,8 +534,7 @@ async def generate_whiteboard_script(title: str, duration_minutes: int,
         style_rules = """- Each visual_concept is a DISTINCT, simple drawable doodle.
 - Keep it concrete and visual — prefer icons/metaphors over abstract words."""
 
-    message = client.messages.create(
-        model="claude-opus-4-5",
+    message = prompt_llm.create(
         max_tokens=8000,
         messages=[{
             "role": "user",

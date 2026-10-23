@@ -8,7 +8,7 @@ import time
 import traceback
 import uuid
 
-import anthropic
+import prompt_llm
 import httpx
 
 from jobs import job_store
@@ -194,9 +194,7 @@ async def generate_fruit_drama_plan(
     genre: str = "drama",
 ) -> dict:
     direction = GENRE_DIRECTION.get(genre, GENRE_DIRECTION["drama"])
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    message = client.messages.create(
-        model="claude-opus-4-5",
+    message = prompt_llm.create(
         max_tokens=7000,
         messages=[{
             "role": "user",
@@ -421,10 +419,7 @@ async def _plan_scene_edit(instruction: str, scenes: list[dict], scene_index: in
             "video_motion": scene.get("video_motion"),
             "dialogue": _clean_dialogue(scene.get("dialogue")),
         })
-
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    message = client.messages.create(
-        model="claude-sonnet-4-5",
+    message = prompt_llm.create(
         max_tokens=2500,
         messages=[{
             "role": "user",
