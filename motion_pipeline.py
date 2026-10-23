@@ -51,7 +51,13 @@ ROLE_MODELS = {
 RENDER_SERVICE_URL = os.environ.get("RENDER_SERVICE_URL", "").rstrip("/")
 RENDER_TOKEN = os.environ.get("RENDER_TOKEN", "")
 # $ per million tokens (input, output) by model family. Cache writes cost 1.25×, reads 0.1×.
-PRICES = {"opus": (5.0, 25.0), "sonnet": (3.0, 15.0), "haiku": (1.0, 5.0)}
+PRICES = {"opus-5-5": (4.0, 20.0), "sonnet-5-5": (2.0, 10.0), "haiku-5-5": (0.1, 0.5),
+          "opus": (5.0, 25.0), "sonnet": (3.0, 15.0), "haiku": (1.0, 5.0)}
+# Current models always think; effort is the only knob (Opus 5.5 defaults to medium).
+EFFORT = {"director": os.environ.get("MOTION_DIRECTOR_EFFORT", "medium"),
+          "animator": os.environ.get("MOTION_ANIMATOR_EFFORT", "medium"),
+          "critic": os.environ.get("MOTION_CRITIC_EFFORT", "low")}
+THINK_ROOM = {"low": 1500, "medium": 4000, "high": 8000}   # max_tokens covers thinking too
 
 # Hard Claude budget per job: $0.025 per output second → $0.25 for a 10 s video.
 BUDGET_PER_SECOND = float(os.environ.get("MOTION_BUDGET_PER_SECOND", "0.025"))
@@ -217,16 +223,36 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
         raise OverBudget(f"{role}: ${est:.3f} would exceed the ${b['limit']:.2f} ceiling")
     b["future"] = max(0.0, b["future"] - mandatory_slot)
     b["reserved"] += est
-    kw = {"tools": [tool], "tool_choice": {"type": "tool", "name": tool["name"]}} if tool else {}
     model = _model(job_id, role)
+    effort = EFFORT.get(role, "medium")
+    # forced tool_choice is rejected by current models: offer the tool, ask for it by name,
+    # and nudge once (append-only) if the answer came back as plain text.
+    if tool:
+        ask = {"type": "text", "text": f"Answer by calling the `{tool['name']}` tool."}
+        content = [{"type": "text", "text": content}, ask] if isinstance(content, str) else [*content, ask]
+    messages = [{"role": "user", "content": content}]
+    kw = {"tools": [tool], "tool_choice": {"type": "auto"}} if tool else {}
     try:
-        async with _claude_sem:
-            async with _anthropic().messages.stream(
-                model=model, max_tokens=max_tokens,
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": content}], **kw,
-            ) as stream:
-                msg = await stream.get_final_message()
+        for attempt in range(2 if tool else 1):
+            async with _claude_sem:
+                async with _anthropic().messages.stream(
+                    model=model, max_tokens=max_tokens + THINK_ROOM.get(effort, 4000),
+                    output_config={"effort": effort},
+                    system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                    messages=messages, **kw,
+                ) as stream:
+                    msg = await stream.get_final_message()
+            _record_usage(job_id, role, model, msg.usage)
+            if not tool:
+                return "".join(blk.text for blk in msg.content if getattr(blk, "type", "") == "text")
+            for blk in msg.content:
+                if getattr(blk, "type", "") == "tool_use":
+                    return dict(blk.input)
+            if msg.stop_reason in ("max_tokens", "refusal"):
+                break
+            messages += [{"role": "assistant", "content": msg.content},
+                         {"role": "user", "content": f"Call the `{tool['name']}` tool now with your answer."}]
+        raise ValueError(f"model did not return the structured result ({msg.stop_reason})")
     except anthropic.APIStatusError as e:
         if "credit balance" in str(e).lower():
             _job(job_id)["billing_exhausted"] = True
@@ -235,7 +261,8 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
     finally:
         b["reserved"] = max(0.0, b["reserved"] - est)
 
-    u = msg.usage
+
+def _record_usage(job_id: str, role: str, model: str, u):
     pin, pout = _price(model)
     cw = getattr(u, "cache_creation_input_tokens", 0) or 0
     cr = getattr(u, "cache_read_input_tokens", 0) or 0
@@ -249,13 +276,6 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
     r["calls"] += 1
     r["output_tokens"] += u.output_tokens or 0
     r["cost_usd"] = round(r["cost_usd"] + cost, 5)
-
-    if tool:
-        for blk in msg.content:
-            if getattr(blk, "type", "") == "tool_use":
-                return dict(blk.input)
-        raise ValueError("model did not return the structured result")
-    return "".join(blk.text for blk in msg.content if getattr(blk, "type", "") == "text")
 
 
 _OBJ = {"type": "object"}
