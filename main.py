@@ -571,6 +571,7 @@ class GenerateFruitDramaRequest(BaseModel):
     main_gender: Optional[Literal["girl", "boy"]] = "girl"
     second_fruit: Optional[str] = "banana"
     second_gender: Optional[Literal["girl", "boy"]] = "boy"
+    genre: Optional[Literal["drama", "comedy", "romance", "revenge", "mystery", "spooky"]] = "drama"
     scene_count: Optional[int] = 5
     aspect_ratio: Optional[Literal["9:16", "16:9"]] = "9:16"
     resolution: Optional[Literal["720p", "1080p"]] = "720p"

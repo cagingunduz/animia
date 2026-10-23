@@ -173,6 +173,17 @@ Spoken dialogue, performed as character voices:
 Ambient sound should match the location: {scene.get("location")}."""
 
 
+# How the story should play out, picked by the user on the setup screen.
+GENRE_DIRECTION = {
+    "drama": "Emotional drama: a betrayal or a hidden truth, hurt feelings, a tearful confrontation, a turning point and a heartfelt ending.",
+    "comedy": "Comedy: a misunderstanding that keeps escalating, silly situations, quick comic timing and a funny twist at the end.",
+    "romance": "Sweet romance: a crush, shy glances, a misunderstanding between the two, and an innocent, heartwarming confession.",
+    "revenge": "Revenge: one character is wronged, plans a clever comeback and turns the tables with a satisfying payoff, without any violence.",
+    "mystery": "Mystery: something goes missing or a secret is hidden, clues across the scenes, suspicion, and a surprising reveal.",
+    "spooky": "Spooky but family-safe: an eerie kitchen at night, strange sounds, rising tension, and a harmless, funny reveal at the end.",
+}
+
+
 async def generate_fruit_drama_plan(
     title: str,
     main_fruit: str,
@@ -180,7 +191,9 @@ async def generate_fruit_drama_plan(
     second_fruit: str,
     second_gender: str,
     scene_count: int,
+    genre: str = "drama",
 ) -> dict:
+    direction = GENRE_DIRECTION.get(genre, GENRE_DIRECTION["drama"])
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     message = client.messages.create(
         model="claude-opus-4-5",
@@ -189,8 +202,9 @@ async def generate_fruit_drama_plan(
             "role": "user",
             "content": f"""You are a viral short-form AI Fruit Drama director.
 
-Create a family-safe, emotional, funny-but-serious fruit drama plan.
+Create a family-safe fruit drama plan.
 
+Genre: {direction}
 Story idea: {title}
 Main character fruit/gender: {main_fruit} / {main_gender}
 Second character fruit/gender: {second_fruit} / {second_gender}
@@ -502,6 +516,7 @@ async def run_fruit_drama_pipeline(job_id: str, payload: dict):
             second_fruit=payload.get("second_fruit", "banana"),
             second_gender=payload.get("second_gender", "boy"),
             scene_count=scene_count,
+            genre=payload.get("genre") or "drama",
         )
         characters = plan.get("characters", [])[:3]
         scenes = [_prepare_scene(s) for s in plan.get("scenes", [])[:scene_count]]
