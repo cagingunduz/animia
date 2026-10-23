@@ -57,7 +57,7 @@ PRICES = {"opus-5-5": (4.0, 20.0), "sonnet-5-5": (2.0, 10.0), "haiku-5-5": (0.1,
 EFFORT = {"director": os.environ.get("MOTION_DIRECTOR_EFFORT", "medium"),
           "animator": os.environ.get("MOTION_ANIMATOR_EFFORT", "medium"),
           "critic": os.environ.get("MOTION_CRITIC_EFFORT", "low")}
-THINK_ROOM = {"low": 1500, "medium": 4000, "high": 8000}   # max_tokens covers thinking too
+THINK_ROOM = {"low": 3000, "medium": 10000, "high": 16000}  # max_tokens covers thinking too
 
 # Hard Claude budget per job: $0.025 per output second → $0.25 for a 10 s video.
 BUDGET_PER_SECOND = float(os.environ.get("MOTION_BUDGET_PER_SECOND", "0.025"))
@@ -102,6 +102,10 @@ def _stage(job_id: str, stage: str, step: int):
     j = _job(job_id)
     j["stage"] = stage
     j["step"] = step
+
+
+def _record_error(job_id: str, msg: str):
+    _job(job_id).setdefault("errors", []).append(msg[:400])
 
 
 def _seg_state(job_id: str, seg: dict, **kw):
@@ -210,7 +214,8 @@ def _anthropic():
 
 
 async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
-                  tool: dict | None = None, optional: bool = False, mandatory_slot: float = 0.0):
+                  tool: dict | None = None, optional: bool = False, mandatory_slot: float = 0.0,
+                  effort: str | None = None):
     """One Claude call under the job's budget.
 
     optional=True  -> raise OverBudget instead of calling when the worst case doesn't fit.
@@ -224,7 +229,7 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
     b["future"] = max(0.0, b["future"] - mandatory_slot)
     b["reserved"] += est
     model = _model(job_id, role)
-    effort = EFFORT.get(role, "medium")
+    effort = effort or EFFORT.get(role, "medium")
     # forced tool_choice is rejected by current models: offer the tool, ask for it by name,
     # and nudge once (append-only) if the answer came back as plain text.
     if tool:
@@ -244,7 +249,10 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
                     msg = await stream.get_final_message()
             _record_usage(job_id, role, model, msg.usage)
             if not tool:
-                return "".join(blk.text for blk in msg.content if getattr(blk, "type", "") == "text")
+                text = "".join(blk.text for blk in msg.content if getattr(blk, "type", "") == "text")
+                if msg.stop_reason == "max_tokens" and not text.strip():
+                    raise ValueError(f"{role}: thinking used the whole output budget")
+                return text
             for blk in msg.content:
                 if getattr(blk, "type", "") == "tool_use":
                     return dict(blk.input)
@@ -826,9 +834,20 @@ def _animator_ctx(p: dict, plan: dict, seg: dict, n_segs: int, anchor_html: str 
 
 
 async def _animate(job_id: str, ctx: list, seconds: float, mandatory_slot: float) -> str:
-    text = await _claude(job_id, ANIMATOR_SYSTEM, [*ctx, {"type": "text", "text": "Write this segment now."}],
-                         max_tokens=_animator_max_out(seconds), role="animator", mandatory_slot=mandatory_slot)
-    return _extract_html(text)
+    ask = [*ctx, {"type": "text", "text": "Write this segment now."}]
+    try:
+        text = await _claude(job_id, ANIMATOR_SYSTEM, ask, max_tokens=_animator_max_out(seconds),
+                             role="animator", mandatory_slot=mandatory_slot)
+        return _extract_html(text)
+    except (BillingError, OverBudget):
+        raise
+    except Exception as e:
+        # one more go with less thinking (a dropped connection, or no HTML left after thinking)
+        print(f"[motion] animator retry: {e!r}")
+        _record_error(job_id, f"animator retry: {e!r}")
+        text = await _claude(job_id, ANIMATOR_SYSTEM, ask, max_tokens=_animator_max_out(seconds),
+                             role="animator", effort="low")
+        return _extract_html(text)
 
 
 async def _critique(job_id: str, p: dict, plan: dict, seg: dict, video: str, tmp: str,
@@ -1201,6 +1220,8 @@ async def run_motion_pipeline(job_id: str, p: dict):
             for s, r in zip(segs, results):
                 if isinstance(r, Exception) or not r.get("ok"):
                     print(f"[motion] segment {s['n']} failed: {r!r}")
+                    _record_error(job_id, f"segment {s['n']}: {r!r}" if isinstance(r, Exception)
+                                  else f"segment {s['n']}: render failed after fixes")
                     _seg_state(job_id, s, status="failed")
                     if isinstance(r, BillingError):
                         raise r
