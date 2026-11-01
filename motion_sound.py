@@ -55,6 +55,19 @@ SFX_LIBRARY = {
                       "playful, steady, loopable, no vocals", 22.0, -20, 99999),
     "yard_bed": ("calm light documentary background music, soft plucked guitar and gentle marimba, warm, steady, "
                  "loopable, no vocals", 22.0, -20, 99999),
+    # Survival Story kit (used through survival_sound, which also makes its own music bed and tiny UI sounds in code)
+    "knock": ("three slow heavy knocks on a wooden apartment door at night, close, dry", 1.4, -8, 600),
+    "slam": ("a heavy door slammed shut in a hallway, one hard bang", 1.6, -7, 600),
+    "creak": ("an old wooden door creaking slowly open, eerie, close", 2.2, -10, 800),
+    "floorcreak": ("a single wooden floorboard creaking under a careful step, close", 1.6, -11, 600),
+    "lock": ("a door deadbolt turning and locking, metallic click and slide", 1.0, -10, 400),
+    "hit": ("a deep cinematic horror impact hit, low and heavy, short tail", 2.5, -6, 700),
+    "boom": ("a low distant boom, muffled, like something heavy falling outside", 1.0, -8, 600),
+    "meow": ("a single short house cat meow, close", 0.8, -10, 400),
+    "catangry": ("an angry cat hissing and growling, close", 1.6, -10, 600),
+    "glass": ("a window pane cracking and breaking, short", 1.8, -8, 600),
+    "swell": ("a dark cinematic riser swelling up, tense, no melody", 5.0, -12, 2000),
+    "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain
 VOICE_TARGET_LUFS = -18.0  # integrated loudness of every narration line

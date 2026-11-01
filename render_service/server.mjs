@@ -156,6 +156,12 @@ async function writeProject(body) {
   if (String(files['index.html']).includes('yard/')) await cp(path.join(HERE, 'yard'), path.join(dir, 'yard'), { recursive: true });
   // Explainer compositions load the explainer kit, presenter rig and fonts from explainer/.
   if (String(files['index.html']).includes('explainer/')) await cp(path.join(HERE, 'explainer'), path.join(dir, 'explainer'), { recursive: true });
+  // Survival Story compositions (three.js + cannon-es + the stage, one bundled script, and their fonts) load from survival/.
+  if (String(files['index.html']).includes('survival/stage.three.js')) {
+    await mkdir(path.join(dir, 'survival', 'fonts'), { recursive: true });
+    await copyFile(path.join(HERE, 'survival', 'stage.three.js'), path.join(dir, 'survival', 'stage.three.js'));
+    for (const f of ['Oswald-700.woff2', 'JetBrainsMono-700.woff2']) await copyFile(path.join(HERE, 'survival', 'fonts', f), path.join(dir, 'survival', 'fonts', f));
+  }
   return { dir, unknownIcons: [...unknownIcons] };
 }
 
@@ -326,4 +332,4 @@ http.createServer(async (req, res) => {
   } finally {
     release();
   }
-}).listen(PORT, '::', () => console.log(`[render-service] listening on ${PORT}`));
+}).listen(PORT, process.env.HOST || '::', () => console.log(`[render-service] listening on ${PORT}`));
