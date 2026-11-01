@@ -32,12 +32,19 @@ from yard_prompts import EDIT_TOOL, FIX_NOTE, REVIEW_SYSTEM, SCENE_SYSTEM, SCRIP
 
 MODEL = os.environ.get("YARD_MODEL", os.environ.get("PROMPT_MODEL", "claude-sonnet-5-5"))
 EFFORT = os.environ.get("YARD_EFFORT", "medium")
-# The 3D is drawn at this size (CPU rendering) and upscaled to 1080x1920 at the end.
-DRAW_H = int(os.environ.get("YARD_DRAW_HEIGHT", "1280"))
+# The 3D is drawn at this size (CPU rendering), upscaled to 1080x1920, and the captions are burned in
+# at full size afterwards (libass), so they stay sharp.
+DRAW_H = int(os.environ.get("YARD_DRAW_HEIGHT", "960"))
 DRAW_W = DRAW_H * 9 // 16
 OUT_W, OUT_H = 1080, 1920
 FPS = 30
-CHUNKS = int(os.environ.get("YARD_RENDER_CHUNKS", "4"))
+CHUNKS = max(1, min(5, int(os.environ.get("YARD_RENDER_CHUNKS", "5"))))
+CHUNK_TIMEOUT_MS = 40 * 60 * 1000
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+FFMPEG = os.environ.get("YARD_FFMPEG", "ffmpeg")
+# One video renders at a time: its chunks already fill the render service's slots. Later jobs wait in line.
+_render_slot = asyncio.Semaphore(int(os.environ.get("YARD_PARALLEL_VIDEOS", "1")))
+_render_line: list[str] = []
 VOICE_SPEED = float(os.environ.get("YARD_VOICE_SPEED", "1.15"))
 MAX_FIXES = 3
 TEXTURES = ["sky", "excavated_soil_wall", "leafy_grass", "plastered_wall", "clay_roof_tiles",
@@ -164,6 +171,27 @@ def _captions(lines: list[dict]) -> list[list]:
         nxt = words[i + 1]["start"] if i + 1 < len(words) else w["end"] + 0.4
         caps.append([w["start"], word, round(min(nxt, w["end"] + 0.35), 3)])
     return caps
+
+
+def _ass_time(t: float) -> str:
+    cs = max(0, int(round(t * 100)))
+    return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
+
+
+def _captions_ass(captions: list, path: str):
+    """One word at a time, mid-frame (52 %), white rounded black with a dark outline, a small pop on each word."""
+    y = round(OUT_H * 0.52)
+    head = (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {OUT_W}\nPlayResY: {OUT_H}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
+            "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+            "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            "Style: Cap,Nunito,98,&H00FFFFFF,&H00FFFFFF,&H001A1212,&H8C000000,1,0,0,0,100,100,0,0,1,7,5,5,40,40,0,1\n\n"
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    rows = []
+    for start, word, end in captions:
+        text = word.replace("{", "").replace("}", "").replace("\\", "")
+        rows.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Cap,,0,0,0,,"
+                    f"{{\\pos({OUT_W // 2},{y})\\fscx84\\fscy84\\t(0,90,\\fscx100\\fscy100)}}{text}")
+    open(path, "w", encoding="utf-8").write(head + "\n".join(rows) + "\n")
 
 
 def _wav_to_mp3(wav: str, mp3: str):
@@ -346,28 +374,52 @@ async def _render(job_id: str, code: str, timing: dict, captions: list, tmp: str
     done = {"n": 0}
 
     async def one(k: int, f0: int, nf: int) -> str:
-        html = compose(code, timing, captions, DRAW_W, DRAW_H, start=f0 / FPS, duration=nf / FPS)
+        html = compose(code, timing, [], DRAW_W, DRAW_H, start=f0 / FPS, duration=nf / FPS)
         for attempt in range(2):
-            r = await _render_call("/render", {"files": {"index.html": html}, "quality": "standard", "fps": FPS}, timeout=1800)
+            r = await _render_call("/render", {"files": {"index.html": html}, "quality": "standard", "fps": FPS,
+                                               "timeout_ms": CHUNK_TIMEOUT_MS}, timeout=CHUNK_TIMEOUT_MS / 1000 * 2.2)
             if r.status_code == 200 and r.content:
                 path = os.path.join(tmp, f"chunk{k}.mp4")
                 open(path, "wb").write(r.content)
                 done["n"] += 1
                 _job(job_id)["message"] = f"Rendering the 3D ({done['n']}/{len(spans)})"
                 return path
-            print(f"[yard] chunk {k} attempt {attempt + 1} failed: {r.status_code} {r.text[:400]}")
+            print(f"[yard] chunk {k} attempt {attempt + 1} failed: {r.status_code} {r.text[-400:]}")
+            if "timeout, killed" in r.text:                # a second try would time out the same way
+                break
         raise RuntimeError(f"render failed on chunk {k + 1}")
 
-    paths = await asyncio.gather(*[one(k, f0, nf) for k, (f0, nf) in enumerate(spans)])
+    _render_line.append(job_id)
+    try:
+        while True:                                        # wait for our turn, telling the user where they are
+            ahead = _render_line.index(job_id)
+            if ahead == 0 or not _render_slot.locked():
+                break
+            _job(job_id)["message"] = f"Waiting for the renderer ({ahead} video{'s' if ahead > 1 else ''} ahead)"
+            await asyncio.sleep(5)
+        async with _render_slot:
+            _job(job_id)["message"] = "Rendering the 3D"
+            paths = await asyncio.gather(*[one(k, f0, nf) for k, (f0, nf) in enumerate(spans)])
+    finally:
+        _render_line.remove(job_id)
+    return _join(paths, captions, tmp)
+
+
+def _join(paths: list[str], captions: list, tmp: str) -> str:
+    """Chunks -> one 1080x1920 video with the captions burned in at full size."""
     lst = os.path.join(tmp, "chunks.txt")
     open(lst, "w").write("".join(f"file '{p}'\n" for p in paths))
+    ass = os.path.join(tmp, "captions.ass")
+    _captions_ass(captions, ass)
     out = os.path.join(tmp, "video.mp4")
-    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst,
-                        "-vf", f"scale={OUT_W}:{OUT_H}:flags=lanczos,format=yuv420p", "-r", str(FPS),
-                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-an", out], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError("joining the chunks failed: " + r.stderr[-600:])
-    return out
+    base = f"scale={OUT_W}:{OUT_H}:flags=lanczos"
+    for vf in (f"{base},subtitles=filename={ass}:fontsdir={FONT_DIR},format=yuv420p", f"{base},format=yuv420p"):
+        r = subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-vf", vf, "-r", str(FPS),
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-an", out], capture_output=True, text=True)
+        if r.returncode == 0:
+            return out
+        print(f"[yard] join failed ({'with' if 'subtitles' in vf else 'without'} captions): {r.stderr[-600:]}")
+    raise RuntimeError("joining the chunks failed")
 
 
 # ─────────────────────────── 6. sound ───────────────────────────

@@ -110,14 +110,14 @@ function release() {
   if (next) next();
 }
 
-function run(args, cwd) {
+function run(args, cwd, timeoutMs = TIMEOUT_MS) {
   return new Promise(resolve => {
     const child = spawn(HF_BIN, args, { cwd, env: CHILD_ENV });
     let out = '';
     const keep = d => { out += d.toString(); if (out.length > 200_000) out = out.slice(-200_000); };
     child.stdout.on('data', keep);
     child.stderr.on('data', keep);
-    const timer = setTimeout(() => { out += '\n[render-service] timeout, killed'; child.kill('SIGKILL'); }, TIMEOUT_MS);
+    const timer = setTimeout(() => { out += '\n[render-service] timeout, killed'; child.kill('SIGKILL'); }, timeoutMs);
     child.on('close', code => { clearTimeout(timer); resolve({ code, out }); });
     child.on('error', err => { clearTimeout(timer); resolve({ code: -1, out: String(err) }); });
   });
@@ -192,7 +192,9 @@ const handleRender = body => withProject(body, async (dir, unknown) => {
   const quality = ['draft', 'standard', 'high'].includes(body.quality) ? body.quality : 'standard';
   const args = ['render', '.', '--output', out, '--quality', quality, '--workers', '1'];
   if (body.fps) args.push('--fps', String(Math.max(1, Math.min(60, Number(body.fps) || 30))));
-  const r = await run(args, dir);
+  // long CPU renders (3D Build chunks) may ask for more time, up to 45 min
+  const limit = Math.min(45 * 60 * 1000, Math.max(TIMEOUT_MS, Number(body.timeout_ms) || 0));
+  const r = await run(args, dir, limit);
   let video = null;
   try { video = await readFile(out); } catch { /* missing */ }
   if (r.code !== 0 || !video) return { status: 422, json: { error: 'render failed', stage: 'render', log: tail(r.out) } };

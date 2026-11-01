@@ -62,10 +62,12 @@
   const TRI_F = `
     varying vec3 vWP; varying vec3 vWN;
     uniform float uScale; uniform vec3 uTint; uniform float uSat; uniform float uBright;
-    vec3 triS(sampler2D s, float k) {
-      vec3 n = normalize(vWN); vec3 b = pow(abs(n), vec3(6.0)); b /= (b.x + b.y + b.z);
-      return texture2D(s, vWP.zy * k).rgb * b.x + texture2D(s, vWP.xz * k).rgb * b.y + texture2D(s, vWP.xy * k).rgb * b.z;
+    // one texture read per pixel, projected along the face's main axis (CPU rendering pays per read)
+    vec2 triUV() {
+      vec3 n = abs(vWN);
+      return n.x >= max(n.y, n.z) ? vWP.zy : (n.y >= n.z ? vWP.xz : vWP.xy);
     }
+    vec3 triS(sampler2D s, float k) { return texture2D(s, triUV() * k).rgb; }
     vec3 grade(vec3 c, float sat, float bright, vec3 tint) {
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722)); return mix(vec3(l), c, sat) * bright * tint;
     }`;
@@ -151,19 +153,19 @@
         .replace('#include <map_fragment>', `
           vec3 n = normalize(vWN);
           float z = vWP.y;
-          vec3 soil = grade(triS(map, uScale), uSat, uBright, uTint);
+          float isGrass = step(0.7, n.y) * step(-0.06, z);
+          vec3 raw = isGrass > 0.5 ? texture2D(gMap, vWP.xz / 1.2).rgb : triS(map, uScale);
+          vec3 soil = grade(raw, uSat, uBright, uTint);
           float topF = clamp((z + 0.45) / 0.30, 0.0, 1.0);
           soil = mix(soil, soil * vec3(0.42, 0.33, 0.27), topF);
           float deepF = clamp((-2.2 - z) / 1.8, 0.0, 1.0);
           soil = mix(soil, soil * vec3(1.0, 0.82, 0.66), deepF);
-          float wd = length((vec2(vWP.x, z) - uWet.xy) * vec2(0.75, 1.0)) + 0.35 * (triS(map, 0.9).r - 0.5);
+          float wd = length((vec2(vWP.x, z) - uWet.xy) * vec2(0.75, 1.0)) + 0.35 * (raw.r - 0.5);
           float wet = uWet.w * (1.0 - smoothstep(uWet.z - 0.12, uWet.z, wd));
           soil *= mix(1.0, 0.45, wet * step(0.7, n.z));
-          vec3 g = texture2D(gMap, vWP.xz / 1.2).rgb;
-          g = grade(g, 1.5, 0.85, vec3(0.42, 0.85, 0.22));
+          vec3 g = grade(raw, 1.5, 0.85, vec3(0.42, 0.85, 0.22));
           float stripe = mod(floor(vWP.x / 1.6), 2.0);
           g *= mix(vec3(1.0), vec3(0.66, 0.78, 0.55), stripe);
-          float isGrass = step(0.7, n.y) * step(-0.06, z);
           diffuseColor.rgb *= mix(soil, g, isGrass);`)
         .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.95, 1.0, step(0.7, normalize(vWN).y));');
     };
@@ -1074,7 +1076,7 @@
     renderer.setSize(W, H, false);
     renderer.outputColorSpace = T.SRGBColorSpace;
     renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = o.exposure ?? 1.0;
-    renderer.shadowMap.enabled = o.shadows ?? true; renderer.shadowMap.type = o.shadowType === 'pcf' ? T.PCFShadowMap : T.PCFSoftShadowMap;
+    renderer.shadowMap.enabled = o.shadows ?? true; renderer.shadowMap.type = o.shadowType === 'soft' ? T.PCFSoftShadowMap : T.PCFShadowMap;
     scene = new T.Scene();
     world = new T.Group(); world.rotation.x = -Math.PI / 2; scene.add(world);
     cam = new T.PerspectiveCamera(50, W / H, 0.05, 600);
@@ -1084,7 +1086,7 @@
     // sun from the front left, high, so the cut face and the house front are lit; a soft fill from behind
     const sun = new T.DirectionalLight(new T.Color(1.0, 0.96, 0.9), o.sun ?? 2.7);
     sun.position.copy(V(-14, -26, 27)); sun.target.position.copy(V(0, 4, 0)); scene.add(sun, sun.target);
-    sun.castShadow = true; sun.shadow.mapSize.set(o.shadowSize ?? 2048, o.shadowSize ?? 2048);
+    sun.castShadow = true; sun.shadow.mapSize.set(o.shadowSize ?? 1024, o.shadowSize ?? 1024);
     Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 120 });
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
     const fill = new T.DirectionalLight(new T.Color(1.0, 0.9, 0.78), o.fill ?? 0.9);
