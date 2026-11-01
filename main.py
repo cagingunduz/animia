@@ -20,6 +20,7 @@ from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_dram
 from motion_pipeline import run_motion_pipeline, submit_gate
 from yard_pipeline import run_yard_pipeline
 import explainer_pipeline
+from survival_pipeline import run_survival_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -670,6 +671,40 @@ async def explainer_status(job_id: str):
     if not job or job.get("kind") != "explainer":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "title", "duration", "final_video_url", "thumbnail_url", "usage", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+class GenerateSurvivalRequest(BaseModel):
+    idea: Optional[str] = Field(None, max_length=400)
+    setting: Optional[str] = Field("auto", max_length=60)
+    seconds: int = Field(70, ge=60, le=90)
+    day: int = Field(1, ge=1, le=30)
+
+
+@app.post("/generate-survival")
+async def generate_survival(req: GenerateSurvivalRequest):
+    """Survival Story: second-person stickman survival thrillers in 3D low-poly sets (Claude story + film, Kokoro voices,
+    CPU render on the render service, sound made in code)."""
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Survival Story is not available yet (render service not connected).")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "survival", "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
+        "message": "Queued", "title": None, "script": None, "duration": None,
+        "final_video_url": None, "thumbnail_url": None, "error": None, "traceback": None,
+        "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(run_survival_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/survival/{job_id}")
+async def survival_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "survival":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "title", "script", "rules", "choice", "post", "duration",
+            "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 
