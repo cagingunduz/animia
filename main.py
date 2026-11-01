@@ -568,16 +568,18 @@ async def motion_approve(job_id: str, req: MotionApproveRequest):
 
 class GenerateYardRequest(BaseModel):
     topic: Optional[str] = Field(None, max_length=300)
+    set: Optional[Literal["yard", "body"]] = "yard"     # yard = 3D Build, body = 3D Health
 
 
 @app.post("/generate-yard")
 async def generate_yard(req: GenerateYardRequest):
-    """3D Build: "How a Hole in Your Yard Becomes a ___" (Claude script + scene, Kokoro voice, CPU 3D render)."""
+    """3D Build ("How a Hole in Your Yard Becomes a ___") and 3D Health ("What Happens in Your Body When ___"):
+    Claude script + scene, Kokoro voice, CPU 3D render."""
     if not os.environ.get("RENDER_SERVICE_URL"):
         raise HTTPException(status_code=503, detail="3D Build is not available yet (render service not connected).")
     job_id = str(uuid.uuid4())
     job_store[job_id] = {
-        "kind": "yard", "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
+        "kind": "yard", "set": req.set or "yard", "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
         "message": "Queued", "title": None, "thing": None, "script": None, "duration": None,
         "final_video_url": None, "thumbnail_url": None, "error": None, "traceback": None,
         "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
@@ -591,7 +593,7 @@ async def yard_status(job_id: str):
     job = job_store.get(job_id)
     if not job or job.get("kind") != "yard":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
-    keys = ["status", "stage", "step", "total_steps", "message", "title", "thing", "script", "duration",
+    keys = ["set", "status", "stage", "step", "total_steps", "message", "title", "thing", "script", "duration",
             "final_video_url", "thumbnail_url", "usage", "voice", "review", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 

@@ -351,9 +351,16 @@
       v.multiplyScalar(k); v.z *= squash; p.setXYZ(i, v.x, v.y, v.z);
     }
     g.computeVertexNormals();
-    return g;
+    return smoothNormals(g);
   }
   YK.blobGeo = blobGeo;
+  // the icosahedron is unindexed (flat faces): average the normals of vertices that share a position
+  function smoothNormals(g) {
+    const p = g.attributes.position, n = g.attributes.normal, acc = new Map(), key = i => `${p.getX(i).toFixed(5)},${p.getY(i).toFixed(5)},${p.getZ(i).toFixed(5)}`;
+    for (let i = 0; i < p.count; i++) { const k = key(i), a = acc.get(k) || [0, 0, 0]; a[0] += n.getX(i); a[1] += n.getY(i); a[2] += n.getZ(i); acc.set(k, a); }
+    for (let i = 0; i < p.count; i++) { const a = acc.get(key(i)), L = Math.hypot(a[0], a[1], a[2]) || 1; n.setXYZ(i, a[0] / L, a[1] / L, a[2] / L); }
+    n.needsUpdate = true; return g;
+  }
 
   // ---------------------------------------------------------------- the set
   const BLOCK = { w: 30, d: 16, h: 16 };
@@ -1021,9 +1028,270 @@
     });
   };
 
+  // ================================================================ the body set (health explainers)
+  // A standing person (feet at z = 0, 1.75 m tall) facing the camera (-y): an x-ray skin, a skeleton, organs and
+  // vessels. The person's left is +x. Every organ has its own glowing material for highlights.
+  const BODY_VIEWS = {
+    full: [[0, -2.9, 0.1], [0, 0, 0], 34], torso: [[0, -1.5, 0.05], [0, 0, 0], 34],
+    organ: [[0.12, -0.62, 0.06], [0, 0, 0], 34], close: [[0.05, -0.32, 0.03], [0, 0, 0], 32],
+    left: [[-1.0, -1.2, 0.2], [0, 0, 0], 34], right: [[1.0, -1.2, 0.2], [0, 0, 0], 34],
+    high: [[0, -1.0, 0.85], [0, 0, 0], 34], low: [[0, -1.25, -0.45], [0, 0, 0.08], 34],
+    micro: [[0, -2.3, 0.35], [0, 0, 0], 30], microClose: [[0.4, -1.3, 0.15], [0, 0, 0], 30],
+  };
+  YK.BODY_VIEWS = BODY_VIEWS;
+  const BODY = {};   // organ meshes by name, filled by YK.body()
+
+  // organs: glossy, with a soft rim light and a glow you can pulse (YK.glow)
+  function organMat(rgb, o = {}) {
+    const glow = { value: 0 }, glowC = { value: new T.Color(...(o.glow || [1.0, 0.85, 0.4])) };
+    const m = new T.MeshStandardMaterial({ color: new T.Color(...rgb), roughness: o.rough ?? 0.38, metalness: 0, envMapIntensity: 0.5,
+      transparent: (o.alpha ?? 1) < 1, opacity: o.alpha ?? 1 });
+    m.onBeforeCompile = sh => {
+      sh.uniforms.uGlow = glow; sh.uniforms.uGlowC = glowC; sh.uniforms.uRim = { value: new T.Color(...(o.rim || [0.55, 0.75, 1.0])) };
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uGlow; uniform vec3 uGlowC; uniform vec3 uRim;')
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          float fr = pow(1.0 - abs(dot(normalize(normal), normalize(vViewPosition))), 2.5);
+          totalEmissiveRadiance += uRim * fr * 0.22 + uGlowC * uGlow * (0.35 + 0.65 * fr);`);
+    };
+    m.customProgramCacheKey = () => 'organ';
+    m.userData.glow = glow; m.userData.glowColor = glowC.value;
+    return m;
+  }
+  YK.organMat = (rgb, o) => organMat(rgb, o);
+  // the skin: an x-ray shell, see-through head on and bright at the edges
+  function xrayMat(rgb = [0.35, 0.7, 1.0], k = 1) {
+    return new T.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: T.AdditiveBlending, side: T.FrontSide,
+      uniforms: { uC: { value: new T.Color(...rgb) }, uK: { value: k } },
+      vertexShader: `varying vec3 vN; varying vec3 vV;
+        void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = -mv.xyz; gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform vec3 uC; uniform float uK; varying vec3 vN; varying vec3 vV;
+        void main(){ float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.2);
+          gl_FragColor = vec4(uC * (0.035 + 0.6 * f) * uK, 1.0);
+          #include <colorspace_fragment>
+        }`,
+    });
+  }
+  YK.xrayMat = xrayMat;
+  const mk = (geo, mat, name) => { const m = new T.Mesh(geo, mat); m.name = name || ''; world.add(m); return m; };
+  // a capsule between two kit points
+  function limb(a, b, r, mat) {
+    const A = new T.Vector3(...a), B = new T.Vector3(...b), d = new T.Vector3().subVectors(B, A), L = d.length();
+    const g = new T.CapsuleGeometry(r, L, 6, 16);
+    const m = new T.Mesh(g, mat); m.position.copy(A).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), d.normalize()); return m;
+  }
+  function tubeGeo(points, r, segs = 64, rs = 10) {
+    return new T.TubeGeometry(new T.CatmullRomCurve3(points.map(p => new T.Vector3(...p))), segs, r, rs, false);
+  }
+  // several blobs along a path, merged into one organic shape (stomach, pancreas)
+  function blobChain(points, radii, seed = 1) {
+    const parts = points.map((p, i) => { const g = blobGeo(radii[i], 1, 0.12, 2, seed + i); g.translate(...p); return g.toNonIndexed(); });
+    let n = 0; parts.forEach(g => { n += g.attributes.position.count; });
+    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3); let o = 0;
+    for (const g of parts) { pos.set(g.attributes.position.array, o * 3); nor.set(g.attributes.normal.array, o * 3); o += g.attributes.position.count; }
+    const geo = new T.BufferGeometry(); geo.setAttribute('position', new T.BufferAttribute(pos, 3)); geo.setAttribute('normal', new T.BufferAttribute(nor, 3));
+    return geo;
+  }
+  function organ(name, geo, rgb, loc, o = {}) {
+    const m = mk(geo, organMat(rgb, o), name); m.position.set(...loc);
+    if (o.scale) m.scale.set(...o.scale); if (o.rot) m.rotation.set(...o.rot.map(d => d * Math.PI / 180));
+    BODY[name] = m; return m;
+  }
+  function studio(top = '#0b1830', bottom = '#02050c') {
+    const c = document.createElement('canvas'); c.width = 16; c.height = 512;
+    const g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 512);
+    gr.addColorStop(0, top); gr.addColorStop(0.55, '#06101f'); gr.addColorStop(1, bottom);
+    g.fillStyle = gr; g.fillRect(0, 0, 16, 512);
+    const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; return t;
+  }
+
+  // YK.body({ organs: ['heart', ...] | 'all', skeleton: true, skin: true }) builds the person; returns the organ map.
+  // Organs: brain, heart, lungL, lungR, liver, stomach, pancreas, kidneyL, kidneyR, intestines, colon, bladder,
+  // and the vessels aorta (red) and vena (blue).
+  YK.body = function (o = {}) {
+    VIEWS = BODY_VIEWS;
+    scene.background = studio();
+    renderer.shadowMap.enabled = false;
+    if (lights.sun) { lights.sun.castShadow = false; lights.sun.intensity = 1.6; lights.sun.position.copy(V(-3, -6, 6)); lights.sun.target.position.copy(V(0, 0, 1.2)); }
+    if (lights.fill) { lights.fill.intensity = 1.0; lights.fill.color.setRGB(0.45, 0.75, 1.0); lights.fill.position.copy(V(2, 6, 3)); }
+    if (lights.hemi) { lights.hemi.intensity = 0.4; lights.hemi.groundColor.setRGB(0.1, 0.12, 0.2); }
+    const want = n => !o.organs || o.organs === 'all' || o.organs.includes(n);
+    if (o.skin !== false) {
+      const sk = xrayMat([0.35, 0.7, 1.0], 0.75), grp = new T.Group();
+      const torso = new T.LatheGeometry([[0.001, 0.9], [0.15, 0.91], [0.17, 0.97], [0.165, 1.05], [0.145, 1.12], [0.155, 1.22], [0.17, 1.32],
+        [0.18, 1.4], [0.165, 1.46], [0.07, 1.5], [0.001, 1.505]].map(([r, z]) => new T.Vector2(r, z)), 32);
+      torso.rotateX(Math.PI / 2); torso.scale(1.1, 0.62, 1);
+      grp.add(new T.Mesh(torso, sk));
+      const head = new T.Mesh(new T.SphereGeometry(0.1, 32, 24), sk); head.scale.set(0.82, 0.95, 1.12); head.position.set(0, 0.0, 1.64); grp.add(head);
+      grp.add(limb([0, 0, 1.47], [0, 0, 1.56], 0.05, sk));
+      for (const s of [-1, 1]) {
+        grp.add(limb([s * 0.17, 0, 1.43], [s * 0.21, 0, 1.43], 0.055, sk));
+        grp.add(limb([s * 0.22, 0, 1.41], [s * 0.27, 0.01, 1.13], 0.045, sk));
+        grp.add(limb([s * 0.27, 0.01, 1.13], [s * 0.3, -0.02, 0.88], 0.037, sk));
+        const hand = new T.Mesh(new T.SphereGeometry(0.045, 16, 12), sk); hand.scale.set(0.6, 0.9, 1.3); hand.position.set(s * 0.305, -0.025, 0.81); grp.add(hand);
+        grp.add(limb([s * 0.09, 0, 0.93], [s * 0.1, 0, 0.5], 0.068, sk));
+        grp.add(limb([s * 0.1, 0, 0.5], [s * 0.1, 0.01, 0.09], 0.05, sk));
+        const foot = new T.Mesh(new T.SphereGeometry(0.05, 16, 12), sk); foot.scale.set(0.8, 2.0, 0.6); foot.position.set(s * 0.1, -0.07, 0.03); grp.add(foot);
+      }
+      grp.renderOrder = 5; grp.traverse(c => { c.renderOrder = 5; });
+      world.add(grp); BODY.skin = grp;
+    }
+    if (o.skeleton !== false) {
+      const bone = organMat([0.8, 0.77, 0.7], { rough: 0.6, rim: [0.25, 0.35, 0.45], alpha: 0.55 }), grp = new T.Group();
+      for (let i = 0; i < 24; i++) { const v = new T.Mesh(new T.CylinderGeometry(0.016, 0.016, 0.022, 10), bone); v.rotation.x = Math.PI / 2; v.position.set(0, 0.065, 0.93 + i * 0.026); grp.add(v); }
+      for (let i = 0; i < 10; i++) {
+        const z = 1.42 - i * 0.025, w = 0.125 + 0.03 * Math.sin(Math.min(1, i / 6) * Math.PI / 2), d = 0.075;
+        for (const s of [-1, 1]) {
+          const pts = []; for (let k = 0; k <= 12; k++) { const th = (k / 12) * 0.86 * Math.PI; pts.push([s * w * Math.sin(th), 0.005 + 0.068 * Math.cos(th), z - 0.045 * (k / 12)]); }
+          grp.add(new T.Mesh(tubeGeo(pts, 0.0045, 24, 6), bone));
+        }
+      }
+      const pelvis = new T.Mesh(new T.TorusGeometry(0.1, 0.012, 10, 32), bone); pelvis.scale.set(1.25, 0.7, 1); pelvis.position.set(0, 0.035, 0.93); grp.add(pelvis);
+      world.add(grp); BODY.skeleton = grp;
+    }
+    if (want('brain')) organ('brain', blobGeo(0.075, 1, 0.22, 4, 9), [0.82, 0.45, 0.52], [0, 0.008, 1.67], { scale: [0.85, 1.05, 0.72] });
+    if (want('lungL')) organ('lungL', blobGeo(0.07, 1, 0.12, 3, 3), [0.82, 0.32, 0.38], [0.085, 0.01, 1.32], { scale: [0.95, 0.72, 1.6], alpha: 0.92 });
+    if (want('lungR')) organ('lungR', blobGeo(0.07, 1, 0.12, 3, 4), [0.82, 0.32, 0.38], [-0.085, 0.01, 1.32], { scale: [0.95, 0.72, 1.6], alpha: 0.92 });
+    if (want('heart')) organ('heart', blobGeo(0.05, 1, 0.16, 3, 5), [0.72, 0.07, 0.1], [0.022, -0.025, 1.31], { scale: [1, 0.9, 1.18], rot: [0, -20, -25] });
+    if (want('liver')) organ('liver', blobGeo(0.065, 1, 0.14, 3, 6), [0.48, 0.12, 0.1], [-0.06, -0.01, 1.17], { scale: [1.65, 0.8, 0.72], rot: [0, 12, 0] });
+    if (want('stomach')) organ('stomach', blobChain([[0.07, 0, 1.2], [0.075, -0.005, 1.165], [0.055, -0.01, 1.135], [0.025, -0.01, 1.125]], [0.04, 0.042, 0.033, 0.024], 11), [0.85, 0.36, 0.34], [0, 0, 0]);
+    if (want('pancreas')) organ('pancreas', blobChain([[-0.03, 0.02, 1.115], [0.0, 0.02, 1.12], [0.03, 0.02, 1.125], [0.058, 0.02, 1.13]], [0.016, 0.018, 0.015, 0.012], 21), [0.92, 0.66, 0.38], [0, 0, 0]);
+    for (const [n, s] of [['kidneyL', 1], ['kidneyR', -1]]) if (want(n)) organ(n, blobGeo(0.03, 1, 0.1, 3, 7 + s), [0.58, 0.14, 0.15], [s * 0.068, 0.045, 1.1], { scale: [0.7, 0.6, 1.25], rot: [0, s * 12, 0] });
+    if (want('intestines')) {
+      const pts = [];                                    // a meandering coil filling the belly
+      for (let i = 0; i <= 44; i++) pts.push([0.075 * Math.sin(i * 0.95) * (0.75 + 0.25 * Math.sin(i * 0.31)), -0.022 + 0.018 * Math.sin(i * 0.63),
+        1.065 - 0.12 * (i / 44) + 0.014 * Math.cos(i * 1.37)]);
+      organ('intestines', tubeGeo(pts, 0.013, 260, 8), [0.85, 0.42, 0.4], [0, 0, 0]);
+    }
+    if (want('colon')) organ('colon', tubeGeo([[-0.09, -0.01, 0.94], [-0.105, -0.01, 1.02], [-0.1, -0.015, 1.09], [0, -0.03, 1.1], [0.1, -0.015, 1.09], [0.105, -0.01, 1.01], [0.08, -0.01, 0.95], [0.03, 0.0, 0.93]], 0.022, 80, 10), [0.66, 0.33, 0.3], [0, 0, 0]);
+    if (want('bladder')) organ('bladder', blobGeo(0.03, 1, 0.1, 3, 8), [0.82, 0.62, 0.28], [0, -0.025, 0.9]);
+    if (want('aorta')) organ('aorta', tubeGeo([[0.015, -0.01, 1.34], [0.03, 0.0, 1.42], [0.0, 0.04, 1.43], [-0.005, 0.045, 1.35], [-0.005, 0.045, 1.1], [0.0, 0.04, 0.96], [0.06, 0.02, 0.9], [0.09, 0.0, 0.6], [0.095, 0.0, 0.2]], 0.009, 120, 8), [0.8, 0.08, 0.1], [0, 0, 0], { glow: [1, 0.3, 0.3] });
+    if (want('vena')) organ('vena', tubeGeo([[0.0, -0.005, 1.3], [-0.02, 0.03, 1.32], [-0.02, 0.035, 1.1], [-0.02, 0.03, 0.96], [-0.07, 0.02, 0.9], [-0.095, 0.0, 0.6], [-0.1, 0.0, 0.2]], 0.01, 120, 8), [0.15, 0.25, 0.8], [0, 0, 0], { glow: [0.4, 0.6, 1] });
+    // a soft glowing ring under the feet
+    const ring = mk(new T.RingGeometry(0.42, 0.45, 64), new T.MeshBasicMaterial({ color: new T.Color(0.3, 0.7, 1.0), transparent: true, opacity: 0.55, side: T.DoubleSide }));
+    ring.position.set(0, 0, 0.002);
+    const disc = mk(new T.CircleGeometry(0.42, 64), new T.MeshBasicMaterial({ color: new T.Color(0.08, 0.18, 0.32), transparent: true, opacity: 0.35 }));
+    disc.position.set(0, 0, 0.001);
+    return BODY;
+  };
+  YK.organs = BODY;
+
+  // make an organ (or any object built with organ materials) glow from t0 to t1: soft in and out, optional pulsing
+  YK.glow = function (obj, t0, t1, o = {}) {
+    const mats = [];
+    obj.traverse(c => { if (c.material && c.material.userData && c.material.userData.glow) mats.push(c.material); });
+    if (o.color) mats.forEach(m => m.userData.glowColor.setRGB(...o.color));
+    const amt = o.amount ?? 1, pulse = o.pulse ?? 0;
+    const fn = t => {
+      if (t < t0 || t > t1 + 0.4) return 0;
+      const k = Math.min(ease(span(t, t0, t0 + 0.35)), 1 - ease(span(t, t1, t1 + 0.4)));
+      return amt * k * (pulse ? 0.75 + 0.25 * Math.sin((t - t0) * pulse * 2 * Math.PI) : 1);
+    };
+    for (const m of mats) {                       // several glows on one organ: the strongest wins
+      if (!m.userData.glowFns) { m.userData.glowFns = []; updaters.push(t => { m.userData.glow.value = Math.max(0, ...m.userData.glowFns.map(f => f(t))); }); }
+      m.userData.glowFns.push(fn);
+    }
+    return obj;
+  };
+  // a beat: the object swells and settles (heart: bpm 70, amount 0.08)
+  YK.pulse = function (obj, t0, t1, bpm = 70, amount = 0.08) {
+    const s = obj.scale.clone();
+    updaters.push(t => {
+      if (t < t0 || t > t1) { obj.scale.copy(s); return; }
+      const ph = ((t - t0) * bpm / 60) % 1, k = ph < 0.15 ? Math.sin(ph / 0.15 * Math.PI) : ph < 0.35 ? 0.5 * Math.sin((ph - 0.15) / 0.2 * Math.PI) : 0;
+      obj.scale.copy(s).multiplyScalar(1 + amount * k);
+    });
+    return obj;
+  };
+
+  // ---------------------------------------------------------------- the micro set: a blood vessel cut open
+  // YK.vessel({ at: [x, y, z], length: 8, radius: 0.6 }) lays a vessel along x, its front half cut away so you see
+  // inside (y >= 0). Far from the body by default; frame it with YK.view('micro', V.F, ...). Returns { F, along }.
+  const MICRO = [];
+  YK.vessel = function (o = {}) {
+    const [x, y, z] = o.at || [40, 0, 1.2], L = o.length ?? 8, r = o.radius ?? 0.6, wall = r * 0.12;
+    const inner = new T.CylinderGeometry(r, r, L, 48, 1, true, 0, Math.PI); inner.rotateZ(Math.PI / 2);
+    const outer = new T.CylinderGeometry(r + wall, r + wall, L, 48, 1, true, 0, Math.PI); outer.rotateZ(Math.PI / 2);
+    const inMat = triMat({ tex: 'brown_mud', size: 0.6, tint: [1.7, 0.42, 0.4], sat: 0.5, bright: 1.35, rough: 0.45 });
+    const outMat = organMat([0.75, 0.22, 0.22], { rough: 0.45 });
+    const grp = new T.Group();
+    // the half cylinder opens toward the camera: rotate so its open side faces -y
+    const a = new T.Mesh(inner, inMat), b = new T.Mesh(outer, outMat);
+    grp.add(a, b);                                      // angles 0..pi of a cylinder along x: the half at y >= 0
+    inMat.side = T.DoubleSide;
+    const cutMat = organMat([0.95, 0.55, 0.5], { rough: 0.6 });
+    for (const s of [-1, 1]) { const e = new T.Mesh(new T.BoxGeometry(L, 0.004, wall), cutMat); e.position.set(0, 0, s * (r + wall / 2)); grp.add(e); }
+    grp.position.set(x, y, z); world.add(grp);
+    const v = { F: [x, y + r * 0.2, z], at: [x, y, z], length: L, radius: r, group: grp };
+    v.along = [[x - Math.min(L / 2, 2.6), y + r * 0.35, z], [x + Math.min(L / 2, 2.6), y + r * 0.35, z]];   // the part the camera sees
+    MICRO.push(v); return v;
+  };
+
+  // cells and molecules that drift along a path (or through a vessel): kind = red | white | platelet | glucose |
+  // insulin | virus | bacteria | fat | antibody | oxygen. Returns the list of meshes (YK.vanish works on each).
+  function cellGeo(kind, s) {
+    if (kind === 'red') {
+      // a squashed sphere, thin in the middle and thick at the rim (biconcave)
+      const g = new T.SphereGeometry(s, 28, 18), p = g.attributes.position;
+      for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), rho = Math.min(1, Math.hypot(x, z) / s);
+        p.setY(i, (y / s) * s * 0.42 * (0.28 + 0.72 * rho * rho)); }
+      g.computeVertexNormals(); return g;
+    }
+    if (kind === 'white') return blobGeo(s * 1.3, 1, 0.35, 3, 17);
+    if (kind === 'platelet') return blobGeo(s * 0.45, 0.4, 0.4, 2, 23);
+    if (kind === 'glucose') return new T.TorusGeometry(s * 0.6, s * 0.16, 6, 6);
+    if (kind === 'fat') return blobGeo(s * 0.9, 1, 0.2, 2, 29);
+    if (kind === 'bacteria') { const g = new T.CapsuleGeometry(s * 0.35, s * 1.3, 6, 12); g.rotateZ(Math.PI / 2); return g; }
+    if (kind === 'oxygen') { const a = new T.SphereGeometry(s * 0.4, 12, 10); a.translate(-s * 0.28, 0, 0); const b = new T.SphereGeometry(s * 0.4, 12, 10); b.translate(s * 0.28, 0, 0); return blobChainGeo([a, b]); }
+    if (kind === 'insulin') { const parts = [0, 1, 2].map(i => { const g = new T.SphereGeometry(s * 0.3, 12, 10); g.translate(s * 0.3 * Math.cos(i * 2.1), s * 0.3 * Math.sin(i * 2.1), 0); return g; }); return blobChainGeo(parts); }
+    if (kind === 'antibody') {
+      const parts = [[0, -0.5, 0, 0], [-0.35, 0.3, 0, 0.7], [0.35, 0.3, 0, -0.7]].map(([px, py, , rz]) => { const g = new T.CylinderGeometry(s * 0.12, s * 0.12, s * 0.9, 8); g.rotateZ(rz); g.translate(px * s, py * s, 0); return g; });
+      return blobChainGeo(parts);
+    }
+    if (kind === 'virus') {
+      const parts = [new T.SphereGeometry(s * 0.6, 16, 12)], r = rng(5);
+      for (let i = 0; i < 18; i++) { const d = new T.Vector3(r() - 0.5, r() - 0.5, r() - 0.5).normalize(); const g = new T.CylinderGeometry(s * 0.05, s * 0.05, s * 0.3, 6); g.translate(0, s * 0.72, 0); const q = new T.Quaternion().setFromUnitVectors(new T.Vector3(0, 1, 0), d); g.applyQuaternion(q); parts.push(g); const k = new T.SphereGeometry(s * 0.09, 8, 6); k.translate(d.x * s * 0.9, d.y * s * 0.9, d.z * s * 0.9); parts.push(k); }
+      return blobChainGeo(parts);
+    }
+    return blobGeo(s, 1, 0.3, 2, 3);
+  }
+  function blobChainGeo(list) {
+    const parts = list.map(g => (g.index ? g.toNonIndexed() : g));
+    let n = 0; parts.forEach(g => { n += g.attributes.position.count; });
+    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3); let o = 0;
+    for (const g of parts) { if (!g.attributes.normal) g.computeVertexNormals(); pos.set(g.attributes.position.array, o * 3); nor.set(g.attributes.normal.array, o * 3); o += g.attributes.position.count; }
+    const geo = new T.BufferGeometry(); geo.setAttribute('position', new T.BufferAttribute(pos, 3)); geo.setAttribute('normal', new T.BufferAttribute(nor, 3)); return geo;
+  }
+  const CELL_COLORS = { red: [0.75, 0.05, 0.07], white: [0.92, 0.9, 0.85], platelet: [0.95, 0.8, 0.55], glucose: [1.0, 0.75, 0.15],
+    insulin: [0.25, 0.55, 1.0], virus: [0.35, 0.85, 0.3], bacteria: [0.6, 0.3, 0.85], fat: [1.0, 0.85, 0.35], antibody: [0.95, 0.95, 1.0], oxygen: [0.95, 0.35, 0.3] };
+  YK.cells = function (kind, t0, t1, o = {}) {
+    const path = o.path || (MICRO.length ? MICRO[MICRO.length - 1].along : null);
+    if (!path) throw new Error('YK.cells needs o.path or a YK.vessel() first');
+    const curve = new T.CatmullRomCurve3(path.map(p => new T.Vector3(...p)));
+    const n = o.n ?? 22, size = o.size ?? (MICRO.length && !o.path ? 0.14 : 0.012), spread = o.spread ?? (MICRO.length && !o.path ? 0.32 : 0.01);
+    const geo = cellGeo(kind, size), mat = organMat(o.color || CELL_COLORS[kind] || [0.8, 0.8, 0.8], { rough: 0.35, glow: o.glow });
+    const r = rng(o.seed ?? (kind.length * 7 + n)), speed = o.speed ?? 0.12, len = curve.getLength();
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const m = mk(geo, mat); const c = { m, ph: r(), dx: (r() - 0.5) * 2 * spread, dy: r() * spread, dz: (r() - 0.5) * 2 * spread, sp: [r() * 3, r() * 3, r() * 3], v: 0.75 + 0.5 * r() };
+      out.push(m);
+      updaters.push(t => {
+        const on = t >= t0 && t <= t1;
+        m.visible = on; if (!on) return;
+        const u = (c.ph + (t - t0) * speed * c.v / Math.max(0.3, len) * 8) % 1;
+        const p = curve.getPointAt(u);
+        m.position.set(p.x + c.dx, p.y + c.dy, p.z + c.dz);
+        m.rotation.set(c.sp[0] * t, c.sp[1] * t, c.sp[2] * t);
+        const s = Math.min(ease(span(t, t0, t0 + 0.4)), 1); m.scale.setScalar(Math.max(0.001, s));
+      });
+    }
+    return out;
+  };
+
   // ---------------------------------------------------------------- camera
   // framings around a focus F, always from the open side (y < 0): offset, look, lens (mm, 36 mm tall sensor)
-  const VIEWS = {
+  let VIEWS = {
     wide: [[0.6, -13.0, 4.4], [0.0, 5.0, 0.4], 34], section: [[0.0, -9.0, 1.2], [0.0, 0.8, -0.5], 34],
     close: [[0.6, -5.6, 0.35], [0.0, 0.6, -0.45], 32], high: [[0.0, -7.0, 5.2], [0.0, 1.8, -0.5], 32],
     left: [[-6.0, -8.0, 2.6], [0.0, 1.2, -0.4], 32], right: [[6.0, -8.0, 2.6], [0.0, 1.2, -0.4], 32],
@@ -1070,6 +1338,7 @@
 
   // ---------------------------------------------------------------- setup and the frame loop
   let envDone = false, sky;
+  const lights = {};
   YK.init = function (o) {
     W = o.width; H = o.height;
     renderer = new T.WebGLRenderer({ canvas: o.canvas, antialias: o.antialias ?? true, preserveDrawingBuffer: true });
@@ -1084,14 +1353,14 @@
     scene.background = sky;
     mats();
     // sun from the front left, high, so the cut face and the house front are lit; a soft fill from behind
-    const sun = new T.DirectionalLight(new T.Color(1.0, 0.96, 0.9), o.sun ?? 2.7);
+    const sun = lights.sun = new T.DirectionalLight(new T.Color(1.0, 0.96, 0.9), o.sun ?? 2.7);
     sun.position.copy(V(-14, -26, 27)); sun.target.position.copy(V(0, 4, 0)); scene.add(sun, sun.target);
     sun.castShadow = true; sun.shadow.mapSize.set(o.shadowSize ?? 1024, o.shadowSize ?? 1024);
     Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 120 });
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
-    const fill = new T.DirectionalLight(new T.Color(1.0, 0.9, 0.78), o.fill ?? 0.9);
+    const fill = lights.fill = new T.DirectionalLight(new T.Color(1.0, 0.9, 0.78), o.fill ?? 0.9);
     fill.position.copy(V(7, 34, 18)); scene.add(fill);
-    scene.add(new T.HemisphereLight(new T.Color(0.75, 0.85, 1.0), new T.Color(0.35, 0.3, 0.22), o.ambient ?? 0.5));
+    scene.add(lights.hemi = new T.HemisphereLight(new T.Color(0.75, 0.85, 1.0), new T.Color(0.35, 0.3, 0.22), o.ambient ?? 0.5));
     capEl = o.caption || null;
     YK.three = { renderer, scene, world, camera: cam };
     return YK;

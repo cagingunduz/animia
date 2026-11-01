@@ -28,7 +28,8 @@ from jobs import job_store
 from motion_pipeline import BillingError, THINK_ROOM, _anthropic, _apply_edits, _record_usage, _render_call
 from storybook_pipeline import upload_bytes_to_r2
 from tts import get_word_timestamps
-from yard_prompts import EDIT_TOOL, FIX_NOTE, REVIEW_SYSTEM, SCENE_SYSTEM, SCRIPT_SYSTEM, SCRIPT_TOOL
+from yard_prompts import (BODY_REVIEW_SYSTEM, BODY_SCENE_SYSTEM, BODY_SCRIPT_SYSTEM, EDIT_TOOL, FIX_NOTE, REVIEW_SYSTEM,
+                          SCENE_SYSTEM, SCRIPT_SYSTEM, SCRIPT_TOOL)
 
 MODEL = os.environ.get("YARD_MODEL", os.environ.get("PROMPT_MODEL", "claude-sonnet-5-5"))
 EFFORT = os.environ.get("YARD_EFFORT", "medium")
@@ -50,6 +51,11 @@ MAX_FIXES = 3
 TEXTURES = ["sky", "excavated_soil_wall", "leafy_grass", "plastered_wall", "clay_roof_tiles",
             "square_concrete_pavers", "dark_wooden_planks", "dirt", "brown_mud"]
 RESERVED_IDS = {"end", "word", "list"}
+# set -> (writer, scene builder, reviewer, fallback title). 'yard': the cut-away backyard; 'body': 3D Health.
+SETS = {
+    "yard": (SCRIPT_SYSTEM, SCENE_SYSTEM, REVIEW_SYSTEM, "How a Hole in Your Yard Becomes Something"),
+    "body": (BODY_SCRIPT_SYSTEM, BODY_SCENE_SYSTEM, BODY_REVIEW_SYSTEM, "What Happens in Your Body"),
+}
 STEPS = 7
 
 _voice_sem = asyncio.Semaphore(1)       # Kokoro uses the whole CPU; one narration at a time
@@ -122,15 +128,19 @@ def _clean_lines(lines: list) -> list[dict]:
     return out
 
 
+def _set(job_id: str) -> tuple:
+    return SETS.get(_job(job_id).get("set") or "yard", SETS["yard"])
+
+
 async def _write_script(job_id: str, topic: str | None) -> dict:
     ask = (f"Topic from the user: {topic.strip()}" if topic and topic.strip()
-           else "No topic given: pick the best thing yourself.")
-    s = await _claude(job_id, SCRIPT_SYSTEM, ask + "\n\nWrite the script, fact-check every claim, then submit it.",
+           else "No topic given: pick the best one yourself.")
+    s = await _claude(job_id, _set(job_id)[0], ask + "\n\nWrite the script, fact-check every claim, then submit it.",
                       3000, "writer", tool=SCRIPT_TOOL)
     lines = _clean_lines(s.get("lines"))
     if len(lines) < 6:
         raise ValueError("the script came back too short")
-    return {"title": str(s.get("title") or "How a Hole in Your Yard Becomes Something").strip(),
+    return {"title": str(s.get("title") or _set(job_id)[3]).strip(),
             "thing": str(s.get("thing") or "").strip(), "lines": lines,
             "visual_notes": str(s.get("visual_notes") or "").strip()}
 
@@ -184,7 +194,7 @@ def _captions_ass(captions: list, path: str):
     head = (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {OUT_W}\nPlayResY: {OUT_H}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
             "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
             "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            "Style: Cap,Nunito,98,&H00FFFFFF,&H00FFFFFF,&H001A1212,&H8C000000,1,0,0,0,100,100,0,0,1,7,5,5,40,40,0,1\n\n"
+            "Style: Cap,Nunito Black,98,&H00FFFFFF,&H00FFFFFF,&H001A1212,&H8C000000,0,0,0,0,100,100,0,0,1,7,5,5,40,40,0,1\n\n"
             "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
     rows = []
     for start, word, end in captions:
@@ -317,7 +327,7 @@ def _script_block(script: dict, timing: dict) -> str:
 
 
 async def _build_scene(job_id: str, script: dict, timing: dict, captions: list) -> tuple[str, list[dict]]:
-    text = await _claude(job_id, SCENE_SYSTEM,
+    text = await _claude(job_id, _set(job_id)[1],
                          _script_block(script, timing) + "\n\nWrite build(YK, T) for this video.", 16000, "scene")
     code = _extract_code(text)
     for attempt in range(MAX_FIXES + 1):
@@ -331,7 +341,7 @@ async def _build_scene(job_id: str, script: dict, timing: dict, captions: list) 
             break
         _job(job_id)["message"] = f"Fixing the scene ({attempt + 1})"
         issue = "\n".join(problems + errors)[:3000]
-        res = await _claude(job_id, SCENE_SYSTEM,
+        res = await _claude(job_id, _set(job_id)[1],
                             f"{_script_block(script, timing)}\n\nYOUR CODE:\n```js\n{code}\n```\n\nERRORS:\n{issue}\n\n{FIX_NOTE}",
                             3000, "fixer", tool=EDIT_TOOL)
         code, n = _apply_edits(code, res.get("edits") or [])
@@ -343,7 +353,7 @@ async def _build_scene(job_id: str, script: dict, timing: dict, captions: list) 
 async def _review(job_id: str, script: dict, timing: dict, captions: list, code: str) -> tuple[str, list[dict] | None]:
     """One look at stills: fix what is visibly wrong. Keeps the old code when the fix breaks anything."""
     lines = timing["lines"]
-    picks = sorted({min(len(lines) - 1, round(i * (len(lines) - 1) / 5)) for i in range(6)})
+    picks = sorted({min(len(lines) - 1, round(i * (len(lines) - 1) / 9)) for i in range(10)})
     at = [round((lines[i]["start"] + lines[i]["end"]) / 2, 2) for i in picks]
     html = compose(code, timing, captions, 540, 960)
     r = await _render_call("/snapshot", {"files": {"index.html": html}, "at": at}, timeout=600)
@@ -355,7 +365,7 @@ async def _review(job_id: str, script: dict, timing: dict, captions: list, code:
         content.append({"type": "text", "text": f'{f["at"]:.1f} s, line "{lines[i]["id"]}": {lines[i]["text"]}'})
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": f["png"]}})
     content.append({"type": "text", "text": f"{_script_block(script, timing)}\n\nTHE CODE:\n```js\n{code}\n```"})
-    res = await _claude(job_id, REVIEW_SYSTEM, content, 3000, "review", tool=EDIT_TOOL)
+    res = await _claude(job_id, _set(job_id)[2], content, 5000, "review", tool=EDIT_TOOL)
     _job(job_id)["review"] = str(res.get("problems") or "")[:500]
     new, n = _apply_edits(code, res.get("edits") or [])
     if not n:

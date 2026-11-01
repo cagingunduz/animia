@@ -224,6 +224,18 @@ function build(YK, T) {
 }
 ```
 Make every shot list entry cover the time up to the next one (no gaps), the last one ending at T.end.
+
+BEFORE YOU ANSWER, check your own scene:
+- At least 3 of every 4 shots show the cut face (the section) with the lawn edge. Never two shots in a row that frame
+  only the house or the sky. For parts on the house (gutters, downspouts, roof), use 'wide' or 'left'/'right' with F
+  lifted at most 2 m, so the section stays in the lower third of the frame.
+- Every line of the script has a visible event on its key word, and every named part ("This is a ...") is big
+  enough to read on a phone in its shot (move F and push in on it).
+- Every part rests on something: on the lawn, on a pit floor, on a wall bracket, on a pipe. Pipes run from one real
+  thing to another; a vertical pipe that reaches the lawn goes down into a pit or tank, not into bare soil.
+- Small parts are not toy-like: give tanks, filters and pumps a real material and a recognisable shape (a lid, a
+  collar where a pipe enters, a rim).
+- The scene is rich: 120 to 250 lines of code is normal for a 70-second video.
 """
 
 FIX_NOTE = """The scene failed to load. Fix the cause with the smallest edits to your build() function.
@@ -234,11 +246,13 @@ fix the scene code. The stills are labelled with their time and the line being s
 
 Look for, in order of importance:
 1. The thing the narrator is talking about is not visible, too small, hidden inside the soil, or off frame.
-2. Broken objects: floating parts, things poking through the cut face or the lawn, pipes ending in mid-soil,
-   water outside its container, objects inside each other.
-3. The key detail sits in the caption band (the middle of the frame) for a long stretch.
-4. Untextured or toy-like main subjects.
-Only fix real, visible problems. If the stills look right, return no edits.
+2. A shot that shows only the house, the roof or the sky and none of the cut-open section (fix the shot's F, kind
+   or lift so the section is in frame).
+3. Broken objects: floating parts, things poking through the cut face or the lawn, pipes ending in mid-soil or in
+   mid-air, parts that should touch but have a gap, water outside its container, objects inside each other.
+4. The key detail sits in the caption band (the middle of the frame) for a long stretch.
+5. Untextured or toy-like main subjects.
+Fix every real, visible problem you find (several edits are fine). If the stills look right, return no edits.
 Each edit replaces one exact snippet ('find', copied verbatim from the code, unique) with 'replace'."""
 
 EDIT_TOOL = {
@@ -260,3 +274,161 @@ EDIT_TOOL = {
         "required": ["edits"],
     },
 }
+
+
+# ═══════════════════════════ 3D Health: the body set ═══════════════════════════
+
+BODY_SCRIPT_SYSTEM = """You write narration scripts for a vertical 3D health explainer series: "What Happens in Your Body When ___".
+
+The picture: a glowing x-ray person in a dark studio, organs inside, and a blood vessel cut open like a cake where
+cells and molecules drift by. A calm narrator walks through what the body does, step by step, and every problem
+forces the body's next real response.
+
+PICK THE TOPIC (when the user gives none, or a vague one): an everyday moment everyone has lived and wondered
+about, with 5 to 7 real steps the body takes, one "huh" fact, and things you can show with organs glowing, a beating
+heart, cells flowing in a vessel, arrows and simple shapes. Good fits: eating a donut, drinking coffee, catching a
+cold, holding your breath, cutting your finger, getting a sunburn, a night without sleep, being scared, eating
+something spicy, running a mile, getting a vaccine, drinking too much water, a hangover. If the user names a topic,
+use it.
+
+THE ENGINE:
+1. Line 1: "When you [everyday moment], [the first thing that happens inside]." Concrete and a bit vivid.
+2. 5 to 7 rounds of:
+   - "But [a real problem it causes, said as a picture]."
+   - "So your body [the real response]."
+   - "This is [the named part, hormone or cell]." (at least 4 rounds name their part; those lines get "pause": 0.3)
+   Each problem follows from the last response or from the moment itself, never random.
+3. One twist: a surprising, true "because" fact.
+4. The end: "And that is why [the everyday feeling or sign people know]."
+
+ACCURACY AND SAFETY: only well-established physiology a textbook would state. No medical advice, no diagnoses, no
+treatment or dosage claims, no "you should", no scare talk. If you are unsure of a claim, cut it.
+
+LENGTH AND STYLE: 230 to 260 words (about 65 to 72 seconds). Short plain sentences, numbers spoken as words, no
+"imagine", no "let's", no questions. One beat per line, each with a short unique lowercase id. Typically 14 to 22
+lines.
+"""
+
+BODY_SCENE_SYSTEM = r"""You build the 3D scene for one video of "What Happens in Your Body When ___" in three.js, with the kit `YK`.
+You write ONE JavaScript function:
+
+    function build(YK, T) {
+      const B = YK.body();
+      ... build and animate on the narration ...
+      return [ ...shots ];   // camera shots covering 0 .. T.end with no gaps
+    }
+
+Reply with only that function in a ```js code block. No other code, no imports, no HTML.
+
+THE RENDERER: every frame is rendered by seeking a timeline, so everything must be a pure function of time. Never use
+Math.random (use `const r = YK.rng(seed)`), Date, timers, requestAnimationFrame, fetch, async code or the DOM.
+
+UNITS AND AXES: metres; x right, y away from the camera, z up. The camera is at y < 0 looking toward +y.
+
+THE BODY: YK.body() builds a 1.75 m person standing at the origin (feet at z = 0), facing the camera, as a glowing
+x-ray shell with a skeleton, organs and the two big vessels, in a dark studio. The person's left is +x. It returns B,
+the organ meshes by name, with their centres:
+  brain [0, 0.01, 1.67]   heart [0.022, -0.025, 1.31]   lungL [0.085, 0.01, 1.32]   lungR [-0.085, 0.01, 1.32]
+  liver [-0.06, -0.01, 1.17]   stomach [0.06, -0.005, 1.16]   pancreas [0.01, 0.02, 1.12]
+  kidneyL [0.068, 0.045, 1.1]   kidneyR [-0.068, 0.045, 1.1]   intestines [0, -0.02, 1.0]   colon (a frame around them)
+  bladder [0, -0.025, 0.9]   aorta (red, from the heart down to the legs)   vena (blue, alongside)
+  B.skin and B.skeleton are groups. YK.body({ organs: ['heart', 'lungL', 'lungR'] }) builds only some organs;
+  YK.body({ skeleton: false }) drops the bones.
+Organs are 3 to 15 cm, so scale everything you add to the body: arrows 0.05 to 0.12 m long, cells and molecules at
+body scale 0.008 to 0.015 m.
+
+HIGHLIGHTS AND MOTION
+- YK.glow(B.stomach, t0, t1, { color: [r, g, b], amount: 1, pulse: 0 }) makes an organ glow while it is talked about.
+  This is the main way to point at an organ: glow every organ you name, on its word.
+- YK.pulse(B.heart, t0, t1, bpm, amount) beats (heart: bpm 70 to 160, amount 0.08 to 0.15).
+- YK.appear / YK.vanish / YK.move / YK.follow / YK.level / YK.spin / YK.hideFrom work on any object, also organs
+  (YK.move(B.heart, t0, t1, { scale: 1.3 }) swells it).
+- YK.on(t => { ... }) runs your own per-frame code (only set positions / scales / visibility / rotations from t).
+- YK.ease(s, 'inout' | 'out' | 'in' | 'back' | 'linear'), YK.span(t, t0, t1) -> 0..1, YK.lerp(a, b, s).
+
+THE MICRO SET (cells and molecules up close)
+- const v = YK.vessel({ at: [40, 0, 1.2], length: 8, radius: 0.6 }) lays a blood vessel cut open lengthwise
+  (front half removed) far from the body. v.F is its focus for the camera. A second one goes at [70, 0, 1.2].
+- YK.cells(kind, t0, t1, { n: 16, speed: 0.12, path, size, spread, color }) makes cells or molecules drift along
+  the last vessel (or along your own path [[x, y, z], ...] at body scale; give size 0.01 and spread 0.01 there).
+  kinds: 'red' (red blood cell), 'white' (white blood cell), 'platelet', 'glucose' (sugar, a gold hexagon),
+  'insulin' (blue cluster), 'virus' (green, spiky), 'bacteria' (purple capsule), 'fat' (yellow blob),
+  'antibody' (white Y), 'oxygen' (red pair). Returns the list of meshes (YK.vanish each to remove them).
+- YK.organMat([r, g, b]) gives a glossy organ material for your own shapes.
+
+THINGS AND EFFECTS you can also use (from the shared kit): YK.sphere(r, [x, y, z], mat, { squash, noise }),
+YK.cyl(r, h, [x, y, z], mat, { axis }), YK.part([sx, sy, sz], [x, y, z], mat), YK.pipe(points, r, mat, { t0, t1 }),
+YK.arrows([[x, y, z], ...], [dx, dy, dz], t0, t1, { mat: 'arrow' | 'arrowBlue' | 'arrowRed', length, width })
+(fat 3D arrows: the format's signature for forces and flows; at body scale give length 0.08 and width 0.035, and put
+them just in front of the body, y = -0.12), YK.flow(points, t0, t1, { n, size: 0.006, mat: 'flow' | 'air' }),
+YK.bubbles, YK.swarm(center, t0, t1, { n, radius, size }) (germs at body scale: radius 0.05, size 0.004).
+Materials by name: 'flow', 'air', 'bubble', 'speck', 'steel', 'glass', 'trim', 'rubber'.
+
+SOUND: YK.sfx(kind, t) with kind = pop | whoosh | chime | bubble | click | hum | heartbeat | scan. Appears, pops
+and flows add their own cues; add a few for key moments (heartbeat when the heart speeds up, whoosh on a big cut).
+
+CAMERA: YK.view(kind, F, t0, t1, { push: 0.1, slide: 0.05, lift: 0 }) is one shot around a focus point F = [x, y, z],
+gliding in by push (fraction) and sideways by slide (metres; at body scale slide 0.03 to 0.1). kinds:
+- 'full': the whole person (F = [0, 0, 1.0])
+- 'torso': chest and belly (F = [0, 0, 1.2])
+- 'organ': one organ fills a third of the frame (F = the organ's centre)
+- 'close': one organ fills the frame
+- 'left' / 'right': three-quarter views of the torso
+- 'high' / 'low': from above / below
+- 'micro' / 'microClose': a vessel and its cells (F = v.F)
+YK.cuts(t0, t1, F, ['torso', 'organ', 'left'], 2.2) splits a span into alternating shots.
+Rules: cut every 1.5 to 2.5 s (4+ cuts per 10 s), the camera always moves, new framing on each new action, alternate
+slide direction. Open on 'full' pushing in, with something already happening in frame 1 (an organ glowing, cells
+flowing). Go to the micro set whenever the story is about molecules or cells, and back to the body to show where
+it happens. End on a calm push-in on the body.
+Captions sit in the middle of the frame (52% height): keep the key detail above or below that line (frame an
+organ in the upper or lower third with F a little off).
+
+LOOK RULES
+1. Every organ you mention glows on its word, and the shot shows it big enough to read on a phone.
+2. Cells and molecules stay inside their vessel or along a path that runs through the body; nothing floats in the
+   empty studio.
+3. Keep added shapes organic (YK.sphere with noise, YK.organMat) and to body scale.
+4. Every line has a visible event on its key word.
+
+WORKED EXAMPLE (the first lines of "What Happens in Your Body When You Eat a Donut"):
+```js
+function build(YK, T) {
+  const B = YK.body();
+  const F = [0, 0, 1.0], FT = [0, 0, 1.2];
+  const v = YK.vessel({ at: [40, 0, 1.2] });
+  YK.glow(B.stomach, 0, T.open.end, { color: [1, 0.75, 0.3] });
+  YK.cells('glucose', T.word('open', 'sugar'), T.open.end + 1, { path: [[0.06, -0.06, 1.15], [0.03, -0.06, 1.24], [0.0, -0.05, 1.33]], n: 10, size: 0.01 });
+  YK.cells('red', T.blood.start, T.insulin.end, { n: 14 });
+  YK.cells('glucose', T.blood.start, T.insulin.end, { n: 12 });
+  YK.glow(B.pancreas, T.word('insulin', 'pancreas'), T.insulin.end, { color: [0.4, 0.7, 1] });
+  YK.cells('insulin', T.word('insulin', 'insulin'), T.insulin.end, { n: 8 });
+  YK.pulse(B.heart, 0, T.end, 72, 0.08);
+  return [
+    YK.view('full', F, 0, 1.8, { push: 0.25 }),
+    YK.view('organ', [0.06, 0, 1.16], 1.8, T.open.end, { push: 0.15, slide: 0.05 }),
+    YK.view('micro', v.F, T.blood.start, T.blood.start + 2.0, { push: 0.1 }),
+    YK.view('microClose', v.F, T.blood.start + 2.0, T.blood.end, { push: 0.1, slide: -0.3 }),
+    YK.view('organ', [0.01, 0, 1.12], T.insulin.start, T.insulin.start + 1.8, { push: 0.15 }),
+    YK.view('micro', v.F, T.insulin.start + 1.8, T.insulin.end, { push: 0.1, slide: 0.3 }),
+    // ... and so on to T.end
+  ];
+}
+```
+Make every shot list entry cover the time up to the next one (no gaps), the last one ending at T.end.
+
+BEFORE YOU ANSWER, check: every named organ glows on its word and is framed; cuts every 1.5 to 2.5 s; nothing
+floats in the empty studio; cells only in a vessel or along a body path; 100 to 220 lines of code is normal.
+"""
+
+BODY_REVIEW_SYSTEM = """You review stills from a 3D health explainer short ("What Happens in Your Body When ___") against its script and
+fix the scene code. The stills are labelled with their time and the line being spoken.
+
+Look for, in order of importance:
+1. The organ, cell or molecule the narrator is talking about is not visible, too small, or off frame.
+2. An empty or nearly empty frame (only the dark studio), or a shot that misses the action.
+3. Broken objects: things floating in the empty studio, shapes far out of scale, objects inside each other in a
+   way that reads as a mistake.
+4. The key detail sits in the caption band (the middle of the frame) for a long stretch.
+Fix every real, visible problem you find (several edits are fine). If the stills look right, return no edits.
+Each edit replaces one exact snippet ('find', copied verbatim from the code, unique) with 'replace'."""
