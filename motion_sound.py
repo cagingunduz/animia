@@ -43,6 +43,16 @@ SFX_LIBRARY = {
     "glitch": ("short digital glitch stutter, electronic static burst", 0.6, -11, 300),
     "drone": ("dark low cinematic ambient drone, tense, steady, no melody, seamless", 12.0, -16, 99999),
     "erase": ("whiteboard eraser rubbing quickly across a board, dry felt scrubbing, close", 2.6, -11, 800),
+    # 3D Build (yard) kit
+    "dig": ("a metal shovel digging into garden soil, one scoop of dirt thrown, close and dry", 0.6, -10, 330),
+    "thud": ("a heavy object dropped onto soft soil, short dull thud", 0.6, -8, 300),
+    "splash": ("small splash of something dropped into a garden pond", 1.0, -9, 400),
+    "pour": ("water pouring steadily from a garden hose into a hole, gentle trickle", 3.0, -12, 1500),
+    "bubble": ("a few soft underwater bubbles rising, gentle", 1.2, -13, 600),
+    "click": ("a single clean plastic click, a part snapping into place", 0.4, -10, 200),
+    "hum": ("a small electric water pump humming steadily, soft", 3.0, -15, 2500),
+    "yard_bed": ("calm light documentary background music, soft plucked guitar and gentle marimba, warm, steady, "
+                 "loopable, no vocals", 22.0, -20, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain
 VOICE_TARGET_LUFS = -18.0  # integrated loudness of every narration line

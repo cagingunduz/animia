@@ -18,6 +18,7 @@ from animated_story_pipeline import run_animated_story_pipeline
 from whiteboard_pipeline import run_whiteboard_pipeline
 from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_drama_scene, edit_fruit_drama_scene
 from motion_pipeline import run_motion_pipeline, submit_gate
+from yard_pipeline import run_yard_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -563,6 +564,36 @@ async def motion_approve(job_id: str, req: MotionApproveRequest):
     if not submit_gate(job_id, req.approved, req.feedback):
         raise HTTPException(status_code=409, detail="Nothing is waiting for approval")
     return {"ok": True}
+
+
+class GenerateYardRequest(BaseModel):
+    topic: Optional[str] = Field(None, max_length=300)
+
+
+@app.post("/generate-yard")
+async def generate_yard(req: GenerateYardRequest):
+    """3D Build: "How a Hole in Your Yard Becomes a ___" (Claude script + scene, Kokoro voice, CPU 3D render)."""
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="3D Build is not available yet (render service not connected).")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "yard", "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
+        "message": "Queued", "title": None, "thing": None, "script": None, "duration": None,
+        "final_video_url": None, "thumbnail_url": None, "error": None, "traceback": None,
+        "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(run_yard_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/yard/{job_id}")
+async def yard_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "yard":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "title", "thing", "script", "duration",
+            "final_video_url", "thumbnail_url", "usage", "voice", "review", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 
 class GenerateFruitDramaRequest(BaseModel):

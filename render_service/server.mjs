@@ -20,7 +20,7 @@
 
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, copyFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, copyFile, cp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -152,6 +152,8 @@ async function writeProject(body) {
   await copyFile(ANIME_JS, path.join(dir, 'lib', 'anime.umd.min.js'));
   await copyFile(path.join(HERE, 'kit.js'), path.join(dir, 'lib', 'kit.js'));
   await copyFile(path.join(HERE, 'kit.css'), path.join(dir, 'lib', 'kit.css'));
+  // 3D yard compositions (three.js + the yard kit + its CC0 textures) load them from yard/.
+  if (String(files['index.html']).includes('yard/')) await cp(path.join(HERE, 'yard'), path.join(dir, 'yard'), { recursive: true });
   return { dir, unknownIcons: [...unknownIcons] };
 }
 
@@ -259,14 +261,17 @@ async function chromePath() {
 const handleCues = body => withProject(body, async dir => {
   const browser = await puppeteer.launch({
     executablePath: await chromePath(), headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--allow-file-access-from-files'],
+    // software WebGL (SwiftShader): the box has no GPU, and 3D Build scenes need a context to load
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--allow-file-access-from-files', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
   try {
     const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(String(e && e.message || e).slice(0, 600)));
     await page.setViewport({ width: 1080, height: 1920 });
     await page.goto(pathToFileURL(path.join(dir, 'index.html')).href, { waitUntil: 'load', timeout: 30000 });
     const cues = await page.evaluate(() => (window.__kCues || []).slice(0, 500));
-    return { status: 200, json: { cues } };
+    return { status: 200, json: { cues, errors: errors.slice(0, 10) } };
   } finally {
     await browser.close().catch(() => {});
   }
