@@ -29,6 +29,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY server.mjs kit.js kit.css ./
 COPY yard ./yard
+COPY explainer ./explainer
 
 # Run as an unprivileged user.
 RUN useradd -m -u 10001 render && mkdir -p /tmp/hf-home && chown -R render /tmp/hf-home

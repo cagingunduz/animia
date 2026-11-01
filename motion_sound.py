@@ -51,6 +51,8 @@ SFX_LIBRARY = {
     "bubble": ("a few soft underwater bubbles rising, gentle", 1.2, -13, 600),
     "click": ("a single clean plastic click, a part snapping into place", 0.4, -10, 200),
     "hum": ("a small electric water pump humming steadily, soft", 3.0, -15, 2500),
+    "explainer_bed": ("light upbeat lo-fi background music for a short explainer video, soft drums, warm keys, "
+                      "playful, steady, loopable, no vocals", 22.0, -20, 99999),
     "yard_bed": ("calm light documentary background music, soft plucked guitar and gentle marimba, warm, steady, "
                  "loopable, no vocals", 22.0, -20, 99999),
 }

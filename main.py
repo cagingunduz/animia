@@ -19,6 +19,7 @@ from whiteboard_pipeline import run_whiteboard_pipeline
 from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_drama_scene, edit_fruit_drama_scene
 from motion_pipeline import run_motion_pipeline, submit_gate
 from yard_pipeline import run_yard_pipeline
+import explainer_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -595,6 +596,80 @@ async def yard_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["set", "status", "stage", "step", "total_steps", "message", "title", "thing", "script", "duration",
             "final_video_url", "thumbnail_url", "usage", "voice", "review", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+class ExplainerScriptRequest(BaseModel):
+    topic: str = Field(..., min_length=2, max_length=500)
+    mention: Optional[str] = Field(None, max_length=300)
+
+
+@app.post("/explainer/script")
+async def explainer_script(req: ExplainerScriptRequest):
+    """Explainer step 1: Claude writes the script; the app shows it for editing before anything is recorded."""
+    try:
+        return await explainer_pipeline.write_script(req.topic, req.mention)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+
+class ExplainerPresenterRequest(BaseModel):
+    description: Optional[str] = Field(None, max_length=500)
+    image: Optional[str] = Field(None, max_length=6_000_000)   # data URL of a photo or drawing
+
+
+@app.post("/explainer/presenter")
+async def explainer_presenter(req: ExplainerPresenterRequest):
+    """A description or a picture -> the presenter's parts."""
+    if not (req.description or req.image):
+        raise HTTPException(status_code=400, detail="describe the presenter or add a picture")
+    try:
+        return await explainer_pipeline.design_presenter(req.description, req.image)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+
+class ExplainerVoicesRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200)
+
+
+@app.post("/explainer/voices")
+async def explainer_voices(req: ExplainerVoicesRequest):
+    """The script's first line read by each narrator voice."""
+    try:
+        return {"voices": await explainer_pipeline.voice_samples(req.text)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+
+class GenerateExplainerRequest(BaseModel):
+    script: dict
+    voice: Optional[str] = "am_michael"
+    presenter: Optional[dict] = None
+
+
+@app.post("/generate-explainer")
+async def generate_explainer(req: GenerateExplainerRequest):
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Explainer is not available yet (render service not connected).")
+    if len(explainer_pipeline.script_lines(req.script)) < 4:
+        raise HTTPException(status_code=400, detail="the script needs a hook, at least two points and a closing line")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "explainer", "status": "queued", "stage": "queued", "step": 0, "total_steps": 6, "message": "Queued",
+        "title": (req.script.get("title") or "")[:120], "duration": None, "final_video_url": None, "thumbnail_url": None,
+        "error": None, "traceback": None, "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(explainer_pipeline.run_explainer_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/explainer/{job_id}")
+async def explainer_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "explainer":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "title", "duration", "final_video_url", "thumbnail_url", "usage", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 

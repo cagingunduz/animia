@@ -1,4 +1,5 @@
-"""Kokoro-82M narration (am_michael) for 3D Build: free, runs on the backend's CPU.
+"""Kokoro-82M narration for 3D Build / 3D Health (am_michael) and Explainer (a voice the user picks):
+free, runs on the backend's CPU.
 
 The ONNX model and voices (~350 MB, Apache-2.0) are downloaded on first use and kept for the container's life.
 """
@@ -58,16 +59,45 @@ def _trim(a: np.ndarray) -> np.ndarray:
     return a[max(0, idx[0] - int(0.02 * SR)): idx[-1] + int(0.06 * SR)]
 
 
-async def narrate(lines: list[dict], speed: float = 1.15, gap: float = 0.22) -> tuple[np.ndarray, list[dict]]:
+VOICES = {"am_michael": "Michael (US, calm)", "af_heart": "Heart (US, warm)", "bm_george": "George (UK)", "bf_emma": "Emma (UK)"}
+
+
+def tighten(a: np.ndarray, max_pause: float = 0.24) -> np.ndarray:
+    """Cut every truly silent stretch (30 ms windows under -45 dB) longer than max_pause down to max_pause."""
+    win = int(0.03 * SR)
+    if len(a) < win * 3:
+        return a
+    n = len(a) // win
+    db = 20 * np.log10(np.sqrt(np.mean(a[: n * win].reshape(n, win) ** 2, axis=1)) + 1e-9)
+    keep, run = [], 0
+    for i in range(n):
+        run = run + 1 if db[i] < -45 else 0
+        if run * win / SR <= max_pause:
+            keep.append(a[i * win:(i + 1) * win])
+    keep.append(a[n * win:])
+    return np.concatenate(keep)
+
+
+async def say(text: str, voice: str = VOICE, speed: float = 1.1) -> np.ndarray:
+    k = await _model()
+    a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=speed, lang="en-us")
+    return _trim(np.asarray(a, dtype=np.float32))
+
+
+async def narrate(lines: list[dict], speed: float = 1.15, gap: float = 0.22, voice: str = VOICE,
+                  max_pause: float | None = None) -> tuple[np.ndarray, list[dict]]:
     """lines [{id, text, pause?}] -> (mono float32 audio at 24 kHz, [{id, text, start, end}]).
-    Lines are spoken one by one and joined with a short gap (+ the line's own pause)."""
+    Lines are spoken one by one and joined with a short gap (+ the line's own pause); with max_pause, the
+    silences inside a line are cut down to it as well."""
     k = await _model()
     out, spans, t = [], [], 0.0
     lead = np.zeros(int(0.12 * SR), dtype=np.float32)
     out.append(lead); t += len(lead) / SR
     for ln in lines:
-        a, sr = await asyncio.to_thread(k.create, ln["text"], voice=VOICE, speed=speed, lang="en-us")
+        a, sr = await asyncio.to_thread(k.create, ln["text"], voice=voice, speed=speed, lang="en-us")
         a = _trim(np.asarray(a, dtype=np.float32))
+        if max_pause:
+            a = tighten(a, max_pause)
         spans.append({"id": ln["id"], "text": ln["text"], "start": round(t, 3), "end": round(t + len(a) / SR, 3)})
         out.append(a); t += len(a) / SR
         pause = np.zeros(int((gap + float(ln.get("pause") or 0)) * SR), dtype=np.float32)

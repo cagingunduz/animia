@@ -154,6 +154,8 @@ async function writeProject(body) {
   await copyFile(path.join(HERE, 'kit.css'), path.join(dir, 'lib', 'kit.css'));
   // 3D yard compositions (three.js + the yard kit + its CC0 textures) load them from yard/.
   if (String(files['index.html']).includes('yard/')) await cp(path.join(HERE, 'yard'), path.join(dir, 'yard'), { recursive: true });
+  // Explainer compositions load the explainer kit, presenter rig and fonts from explainer/.
+  if (String(files['index.html']).includes('explainer/')) await cp(path.join(HERE, 'explainer'), path.join(dir, 'explainer'), { recursive: true });
   return { dir, unknownIcons: [...unknownIcons] };
 }
 
