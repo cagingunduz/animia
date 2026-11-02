@@ -39,7 +39,7 @@ from storybook_pipeline import upload_bytes_to_r2, download_file
 import motion_images
 import motion_sound
 from motion_prompts import (DIRECTOR_SYSTEM, ANIMATOR_SYSTEM, RENDER_ENGINEER_NOTE, CRITIC_SYSTEM,
-                            EDIT_NOTE, DEFECT_NOTE, CINEMATIC_DIRECTOR, CINEMATIC_ANIMATOR)
+                            EDIT_NOTE, DEFECT_NOTE, CINEMATIC_DIRECTOR, CINEMATIC_ANIMATOR, STYLES)
 
 # Model per crew role — switchable from Railway without a deploy. Planning and review run on
 # Sonnet; only the animator, which writes the composition code, stays on Opus.
@@ -706,6 +706,8 @@ def _brief_text(p: dict) -> str:
         f"Narration: {'ON — write a voiceover line for every beat (≈ 2.5 words/second)' if p.get('narration') else 'off — leave voiceover empty'}",
         CINEMATIC_DIRECTOR if p.get("look") == "cinematic3d" else "LOOK = MOTION DESIGN (typography, shapes, icons, data drawn in code).",
     ]
+    if p.get("look") != "cinematic3d" and p.get("style") in STYLES:
+        lines.append(STYLES[p["style"]][0])
     if any(brand.get(k) for k in ("name", "colors", "fonts", "tone", "notes", "logo_data_url")):
         lines.append("BRAND KIT (law):")
         if brand.get("name"):
@@ -817,7 +819,7 @@ def _segment_brief(p: dict, plan: dict, seg: dict, n_segs: int) -> str:
         "PREVIOUS SEGMENT: " + ("ends with: " + str(plan["shots"][seg["shots"][0]["n"] - 2].get("transition_out", ""))
                                 if seg["n"] > 1 else "none — this segment opens the video"),
         "ASSETS: " + ("assets/logo.png (brand logo)" if (p.get("brand") or {}).get("logo_data_url") else "none"),
-        CINEMATIC_ANIMATOR if p.get("look") == "cinematic3d" else "",
+        CINEMATIC_ANIMATOR if p.get("look") == "cinematic3d" else (STYLES[p["style"]][1] if p.get("style") in STYLES else ""),
         _brand_lines(p),
     ]))
 
