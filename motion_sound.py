@@ -82,6 +82,19 @@ SFX_LIBRARY = {
     "catangry": ("an angry cat hissing and growling, close", 1.6, -10, 600),
     "glass": ("a window pane cracking and breaking, short", 1.8, -8, 600),
     "swell": ("a dark cinematic riser swelling up, tense, no melody", 5.0, -12, 2000),
+    # Style Studio music beds (one per style, generated once, looped under the voice)
+    "studio_bed_whiteboard": ("light curious clockwork minimal music, marimba, pizzicato strings, glockenspiel and soft woodblock, "
+                              "steady 110 bpm, warm and playful, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_toon": ("quirky retro sci-fi cartoon sitcom underscore, theremin and wobbly analog synth, walking bass, "
+                        "brushed drums, playful and deadpan, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_lantern": ("gentle east asian folk storytelling music, guzheng, soft bamboo flute and low drum, warm candlelit "
+                           "mood, slow 70 bpm, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_teardown": ("precise minimal product film music, tuned marimba and vibraphone pulses, glass mallets, round "
+                            "bass, small dry percussion, 112 bpm, clean and modern, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_news": ("urgent modern social news underscore, 120 bpm, tight kick on the beat, off-beat hats, eighth-note "
+                        "electric bass, sixteenth-note marimba ostinato, vibraphone stabs, driving and clean, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_tele": ("energetic sports analysis show music, 120 bpm drum kit groove, electric bass, staccato trumpet and "
+                        "trombone stabs, timpani accents, glockenspiel, upbeat studio TV feel, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain

@@ -1,0 +1,42 @@
+Animave Style Studio: third-party code and fonts
+
+Engines (render_service/studio/src/*)
+  Adapted from github.com/lemomo-ai/lemo-opuscar by LemoLab, MIT License (LICENSE_lemo-opuscar).
+  The styles' look and rules follow its styles/<style>/STYLE.md (MIT).
+
+whiteboard
+  EMS Tech single-line font (src/whiteboard/EMSTech.json): SIL Open Font License 1.1. Single-line font by
+  Sheldon B. Michaels, derived from "Architects Daughter" by Kimberly Geswein; SVG conversion by Windell H. Oskay
+  (Evil Mad Scientist), via the npm package "hersheytext" (MIT); JSON conversion by LemoLab (lemo-opuscar).
+  Architects Daughter (fonts/ArchitectsDaughter-400.woff2): Kimberly Geswein, SIL Open Font License 1.1
+  (fonts/OFL-ArchitectsDaughter.txt), from @fontsource/architects-daughter.
+
+scifi-toon
+  Engine (toon.js, chars.js, worlds.js) and the original cast from lemo-opuscar's Sci-Fi Sitcom Toon demo (MIT).
+  Fonts (SIL Open Font License 1.1, from @fontsource): Baloo 2 (Ek Type), Bungee (David Jonathan Ross),
+  VT323 (Peter Hull), Titan One (Rodrigo Fuenzalida). Licence texts: fonts/OFL-baloo-2.txt, OFL-bungee.txt,
+  OFL-vt323.txt, OFL-titan-one.txt.
+
+paper-lantern
+  A Canvas2D lightbox engine written for the Studio after lemo-opuscar's Paper-cut Lightbox style (MIT); paper grain
+  and pulp textures and the peaks / firs motifs follow its demo's paper.js and world.js.
+  Font: Cormorant Garamond (Christian Thalmann), SIL Open Font License 1.1 (fonts/OFL-cormorant-garamond.txt).
+
+teardown
+  A three.js kit written for the Studio after lemo-opuscar's Exploded Teardown style (MIT).
+  three.js r160 (MIT, THREE_LICENSE), bundled into kits/teardown.three.js, including RoomEnvironment and
+  RoundedBoxGeometry from three/examples.
+  Fonts: Inter (The Inter Project Authors), JetBrains Mono (JetBrains), SIL Open Font License 1.1
+  (fonts/OFL-inter.txt, fonts/OFL-jetbrains-mono.txt).
+
+caption-news
+  A Canvas2D graphics kit written for the Studio after lemo-opuscar's Caption News style (MIT).
+  Footage: the user's uploads, or openly licensed archive files (Wikimedia Commons CC0 / public domain / CC BY,
+  NASA) credited on screen per shot and listed in the job's sources.
+  Font: Inter (The Inter Project Authors), SIL Open Font License 1.1 (fonts/OFL-inter.txt).
+
+telestrator
+  A Canvas2D graphics kit written for the Studio after lemo-opuscar's Sports Telestrator style (MIT).
+  Footage: the user's own match clip only.
+  Fonts: Barlow Condensed (Jeremy Tribby), IBM Plex Mono (IBM), SIL Open Font License 1.1
+  (fonts/OFL-barlow-condensed.txt, fonts/OFL-ibm-plex-mono.txt).

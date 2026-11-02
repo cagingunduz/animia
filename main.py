@@ -2,7 +2,7 @@ import os
 import uuid
 import asyncio
 import tempfile
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
@@ -22,6 +22,8 @@ from yard_pipeline import run_yard_pipeline
 import explainer_pipeline
 import block_pipeline
 from survival_pipeline import run_survival_pipeline
+from studio_pipeline import run_studio_pipeline
+import studio_styles
 
 app = FastAPI(title="Animave API v3")
 
@@ -706,6 +708,81 @@ async def survival_status(job_id: str):
     if not job or job.get("kind") != "survival":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "title", "script", "rules", "choice", "post", "duration",
+            "final_video_url", "thumbnail_url", "usage", "review", "sound", "sources", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+class GenerateStudioRequest(BaseModel):
+    style: str = Field(..., max_length=40)
+    topic: Optional[str] = Field(None, max_length=500)
+    seconds: Optional[int] = Field(None, ge=15, le=120)
+    uploads: Optional[List[str]] = Field(None, max_length=12)     # URLs of the user's footage / photos (footage styles)
+
+
+@app.post("/generate-studio")
+async def generate_studio(req: GenerateStudioRequest):
+    """Style Studio: reels in styles from lemo-opuscar (Claude script + animation code on the style's kit, Kokoro voice,
+    CPU render on the render service, foley made in code)."""
+    if req.style not in studio_styles.STYLES:
+        raise HTTPException(status_code=400, detail=f"unknown style {req.style!r}")
+    from storybook_pipeline import R2_PUBLIC_BASE
+    if any(not str(u).startswith(f"{R2_PUBLIC_BASE}/studio-uploads/") for u in (req.uploads or [])):
+        raise HTTPException(status_code=400, detail="Uploads must come from /studio/upload.")
+    if studio_styles.STYLES[req.style].get("requires_upload") and not req.uploads:
+        raise HTTPException(status_code=400, detail="This style needs your own clip: upload it first (POST /studio/upload).")
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Style Studio is not available yet (render service not connected).")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "studio", "style": req.style, "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
+        "message": "Queued", "title": None, "script": None, "duration": None,
+        "final_video_url": None, "thumbnail_url": None, "error": None, "traceback": None,
+        "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(run_studio_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+STUDIO_UPLOAD_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm", "image/jpeg": "jpg", "image/png": "png",
+                       "image/webp": "webp"}
+
+
+def _upload_token_ok(token: str) -> bool:
+    """`<expires unix>.<user id>.<hex hmac-sha256(secret, expires.user)>`, issued by the site's /api/studio/upload-token."""
+    import hashlib, hmac, time
+    secret = os.environ.get("STUDIO_UPLOAD_SECRET", "")
+    try:
+        exp, uid, sig = token.split(".", 2)
+        good = hmac.new(secret.encode(), f"{exp}.{uid}".encode(), hashlib.sha256).hexdigest()
+        return bool(secret) and hmac.compare_digest(good, sig) and int(exp) > time.time()
+    except Exception:
+        return False
+
+
+@app.post("/studio/upload")
+async def studio_upload(file: UploadFile = File(...), x_upload_token: str = Header("")):
+    """Style Studio footage styles: the user's own clip or photo -> R2 -> a URL for /generate-studio's uploads.
+    The browser uploads here directly (big files), with a short-lived token from the site."""
+    if not os.environ.get("STUDIO_UPLOAD_SECRET"):
+        raise HTTPException(status_code=503, detail="Uploads are not configured (STUDIO_UPLOAD_SECRET).")
+    if not _upload_token_ok(x_upload_token):
+        raise HTTPException(status_code=401, detail="Upload token missing or expired. Refresh the page and try again.")
+    ext = STUDIO_UPLOAD_TYPES.get((file.content_type or "").split(";")[0].lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="Only MP4 / MOV / WebM videos and JPG / PNG / WebP photos")
+    data = await file.read(400 * 1024 * 1024 + 1)
+    if len(data) > 400 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File is larger than 400 MB")
+    url = await asyncio.to_thread(upload_bytes_to_r2, data, "studio-uploads", ext, file.content_type)
+    return {"url": url, "kind": "video" if ext in ("mp4", "mov", "webm") else "image", "bytes": len(data)}
+
+
+@app.get("/studio/{job_id}")
+async def studio_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "studio":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["style", "status", "stage", "step", "total_steps", "message", "title", "script", "post", "duration",
             "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
