@@ -1,7 +1,7 @@
 // Bundles each style kit (src/<style>/entry.js) into kits/<style>.js: one classic script per style, setting a global.
 //   cd render_service/studio && npm ci && npm run build
 import { build } from 'esbuild';
-const KITS = { whiteboard: 'WB', 'scifi-toon': 'TOON' };
+const KITS = { whiteboard: 'WB', 'scifi-toon': 'TOON', 'paper-lantern': 'LB' };
 for (const [style, global] of Object.entries(KITS)) {
   await build({
     entryPoints: [`src/${style}/entry.js`], bundle: true, format: 'iife', globalName: `__${global}`, target: 'es2020', minify: true,

@@ -45,6 +45,18 @@ STYLES: dict[str, dict] = {
         "foley": "toon",
         "inputs": [],
     },
+    "paper-lantern": {
+        "name": "Paper-cut Lightbox",
+        "kit_file": "paper-lantern.js", "kit_global": "LB",
+        "fonts": [{"family": "Cormorant", "file": "Cormorant-600.woff2", "weight": 600}],
+        "background": "#000",
+        "voice": "bm_george", "speed": 0.95,
+        "seconds": (40, 90),
+        "tail": 2.0,
+        "bed": "studio_bed_lantern", "bed_db": -15.0,
+        "foley": "paper",
+        "inputs": [],
+    },
 }
 
 

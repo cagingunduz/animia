@@ -128,11 +128,35 @@ class _Synth:
             dd = .08; return self.bp(self.rng.standard_normal(int(dd * SR)), 150, 1200) * np.exp(-t(dd) / .02) * .4
         return None
 
+    # ── paper lightbox: paper and light
+    def paper(self, ty, d=None):
+        t = self.tt
+        if ty == "click":
+            n = int(.04 * SR); return (self.bp(self.rng.standard_normal(n), 1500, 6000) * np.exp(-t(.04) / .004) + self.ring([2400], [.01], [.3], .04)) * .5
+        if ty == "shimmer":
+            dd = d or 1.6; x = np.zeros(int(dd * SR))
+            for f in (1568, 2093, 2637, 3136, 3951):
+                x += np.sin(2 * np.pi * f * t(dd) + self.rng.uniform(0, 6)) * (.5 + .5 * np.sin(2 * np.pi * self.rng.uniform(3, 7) * t(dd)))
+            return x * np.minimum(1, t(dd) / (dd * .4)) * np.exp(-np.maximum(0, t(dd) - dd * .4) / (dd * .3)) * .05
+        if ty == "rustle":
+            dd = d or .6; return self.bp(self.rng.standard_normal(int(dd * SR)), 1200, 8000) * (.4 + .6 * np.abs(np.sin(np.pi * t(dd) / dd * 5))) * np.sin(np.pi * t(dd) / dd) * .22
+        if ty == "slide":
+            dd = d or .7; return self.bp(self.rng.standard_normal(int(dd * SR)), 700, 4500) * np.sin(np.pi * t(dd) / dd) ** 1.5 * .2
+        if ty == "tap":
+            n = int(.06 * SR); return self.bp(self.rng.standard_normal(n), 400, 3000) * np.exp(-t(.06) / .008) * .6
+        if ty == "chime":
+            return self.ring([1318, 1976, 2637], [.9, .6, .4], [.25, .14, .08], 2.0)
+        if ty == "whoosh":
+            return self.whoosh(d or .8, .8)
+        if ty == "thud":
+            return self.ring([80, 130], [.12, .06], [.8, .3], .4)
+        return None
+
 
 def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
     """The style's foley as a stereo buffer (N, 2)."""
     N = int(total * SR); out = np.zeros((N, 2))
-    if kind not in ("marker", "toon") or not events:
+    if kind not in ("marker", "toon", "paper") or not events:
         return out
     S = _Synth()
 
@@ -162,8 +186,8 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
             put(S.eraser(float(e.get("dur", .5)), True), t, .8, -.2)
         elif ty == "whoosh" and kind == "marker":
             put(S.whoosh(float(e.get("dur", .5))), t, 1.0, 0)
-        elif kind == "toon":
-            x = S.toon(str(ty), num(e.get("d"), None))
+        elif kind in ("toon", "paper"):
+            x = (S.toon if kind == "toon" else S.paper)(str(ty), num(e.get("d"), None))
             if x is not None:
                 put(x, t, num(e.get("v"), 1.0), pan)
     return out
