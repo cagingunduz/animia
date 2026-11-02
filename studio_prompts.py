@@ -18,6 +18,10 @@ THE LINES
   abbreviations: "1.5 km" -> "one and a half kilometres").
 - `pause`: silence after the line, 0.1 to 0.8 s.
 - Plain spoken English, contractions, no filler. Only true claims; drop anything you are unsure of.
+- PERFORMANCE: the voice engine reads exactly what you write, so the punctuation IS the acting. `?` lifts the end,
+  `!` adds punch, `...` hesitates, commas give breaths, a one-word sentence ("Gary.") lands flat and dry. Split a long
+  line into short sentences rather than one long one. Give every line a `mood` (neutral, deadpan, excited, panic,
+  whisper, confused, sad, angry, warm): it sets the pace, the silence after the line and the loudness.
 - visual_notes: one line per voice line, what we see (the picture, where on the board / in the frame, what moves)."""
 
 
@@ -31,6 +35,8 @@ SCRIPT_TOOL = {
             "lines": {"type": "array", "items": {"type": "object", "properties": {
                 "text": {"type": "string"}, "say": {"type": "string"}, "pause": {"type": "number"},
                 "who": {"type": "string", "description": "dialogue styles only: the speaker, one of the cast names"},
+                "mood": {"type": "string", "enum": ["neutral", "deadpan", "excited", "panic", "whisper", "confused", "sad", "angry", "warm"],
+                         "description": "how the line is performed (sets the pace, the pause after it and the loudness)"},
                 "caption": {"type": "string", "description": "footage styles only: the on-screen caption, chunks split by |, one {keyword}"},
                 "media": {"type": "object", "description": "footage styles only: the footage under this line",
                           "properties": {"upload": {"type": "integer"}, "search": {"type": "string"},

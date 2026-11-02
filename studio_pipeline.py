@@ -98,6 +98,20 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
 
 # ─────────────────────────── 1. script ───────────────────────────
 
+# how each mood is performed by Kokoro (which has no emotion control): pace, extra silence after the line, loudness
+MOODS = {
+    "neutral":  {"speed": 1.0,  "pause": 0.0},
+    "deadpan":  {"speed": 0.9,  "pause": 0.25},
+    "excited":  {"speed": 1.12, "pause": -0.05, "bang": True},
+    "panic":    {"speed": 1.2,  "pause": -0.1},
+    "whisper":  {"speed": 0.9,  "pause": 0.1, "gain": 0.5},
+    "confused": {"speed": 0.95, "pause": 0.2},
+    "sad":      {"speed": 0.86, "pause": 0.3, "gain": 0.8},
+    "angry":    {"speed": 1.08, "pause": 0.0, "gain": 1.15, "bang": True},
+    "warm":     {"speed": 0.95, "pause": 0.1},
+}
+
+
 def _clean_lines(lines: list, st: dict) -> list[dict]:
     cast = {k.upper(): v for k, v in (st.get("cast") or {}).items()}
     out = []
@@ -106,6 +120,9 @@ def _clean_lines(lines: list, st: dict) -> list[dict]:
         if not text:
             continue
         o = {"text": text, "voice": st["voice"], "pause": max(0.1, min(1.0, float(ln.get("pause") or 0.25)))}
+        mood = str(ln.get("mood") or "neutral").lower()
+        mood = mood if mood in MOODS else "neutral"
+        o["mood"] = mood
         if cast:                                  # dialogue styles: each line is spoken by one of the cast
             who = str(ln.get("who") or "").strip().upper()
             who = who if who in cast else next(iter(cast))
@@ -113,6 +130,14 @@ def _clean_lines(lines: list, st: dict) -> list[dict]:
         say = str(ln.get("say") or "").strip()
         if say and say != text:
             o["say"] = say
+        # the mood: pace, the silence after the line, loudness; excited / angry end on '!' in the spoken form
+        m = MOODS[mood]
+        o["speed"] = round(float(o.get("speed") or st.get("speed", 1.0)) * m["speed"], 3)
+        o["pause"] = round(max(0.08, min(1.4, o["pause"] + m["pause"])), 3)
+        if m.get("gain", 1) != 1:
+            o["gain"] = m["gain"]
+        if m.get("bang") and not re.search(r"[!?]$", (o.get("say") or text)):
+            o["say"] = re.sub(r"[.…]*$", "", o.get("say") or text) + "!"
         if st.get("media") and ln.get("caption"):
             o["caption"] = str(ln["caption"])[:160]
         if st.get("media") and isinstance(ln.get("media"), dict):

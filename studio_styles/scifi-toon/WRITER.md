@@ -22,6 +22,8 @@ DIALOGUE RULES
 - 8-16 lines, 70-150 words in all. Lines of 2-14 words; many very short ("Gary." / "No." / "Science.").
 - Write for text-to-speech: spell stutters as syllables ("buh, buh-broken"), no dashes for interruptions, no stage
   directions in the text, no sound effects in the text. Numbers as spoken words in `say` when they differ.
+- `mood` on every line: VASK is mostly deadpan (sometimes warm, rarely angry); GARY confused, excited or panic;
+  DECAF warm or excited. A whisper for a secret, sad for the quiet button. The mood must match the words.
 - `pause` after a line: 0.15-0.3 in quick back-and-forth, 0.6-0.9 before a punchline (the silence is the joke).
 - Only true facts about the topic. Clean comedy: no swearing, no burping, nothing from any existing TV show.
 - visual_notes: one line per voice line: the world (home lab or which new world, its palette and its creature), the
