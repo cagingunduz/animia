@@ -200,15 +200,23 @@ def _offscreen(st: dict, foley: list) -> list[str]:
     """Whiteboard: strokes drawn while the camera looks elsewhere (the kit marks each stroke on / off screen)."""
     if st.get("foley") != "marker":
         return []
+    out = []
+    lay = next((e for e in foley if isinstance(e, dict) and e.get("type") == "layout"), None)
+    if lay and lay.get("overlaps"):
+        rows = "\n".join(f"- '{o['a']['label']}' (drawn at {o['a']['t']}s, box {o['a']['box']}) overlaps '{o['b']['label']}' "
+                         f"(drawn at {o['b']['t']}s, box {o['b']['box']})" for o in lay["overlaps"][:12])
+        out.append("LAYOUT: drawings run into each other (boxes are [x0, y0, x1, y1] on the board; K.text(...).width "
+                   f"tells you how wide a line of writing is):\n{rows}\nMove one of each pair so they don't touch (a gap of "
+                   "40+ units), or shrink the text; keep labels beside or under a drawing, not across it.")
     strokes = [e for e in foley if isinstance(e, dict) and e.get("type") in ("stroke", "write") and e.get("x") is not None]
     off = [e for e in strokes if e.get("on") == 0]
-    if not strokes or len(off) < max(3, 0.08 * len(strokes)):
-        return []
-    rows = ", ".join(f"t={e['t']:.1f}s at ({e['x']:.0f}, {e['y']:.0f})" for e in off[:12])
-    return [f"LAYOUT: {len(off)} of {len(strokes)} strokes are drawn OFF SCREEN (the camera is not looking at them when "
-            f"they are drawn): {rows}. The screen is 1080 x 1920: at zoom z it shows x = camX ± 540/z, y = camY ± 960/z. "
-            "Move those drawings into the column the camera shows, or add / move a camera key so it looks at them while "
-            "they are drawn."]
+    if strokes and len(off) >= max(3, 0.08 * len(strokes)):
+        rows = ", ".join(f"t={e['t']:.1f}s at ({e['x']:.0f}, {e['y']:.0f})" for e in off[:12])
+        out.append(f"LAYOUT: {len(off)} of {len(strokes)} strokes are drawn OFF SCREEN (the camera is not looking at them when "
+                   f"they are drawn): {rows}. The screen is 1080 x 1920: at zoom z it shows x = camX ± 540/z, y = camY ± 960/z. "
+                   "Move those drawings into the column the camera shows, or add / move a camera key so it looks at them while "
+                   "they are drawn.")
+    return out
 
 
 async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | None = None) -> tuple[str, dict, list]:

@@ -224,6 +224,7 @@ export function text(str, x, y, o = {}) {
     }
   }
   out.width = adv; out.x0 = x0;
+  if (out.length) out[0].label = str;
   return out;
 }
 
@@ -233,7 +234,7 @@ export class Pen {
   constructor(id, color, o = {}) { this.id = id; this.color = color; this.segs = []; this.park = o.park || [SW + 330, SH + 220]; this.len = o.len ?? 430; this.label = o.label ?? color; }
 }
 export class Timeline {
-  constructor() { this.strokes = []; this.erasers = []; this.ev = []; this.objs = []; }
+  constructor() { this.strokes = []; this.erasers = []; this.ev = []; this.objs = []; this.jobs = []; }
   // draw shapes with pen starting at t; returns end time
   draw(pen, shapes, t, o = {}) {
     const list = flat(shapes), speed = o.speed ?? 1500, trav = o.travel ?? 2600, want = t;
@@ -257,6 +258,12 @@ export class Timeline {
       this.ev.push({ t: +s.t0.toFixed(3), type: s.len < 16 ? 'tap' : (s.kind === 'text' ? 'write' : s.kind === 'dash' ? 'dash' : 'stroke'), dur: +(s.t1 - s.t0).toFixed(3), len: Math.round(s.len), pen: pen.id, x: Math.round(s.start[0]), y: Math.round(s.start[1]) });
       t = s.t1;
     });
+    // one job per draw() call, for the layout check (Studio): its box, whether it is writing, and when
+    if (list.length) {
+      const b = [1e9, 1e9, -1e9, -1e9];
+      for (const s of list) { b[0] = Math.min(b[0], s.box[0]); b[1] = Math.min(b[1], s.box[1]); b[2] = Math.max(b[2], s.box[2]); b[3] = Math.max(b[3], s.box[3]); }
+      this.jobs.push({ t0: list[0].t0, t1: t, text: list.every(s => s.kind === 'text'), label: list.find(s => s.label)?.label || list[0].kind, box: b, epoch: this.erasers.length });
+    }
     return t;
   }
   // eraser sweeping a zig-zag over the box [x,y,w,h] (or custom path) from t to t+dur
