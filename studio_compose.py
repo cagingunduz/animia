@@ -22,6 +22,9 @@ def compose(style: dict, code: str, timing: dict, start: float = 0.0, duration: 
                     for f in style.get("fonts", []))
     preload = "".join(f'<span style="position:absolute;left:-999px;font:{f.get("style", "normal")} {f.get("weight", 400)} 20px {f["family"]}">A</span>'
                       for f in style.get("fonts", []))
+    # pictures (Collage Documentary): hidden <img> tags the page loads before it renders; the film gets them as T.img[id]
+    imgs = "".join(f'<img data-k="{im["id"]}" src="{im["file"]}" alt="">' for im in (timing.get("images") or []))
+    imgs_html = f'<div style="position:absolute;left:-99999px;top:0;width:1px;height:1px;overflow:hidden">{imgs}</div>' if imgs else ""
     plate_html = (f'<video id="plate" src="{plate}" muted playsinline data-start="0" data-duration="{total}" '
                   f'style="position:absolute;inset:0;width:{w}px;height:{h}px;object-fit:cover"></video>') if plate else ""
     probe_js = ""
@@ -40,7 +43,7 @@ html,body{{margin:0;background:#000}}
 #film{{position:absolute;inset:0;width:{w}px;height:{h}px}}
 </style></head><body>
 <div id="root" data-composition-id="studio" data-no-timeline data-start="0" data-duration="{dur}" data-width="{w}" data-height="{h}">
-{plate_html}<canvas id="film" width="{w}" height="{h}"></canvas>{preload}</div>
+{plate_html}<canvas id="film" width="{w}" height="{h}"></canvas>{preload}{imgs_html}</div>
 <script src="lib/anime.umd.min.js"></script><script src="lib/kit.js"></script>
 <script src="studio/kits/{style['kit_file']}"></script>
 <script>window.TIMING = {json.dumps(timing)};</script>
@@ -54,6 +57,8 @@ html,body{{margin:0;background:#000}}
   const canvas = document.getElementById('film'), c = canvas.getContext('2d');
   if (KIT.setScreen) KIT.setScreen({W}, {H});
   const T = window.TIMING;
+  T.img = {{}};
+  for (const el of document.querySelectorAll('img[data-k]')) if (el.naturalWidth) T.img[el.dataset.k] = el;
   T.w = (i, word, n = 1) => {{
     const L = T.lines[i]; if (!L) throw new Error('T.w(' + i + "): there is no line " + i);
     const b = s => String(s).toLowerCase().replace(/[^a-z0-9':.%-]/g, ''); let k = 0;

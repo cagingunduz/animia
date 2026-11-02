@@ -218,6 +218,32 @@ class _Synth:
                     "pop": lambda: self.toon("pop"), "tick": lambda: self.teardown("tick")}[ty]()
         return None
 
+    # ── collage documentary: paper pieces landing, a pen, torn-paper cuts, a frame hung on the wall
+    def collage(self, ty, d=None):
+        t = self.tt
+        if ty == "paper":       # a cut-out laid down: a short rustle and a soft tap
+            dd = .32; x = self.bp(self.rng.standard_normal(int(dd * SR)), 1500, 9000) * np.exp(-t(dd) / .07) * .22
+            x[:int(.06 * SR)] += self.bp(self.rng.standard_normal(int(.06 * SR)), 300, 2500) * np.exp(-t(.06) / .01) * .5
+            return x
+        if ty == "pen":         # a felt pen drawing a mark
+            return self.marker(d or .45, 120, "stroke", None, 1.0) * .8
+        if ty == "word":        # a big word lands: a dry low tick
+            x = self.ring([110, 220], [.05, .03], [.45, .15], .25); n = int(.03 * SR)
+            x[:n] += self.bp(self.rng.standard_normal(n), 800, 5000) * np.exp(-t(.03) / .005) * .25
+            return x
+        if ty == "tear":        # paper torn across
+            dd = d or .45; n = self.rng.standard_normal(int(dd * SR)); crk = (self.rng.random(int(dd * SR)) < .012) * self.rng.standard_normal(int(dd * SR)) * 3
+            return self.bp(n * .5 + crk, 900, 9000) * np.sin(np.pi * t(dd) / dd) ** .7 * .35
+        if ty == "frame":       # a frame knocks the wall / a photo drops
+            return self.ring([70, 140, 420], [.15, .08, .03], [.9, .35, .15], .5) * .7
+        if ty == "swing":
+            dd = .18; return self.bp(self.rng.standard_normal(int(dd * SR)), 2000, 9000) * np.sin(np.pi * t(dd) / dd) * .1
+        if ty == "riser":
+            dd = d or 1.5; return self.bp(self.rng.standard_normal(int(dd * SR)), 400, 6000) * (t(dd) / dd) ** 2.5 * .18
+        if ty == "hit":
+            dd = 1.6; return self.ring([49, 98, 196], [.6, .3, .15], [1, .4, .2], dd) * .6
+        return None
+
     # ── premium: clean techy UI sounds
     def tech(self, ty, d=None):
         t = self.tt
@@ -250,7 +276,7 @@ class _Synth:
 def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
     """The style's foley as a stereo buffer (N, 2)."""
     N = int(total * SR); out = np.zeros((N, 2))
-    if kind not in ("marker", "toon", "paper", "teardown", "news", "tele", "tech") or not events:
+    if kind not in ("marker", "toon", "paper", "teardown", "news", "tele", "tech", "collage") or not events:
         return out
     S = _Synth()
 
@@ -280,7 +306,7 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
             put(S.eraser(float(e.get("dur", .5)), True), t, .8, -.2)
         elif ty == "whoosh" and kind == "marker":
             put(S.whoosh(float(e.get("dur", .5))), t, 1.0, 0)
-        elif kind in ("toon", "paper", "teardown", "news", "tele", "tech"):
+        elif kind in ("toon", "paper", "teardown", "news", "tele", "tech", "collage"):
             x = getattr(S, kind)(str(ty), num(e.get("d"), None))
             if x is not None:
                 put(x, t, num(e.get("v"), 1.0), pan)
