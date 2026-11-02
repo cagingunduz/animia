@@ -362,6 +362,57 @@
     }
   }
 
+  // Per-frame code: fn(ms) runs on every rendered / seeked frame (ms = the timeline's time), and the timeline is kept
+  // at least until at + dur. For closed-form motion anime.js can't express: springs, squash & stretch, limb rigs.
+  // fn must be a pure function of the time it is given.
+  function frame(tl, fn, at, dur) {
+    (tl._kHooks = tl._kHooks || []).push(fn);
+    tl.add({ k: 0 }, { k: 1, duration: Math.max(1, dur || 1), ease: 'linear' }, at || 0);
+    fn(0);
+  }
+
+  // Closed-form motion helpers, times in SECONDS. Adapted from the "Flat Vector" film of mg-styles-15
+  // (MIT, github.com/Vincentwei1021/mg-styles-15).
+  const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
+  function bezier(x1, y1, x2, y2) {            // a CSS cubic-bezier as an easing function u -> value
+    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx, cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+    const sx = (t) => ((ax * t + bx) * t + cx) * t, sy = (t) => ((ay * t + by) * t + cy) * t, dx = (t) => (3 * ax * t + 2 * bx) * t + cx;
+    return (u) => {
+      if (u <= 0) return 0; if (u >= 1) return 1;
+      let t = u;
+      for (let i = 0; i < 10; i++) { const d = dx(t); if (Math.abs(d) < 1e-6) break; t = clamp01(t - (sx(t) - u) / d); }
+      return sy(t);
+    };
+  }
+  // damped spring 0 -> 1 after t seconds (f = frequency in Hz, z = damping ratio), and its velocity
+  const spring = (t, f = 2, z = 0.4) => {
+    if (t <= 0) return 0;
+    const w = 2 * Math.PI * f, a = z * w, b = w * Math.sqrt(1 - z * z);
+    return 1 - Math.exp(-a * t) * (Math.cos(b * t) + (a / b) * Math.sin(b * t));
+  };
+  const springV = (t, f = 2, z = 0.4) => {
+    if (t <= 0) return 0;
+    const w = 2 * Math.PI * f, a = z * w, b = w * Math.sqrt(1 - z * z);
+    return Math.exp(-a * t) * (w * w / b) * Math.sin(b * t);
+  };
+  // a damped wobble that starts at t0 (impacts, recoil, a camera bump): 0 -> +-1 -> 0
+  const kick = (t, t0, f = 3, z = 0.35) => {
+    if (t <= t0) return 0;
+    const w = 2 * Math.PI * f, tt = t - t0;
+    return Math.exp(-z * w * tt) * Math.sin(w * Math.sqrt(1 - z * z) * tt);
+  };
+  // spring entrance with velocity-driven squash & stretch: returns [scale 0..1+, stretch k]; apply as
+  // scale(s * (1 + k), s * (1 - k)) along the move. Settles to exactly [1, 0] after `pin` seconds.
+  function squash(t, t0, f = 2.4, z = 0.42, amt = 0.12, pin = 0.9) {
+    const tt = t - t0;
+    let s = spring(tt, f, z);
+    let k = Math.max(-0.3, Math.min(0.3, springV(tt, f, z) / (2 * Math.PI * f) * amt * 2));
+    const u = clamp01((tt - pin * 0.7) / (pin * 0.3)), w = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
+    s += (1 - s) * w; k -= k * w;
+    return [s, k];
+  }
+  const fx = { bezier, spring, springV, kick, squash, overshoot: bezier(0.34, 1.56, 0.64, 1) };
+
   window.K = { timeline, split, rise, typeOn, charsUp, fadeUp, pop, wipe, grow, count, draw, push, exit, grain, set, cue,
-    camera, dissolve, scan, blink, glitch, erase };
+    camera, dissolve, scan, blink, glitch, erase, frame, fx };
 })();

@@ -51,6 +51,21 @@ SFX_LIBRARY = {
     "bubble": ("a few soft underwater bubbles rising, gentle", 1.2, -13, 600),
     "click": ("a single clean plastic click, a part snapping into place", 0.4, -10, 200),
     "hum": ("a small electric water pump humming steadily, soft", 3.0, -15, 2500),
+    # Block Horror (night-town horror Shorts)
+    "impact": ("deep cinematic horror impact hit, low and heavy, short dark tail", 2.0, -8, 400),
+    "subdrop": ("deep cinematic sub bass drop, horror trailer rumble", 2.0, -8, 400),
+    "shutter": ("a wooden window shutter slamming shut, close and dry", 0.8, -10, 250),
+    "doorslam": ("a front door slamming shut and a deadbolt locking", 1.2, -10, 300),
+    "knock": ("one heavy fist knock on a wooden front door, close", 0.5, -10, 150),
+    "riser": ("horror riser, tension building swell of dissonant strings rising", 3.0, -12, 1000),
+    "boom": ("cinematic boom, deep low impact hit with a rumbling tail, horror", 2.5, -8, 600),
+    "bigboom": ("massive cinematic boom with a long low tail, horror trailer impact", 4.0, -6, 1000),
+    "braam": ("cinematic braam, huge ominous low brass hit, horror trailer", 3.0, -8, 1000),
+    "creak": ("a slow horror door creak, an old wooden door opening", 2.5, -10, 800),
+    "trailer": ("horror trailer hit, sharp cinematic impact with a metallic tail", 2.0, -6, 800),
+    "sting": ("short horror sting, dissonant screeching violins", 1.5, -10, 600),
+    "horror_bed": ("tense slow horror music bed, low pulsing strings and a sparse dark piano, steady, loopable, no vocals", 22.0, -20, 99999),
+    "chase_bed": ("intense horror chase music, fast pounding drums and urgent strings, relentless, loopable, no vocals", 22.0, -18, 99999),
     "explainer_bed": ("light upbeat lo-fi background music for a short explainer video, soft drums, warm keys, "
                       "playful, steady, loopable, no vocals", 22.0, -20, 99999),
     "yard_bed": ("calm light documentary background music, soft plucked guitar and gentle marimba, warm, steady, "

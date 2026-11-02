@@ -178,6 +178,8 @@ states for anything you animate with K. Times are ms; `at` is the start on the t
   K.push(tl, '.k-stage', DURATION*1000, {scale:1.04})  // camera push (wrap content in <div class="k-stage">)
   K.exit(tl, '.title', at, 'fade'|'up'|'down'|'left'|'right'|'wipe'|'zoom'|'blur')
   K.grain('#root', 0.08)                           // static film grain
+  K.frame(tl, ms => {...}, at, dur)                // per-frame code (pure function of time) for springs, rigs, squash
+  K.fx.spring(t) / K.fx.kick(t, t0) / K.fx.squash(t, t0) / K.fx.overshoot   // closed-form motion helpers (seconds)
 Text for rise/typeOn/charsUp is plain text (use <br> for line breaks). For anything the kit
 does not cover, use anime.js directly on the same timeline: tl.add(targets, {...}, at) —
 and then give that element its starting state with K.set(targets, {opacity:0, y:40}).
@@ -262,3 +264,49 @@ CINEMATIC_ANIMATOR = """LOOK = CINEMATIC 3D STILLS. Each beat lists its pre-rend
 - Overlays only where they add information: a small mono label ("HOUR 24"), a big counter, a thin
   circle or arrow pointing at part of the still. At most two overlay elements at a time, in the upper
   or lower third, on a dark translucent pill (rgba(0,0,0,.55), white text) so they read on any image."""
+
+
+# ─────────────────────────── named styles ───────────────────────────
+# A style the user picks in the app. Its rules come after the brief and win over taste, but never over a brand kit's
+# colours, fonts and logo. "Flat Vector" follows the signature features of the Flat / Vector 2D film in mg-styles-15
+# (MIT, github.com/Vincentwei1021/mg-styles-15).
+
+FLAT_VECTOR_DIRECTOR = """STYLE = FLAT VECTOR 2D — the classic, instantly recognisable explainer look (Google/Material-style brand
+explainers, Buck, Giant Ant, Ordinary Folk) pushed to showreel polish. An expert must name the style in one second.
+- Everything is a vector shape: bold flat colour fields, geometric characters and props built from circles, rounded
+  rectangles and simple paths. No outlines (or one thin ink outline at most), no gradients, no photos, no 3D.
+- Palette: 5-6 saturated flat colours with lots of clean negative space, e.g. ultramarine #2B2BFF, coral #FF5A4E,
+  sunflower #FFC62B, mint #2EE6A8, cream #FFF6E9, ink #151433 (a brand kit's colours replace these).
+- Display type: a rounded geometric Google Font (e.g. Fredoka, Baloo 2, Nunito) in heavy weights.
+- One continuous world when possible: the camera pushes into a window, a phone, an icon, and the next idea lives inside.
+- Every entrance is anticipation -> stretch -> squash -> overshoot -> settle; one hero moves at a time; supporting
+  elements stagger in 2-4 frames apart, each with its own small overshoot; secondary action and follow-through.
+- Transitions are carried by elements, never by crossfades: a colour-block shape wipe (a circle or bubble grows to fill
+  the frame and the next scene is inside it), or an object flies out and drags the cut with it.
+- A geometric character (limbs rotate from their joints, head bob, blink) is welcome when the story has a person.
+- The end frame is a composed lockup held about 1 s with living micro-motion (a gentle bob, a blink), never frozen.
+Plan beats that give each of these a moment."""
+
+FLAT_VECTOR_ANIMATOR = """STYLE = FLAT VECTOR 2D. Build and move it like a top After Effects shape-layer explainer:
+- Draw with inline SVG shapes (circle, rect with rx, path) in the palette's flat colours. No gradients, no filters, no
+  drop shadows, no blur, no images except the brand logo. Thin details stay at least 4 px so nothing shimmers.
+- Easing is the soul of the style. Entrances overshoot: in anime.js use ease: K.fx.overshoot (cubic-bezier 0.34, 1.56,
+  0.64, 1) or 'outBack(1.7)'; never linear unless mechanical by design.
+- Squash & stretch about 10% on every drop, jump and pop. Use per-frame code for it:
+    K.frame(tl, (ms) => {
+      const t = ms / 1000, [s, k] = K.fx.squash(t, 1.2);          // spring in at 1.2 s, velocity-driven stretch
+      ball.setAttribute('transform', `translate(540 900) scale(${(s * (1 - k)).toFixed(4)} ${(s * (1 + k)).toFixed(4)})`);
+    }, 0, DURATION * 1000);
+  K.fx.spring(t, f, z) is a damped 0 -> 1 spring, K.fx.kick(t, t0) a decaying wobble for impacts and recoil. Set SVG
+  transforms with transform-origin / nested <g> so things scale and rotate from their base or joint.
+- Stagger groups by 2-4 frames (66-133 ms) with anime.stagger; one hero moves at a time, the rest wait or idle.
+- Characters: nested <g> per limb (shoulder > upper arm > forearm > hand), each rotating from its joint; add a head
+  bob and a blink (eyes scaleY to 0.1 for ~3 frames). Overlap: the hand settles 2-3 frames after the arm.
+- Transitions: a shape wipe (a circle of the next scene's colour scales from the hero element to cover the frame,
+  the next scene is revealed inside it) or an element flying out with the cut. No crossfades, no K.exit 'fade' between
+  scenes.
+- Holds are never dead: give the held frame a slow bob or a blink. No span longer than 1 s where nothing moves."""
+
+STYLES = {
+    "flat_vector": (FLAT_VECTOR_DIRECTOR, FLAT_VECTOR_ANIMATOR),
+}
