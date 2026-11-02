@@ -96,18 +96,43 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
 
 # ─────────────────────────── 1. script ───────────────────────────
 
-def _clean_lines(lines: list, voice: str) -> list[dict]:
+def _clean_lines(lines: list, st: dict) -> list[dict]:
+    cast = {k.upper(): v for k, v in (st.get("cast") or {}).items()}
     out = []
     for ln in lines or []:
         text = str(ln.get("text", "")).strip()
         if not text:
             continue
-        o = {"text": text, "voice": voice, "pause": max(0.1, min(1.0, float(ln.get("pause") or 0.25)))}
+        o = {"text": text, "voice": st["voice"], "pause": max(0.1, min(1.0, float(ln.get("pause") or 0.25)))}
+        if cast:                                  # dialogue styles: each line is spoken by one of the cast
+            who = str(ln.get("who") or "").strip().upper()
+            who = who if who in cast else next(iter(cast))
+            o.update(who=who, voice=cast[who]["voice"], speed=cast[who].get("speed", st.get("speed", 1.0)))
         say = str(ln.get("say") or "").strip()
         if say and say != text:
             o["say"] = say
         out.append(o)
     return out
+
+
+def _lips(wav: str, timing: dict) -> list[float]:
+    """Mouth openness 0..1 per 1/24 s of the voice track (RMS over 50 ms, normalised per line to its 95th percentile)."""
+    import numpy as np
+    import soundfile as sf
+    y, sr = sf.read(wav)
+    if y.ndim > 1:
+        y = y.mean(1)
+    hop, win = sr / 24, int(0.05 * sr)
+    n = int(len(y) / hop) + 1
+    rms = np.array([np.sqrt(np.mean(y[max(0, int(k * hop) - win // 2):int(k * hop) + win // 2] ** 2) + 1e-12) for k in range(n)])
+    out = np.zeros(n)
+    for L in timing["lines"]:
+        a, b = int(L["start"] * 24), min(n, int(L["end"] * 24) + 2)
+        if b <= a:
+            continue
+        p = np.percentile(rms[a:b], 95) + 1e-9
+        out[a:b] = np.clip((rms[a:b] / p - 0.1) / 0.8, 0, 1)
+    return [round(float(v), 2) for v in out]
 
 
 async def _write(job_id: str, st: dict, p: dict) -> dict:
@@ -116,14 +141,14 @@ async def _write(job_id: str, st: dict, p: dict) -> dict:
     ask = [f"The topic: {p['topic'].strip()}" if (p.get("topic") or "").strip() else "No topic given: pick the best one for this style yourself."]
     ask.append(f"The length: about {secs} seconds of narration (about {round(secs * 2.4)} words).")
     s = await _claude(job_id, writer_system(st), "\n".join(ask) + "\n\nWrite it, then submit the script.", 5000, "writer", tool=SCRIPT_TOOL)
-    s["lines"] = _clean_lines(s.get("lines"), st["voice"])
+    s["lines"] = _clean_lines(s.get("lines"), st)
     if len(s["lines"]) < 5:
         raise ValueError("the script came back too short")
     return s
 
 
 def _block(s: dict, timing: dict) -> str:
-    rows = "\n".join(f'{i:>3}  {l["start"]:6.2f}-{l["end"]:6.2f}  {l["text"]}' for i, l in enumerate(timing["lines"]))
+    rows = "\n".join(f'{i:>3}  {l["start"]:6.2f}-{l["end"]:6.2f}  {(l["who"] + ": ") if l.get("who") else ""}{l["text"]}' for i, l in enumerate(timing["lines"]))
     return (f'TITLE: {s.get("title")}\n\nLINES (i, start-end seconds, text):\n{rows}\n\nT.end = {timing["end"]}\n\n'
             f'SHOT NOTES FROM THE WRITER:\n{s.get("visual_notes") or "-"}')
 
@@ -274,6 +299,8 @@ async def run_studio_pipeline(job_id: str, p: dict):
         async with _voice_sem:
             timing = await survival_voice.narrate(s["lines"], voice_wav, speed=st.get("speed", 1.05))
         timing["end"] = round(timing["voice_end"] + st.get("tail", TAIL), 3)
+        if st.get("cast"):
+            timing["lips"] = await asyncio.to_thread(_lips, voice_wav, timing)
         _job(job_id)["duration"] = timing["end"]
 
         _stage(job_id, "scene", 3, "Animating")

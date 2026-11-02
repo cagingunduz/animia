@@ -28,6 +28,23 @@ STYLES: dict[str, dict] = {
         "foley": "marker",                  # survival-style code-made foley from the kit's stroke events
         "inputs": [],
     },
+    "scifi-toon": {
+        "name": "Sci-Fi Sitcom Toon",
+        "kit_file": "scifi-toon.js", "kit_global": "TOON",
+        "fonts": [{"family": '"Baloo 2"', "file": "Baloo2-800.woff2", "weight": 800},
+                  {"family": "Bungee", "file": "Bungee-400.woff2"},
+                  {"family": "VT323", "file": "VT323-400.woff2"},
+                  {"family": '"Titan One"', "file": "TitanOne-400.woff2"}],
+        "background": "#000",
+        "voice": "am_onyx", "speed": 1.0,
+        "cast": {"VASK": {"voice": "am_onyx", "speed": 0.92}, "GARY": {"voice": "am_eric", "speed": 1.1},
+                 "DECAF": {"voice": "af_sky", "speed": 1.05}},
+        "seconds": (35, 75),
+        "tail": 1.6,
+        "bed": "studio_bed_toon", "bed_db": -16.0,
+        "foley": "toon",
+        "inputs": [],
+    },
 }
 
 

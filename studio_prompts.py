@@ -29,7 +29,8 @@ SCRIPT_TOOL = {
         "properties": {
             "title": {"type": "string", "description": "a short title, 2 to 6 words"},
             "lines": {"type": "array", "items": {"type": "object", "properties": {
-                "text": {"type": "string"}, "say": {"type": "string"}, "pause": {"type": "number"}},
+                "text": {"type": "string"}, "say": {"type": "string"}, "pause": {"type": "number"},
+                "who": {"type": "string", "description": "dialogue styles only: the speaker, one of the cast names"}},
                 "required": ["text"]}},
             "visual_notes": {"type": "string"},
             "post": {"type": "string", "description": "a short post caption with 3 to 5 hashtags"},

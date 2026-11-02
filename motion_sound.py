@@ -70,6 +70,10 @@ SFX_LIBRARY = {
     # Style Studio music beds (one per style, generated once, looped under the voice)
     "studio_bed_whiteboard": ("light curious clockwork minimal music, marimba, pizzicato strings, glockenspiel and soft woodblock, "
                               "steady 110 bpm, warm and playful, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_toon": ("quirky retro sci-fi cartoon sitcom underscore, theremin and wobbly analog synth, walking bass, "
+                        "brushed drums, playful and deadpan, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_lantern": ("gentle east asian folk storytelling music, guzheng, soft bamboo flute and low drum, warm candlelit "
+                           "mood, slow 70 bpm, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain

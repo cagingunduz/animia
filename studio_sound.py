@@ -88,11 +88,51 @@ class _Synth:
         n = int(d * SR); t = self.tt(d)
         return self.bp(self.rng.standard_normal(n), 300, 2400) * np.sin(np.pi * t / d) ** 2 * .35 * v
 
+    # ── cartoon (sci-fi sitcom): short synthetic hits, after the lemo-opuscar demo's code-made effects
+    def sweep(self, f0, f1, d, shape="sin", curve=1.0):
+        t = self.tt(d); u = (t / d) ** curve; f = f0 * (f1 / f0) ** u
+        ph = 2 * np.pi * np.cumsum(f) / SR
+        return np.sin(ph) if shape == "sin" else np.sign(np.sin(ph)) * .5 + np.sin(ph) * .5
+
+    def toon(self, ty, d=None):
+        t = lambda dd: self.tt(dd)
+        env = lambda dd, a=.005, r=None: np.minimum(1, t(dd) / a) * np.exp(-t(dd) / (r or dd / 3))
+        if ty == "pop":
+            return self.sweep(300, 900, .07) * env(.07, .002, .025) * .6
+        if ty == "boing":
+            dd = .45; f = 180 * (1 + .35 * np.sin(2 * np.pi * 9 * t(dd)) * np.exp(-t(dd) / .2))
+            return np.sin(2 * np.pi * np.cumsum(f) / SR) * env(dd, .004, .15) * .55
+        if ty == "suck":
+            dd = .55; return (self.bp(self.rng.standard_normal(int(dd * SR)), 400, 3000) * .4 + self.sweep(900, 120, dd) * .25) * np.sin(np.pi * t(dd) / dd) ** 2
+        if ty == "whoosh":
+            return self.whoosh(d or .45, 1.3)
+        if ty == "portalOpen":
+            dd = 1.1; wob = 1 + .08 * np.sin(2 * np.pi * 7 * t(dd))
+            x = self.sweep(80, 420, dd, curve=.5) * wob * .35 + self.bp(self.rng.standard_normal(int(dd * SR)), 200, 1800) * .25
+            return x * np.minimum(1, t(dd) / .05) * np.exp(-t(dd) / .6)
+        if ty == "portalClose":
+            dd = .6; return (self.sweep(500, 70, dd) * .4 + self.bp(self.rng.standard_normal(int(dd * SR)), 200, 1500) * .2) * np.exp(-t(dd) / .25) * np.minimum(1, t(dd) / .01)
+        if ty == "click":
+            n = int(.025 * SR); return self.bp(self.rng.standard_normal(n), 2000, 7000) * np.exp(-self.tt(.025) / .003) * .7
+        if ty == "slam":
+            dd = .5; return (self.ring([70, 110], [.15, .08], [1, .5], dd) + self.bp(self.rng.standard_normal(int(dd * SR)), 100, 2000) * np.exp(-t(dd) / .05)) * .6
+        if ty == "thud":
+            dd = .3; return self.ring([90, 140], [.07, .04], [1, .4], dd) * .7
+        if ty == "squish":
+            dd = .3; return self.bp(self.rng.standard_normal(int(dd * SR)), 300, 1500) * (1 + np.sin(2 * np.pi * 30 * t(dd))) * env(dd, .01, .1) * .5
+        if ty == "blip":
+            return self.sweep(900, 1500, .09) * env(.09, .003, .04) * .35
+        if ty == "gulp":
+            dd = .22; return self.sweep(160, 380, dd) * np.sin(np.pi * t(dd) / dd) ** 2 * .5
+        if ty == "step":
+            dd = .08; return self.bp(self.rng.standard_normal(int(dd * SR)), 150, 1200) * np.exp(-t(dd) / .02) * .4
+        return None
+
 
 def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
     """The style's foley as a stereo buffer (N, 2)."""
     N = int(total * SR); out = np.zeros((N, 2))
-    if kind != "marker" or not events:
+    if kind not in ("marker", "toon") or not events:
         return out
     S = _Synth()
 
@@ -120,8 +160,12 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
             put(S.eraser(float(e.get("dur", .5))), t, 1.1, .1)
         elif ty == "rewind":
             put(S.eraser(float(e.get("dur", .5)), True), t, .8, -.2)
-        elif ty == "whoosh":
+        elif ty == "whoosh" and kind == "marker":
             put(S.whoosh(float(e.get("dur", .5))), t, 1.0, 0)
+        elif kind == "toon":
+            x = S.toon(str(ty), num(e.get("d"), None))
+            if x is not None:
+                put(x, t, num(e.get("v"), 1.0), pan)
     return out
 
 
