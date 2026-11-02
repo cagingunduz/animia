@@ -9,8 +9,10 @@
   "devDependencies": {
     "@fontsource/architects-daughter": "5.2.5",
     "@fontsource/baloo-2": "^5.2.5",
+    "@fontsource/barlow-condensed": "^5.2.5",
     "@fontsource/bungee": "^5.2.5",
     "@fontsource/cormorant-garamond": "^5.2.5",
+    "@fontsource/ibm-plex-mono": "^5.2.5",
     "@fontsource/inter": "^5.2.5",
     "@fontsource/jetbrains-mono": "^5.2.5",
     "@fontsource/titan-one": "^5.2.5",

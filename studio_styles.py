@@ -83,6 +83,23 @@ STYLES: dict[str, dict] = {
         "media": "footage",                 # uploads first, else open archives (studio_footage / studio_plate)
         "inputs": ["uploads"],
     },
+    "telestrator": {
+        "name": "Sports Telestrator",
+        "kit_file": "telestrator.js", "kit_global": "TL",
+        "fonts": [{"family": "BarlowCondensed", "file": "BarlowCondensed-600.woff2", "weight": 600},
+                  {"family": "BarlowCondensed", "file": "BarlowCondensed-800.woff2", "weight": 800},
+                  {"family": "BarlowCondensed", "file": "BarlowCondensed-800i.woff2", "weight": 800, "style": "italic"},
+                  {"family": "IBMPlexMono", "file": "IBMPlexMono-500.woff2", "weight": 500}],
+        "background": "#000",
+        "voice": "bm_george", "speed": 1.08,
+        "seconds": (30, 75),
+        "tail": 1.0,
+        "bed": "studio_bed_tele", "bed_db": -16.0,
+        "foley": "tele",
+        "media": "clip",                    # the user's match clip: played / slowed / rewound / frozen by the script
+        "requires_upload": True,
+        "inputs": ["uploads"],
+    },
 }
 
 

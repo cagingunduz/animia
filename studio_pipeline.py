@@ -196,9 +196,18 @@ async def _load(st: dict, code: str, timing: dict) -> tuple[list[str], dict, lis
     return errors, spec, foley
 
 
-async def _film(job_id: str, st: dict, s: dict, timing: dict) -> tuple[str, dict, list]:
+async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | None = None) -> tuple[str, dict, list]:
     system = film_system(st)
-    text = await _claude(job_id, system, _block(s, timing) + "\n\nWrite film(K, T, c) for this reel.", 24000, "film", model=FILM_MODEL)
+    content = _block(s, timing) + "\n\nWrite film(K, T, c) for this reel."
+    if timing.get("shots"):
+        content = _block(s, timing) + "\n\nT.shots (the footage plate under your canvas):\n" + json.dumps(timing["shots"]) + "\n\nWrite film(K, T, c) for this reel."
+    if stills:
+        content = [{"type": "text", "text": content.rsplit("\n\n", 1)[0]}]
+        for f in stills:
+            content.append({"type": "text", "text": f"FREEZE {f['freeze']:.2f}-{f['t1']:.2f} s: the frozen picture as it is on screen (grid = SCREEN pixels, x across, y down; draw at these coordinates):"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": f["jpeg"]}})
+        content.append({"type": "text", "text": "Write film(K, T, c) for this reel."})
+    text = await _claude(job_id, system, content, 24000, "film", model=FILM_MODEL)
     code = _extract(text)
     for attempt in range(MAX_FIXES + 1):
         problems = _static(code)
@@ -333,17 +342,21 @@ async def run_studio_pipeline(job_id: str, p: dict):
         _job(job_id)["duration"] = timing["end"]
 
         plate = proxy = None
+        stills = []
         if st.get("media"):
             _stage(job_id, "voice", 2, "Finding the footage")
             ask = lambda system, content, mt, role, tool: _claude(job_id, system, content, mt, role, tool=tool)
-            shots = await studio_footage.shots(job_id, ask, s["lines"], timing, media["uploads"], tmp)
+            fit = "tele" if st["media"] == "clip" else "band"
+            shots = await studio_footage.shots(job_id, ask, s["lines"], timing, media["uploads"], tmp, fit=fit)
             timing["shots"] = studio_footage.public(shots)
             _job(job_id)["sources"] = studio_footage.sources(shots)
             plate = await asyncio.to_thread(studio_plate.build, shots, timing["end"], os.path.join(tmp, "plate.mp4"), tmp)
             proxy = await asyncio.to_thread(studio_plate.proxy, plate, os.path.join(tmp, "proxy.mp4"))
+            if fit == "tele":
+                stills = await asyncio.to_thread(studio_footage.freeze_stills, plate, timing["shots"], tmp, studio_plate.TELE[0], studio_plate.TELE[1])
 
         _stage(job_id, "scene", 3, "Animating")
-        code, spec, foley = await _film(job_id, st, s, timing)
+        code, spec, foley = await _film(job_id, st, s, timing, stills)
 
         _stage(job_id, "check", 4, "Checking the key frames")
         try:

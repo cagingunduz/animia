@@ -18,9 +18,9 @@ def compose(style: dict, code: str, timing: dict, start: float = 0.0, duration: 
     w, h = W, H
     total = round(timing["end"], 3)
     dur = round(duration if duration is not None else total, 4)
-    fonts = "".join(f"@font-face{{font-family:{f['family']};src:url(studio/fonts/{f['file']}) format('woff2');font-weight:{f.get('weight', 400)}}}"
+    fonts = "".join(f"@font-face{{font-family:{f['family']};src:url(studio/fonts/{f['file']}) format('woff2');font-weight:{f.get('weight', 400)};font-style:{f.get('style', 'normal')}}}"
                     for f in style.get("fonts", []))
-    preload = "".join(f'<span style="position:absolute;left:-999px;font:{f.get("weight", 400)} 20px {f["family"]}">A</span>'
+    preload = "".join(f'<span style="position:absolute;left:-999px;font:{f.get("style", "normal")} {f.get("weight", 400)} 20px {f["family"]}">A</span>'
                       for f in style.get("fonts", []))
     plate_html = (f'<video id="plate" src="{plate}" muted playsinline data-start="0" data-duration="{total}" '
                   f'style="position:absolute;inset:0;width:{w}px;height:{h}px;object-fit:cover"></video>') if plate else ""

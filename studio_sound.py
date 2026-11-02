@@ -197,11 +197,32 @@ class _Synth:
             dd = d or 1.5; return (self.sweep(200, 1600, dd, curve=2) * .15 + self.bp(self.rng.standard_normal(int(dd * SR)), 800, 6000) * .12) * (t(dd) / dd) ** 2
         return None
 
+    # ── telestrator: the analysis desk
+    def tele(self, ty, d=None):
+        t = self.tt
+        if ty == "squeak":
+            dd = d or .45; f = 3200 * (1 + .06 * np.sin(2 * np.pi * 23 * t(dd)))
+            return (self.bp(self.rng.standard_normal(int(dd * SR)), 2000, 5000) * .5 + np.sin(2 * np.pi * np.cumsum(f) / SR) * .08) * np.sin(np.pi * t(dd) / dd) * .25
+        if ty == "tape":
+            dd = d or .8; return (self.sweep(900, 300, dd) * .2 + self.bp(self.rng.standard_normal(int(dd * SR)), 500, 3000) * .12) * np.minimum(1, t(dd) / .05)
+        if ty == "stopwatch":
+            dd = d or 1.0; x = np.zeros(int(dd * SR))
+            for k in range(int(dd / .2) + 1):
+                i = int(k * .2 * SR); seg_ = self.ring([4200], [.004], [.3], .02); x[i:i + len(seg_)] += seg_[:max(0, len(x) - i)]
+            return x
+        if ty == "hit":
+            dd = .9; return (self.ring([233, 466, 349], [.25, .18, .2], [.5, .25, .3], dd) * (1 + .3 * np.sign(np.sin(2 * np.pi * 233 * t(dd)))) * .4
+                             + self.ring([65], [.3], [.9], dd) * .6)
+        if ty in ("shutter", "stamp", "whoosh", "pop", "tick"):
+            return {"shutter": lambda: self.news("shutter"), "stamp": lambda: self.news("stamp"), "whoosh": lambda: self.whoosh(.34, 1.2),
+                    "pop": lambda: self.toon("pop"), "tick": lambda: self.teardown("tick")}[ty]()
+        return None
+
 
 def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
     """The style's foley as a stereo buffer (N, 2)."""
     N = int(total * SR); out = np.zeros((N, 2))
-    if kind not in ("marker", "toon", "paper", "teardown", "news") or not events:
+    if kind not in ("marker", "toon", "paper", "teardown", "news", "tele") or not events:
         return out
     S = _Synth()
 
@@ -231,7 +252,7 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
             put(S.eraser(float(e.get("dur", .5)), True), t, .8, -.2)
         elif ty == "whoosh" and kind == "marker":
             put(S.whoosh(float(e.get("dur", .5))), t, 1.0, 0)
-        elif kind in ("toon", "paper", "teardown", "news"):
+        elif kind in ("toon", "paper", "teardown", "news", "tele"):
             x = getattr(S, kind)(str(ty), num(e.get("d"), None))
             if x is not None:
                 put(x, t, num(e.get("v"), 1.0), pan)

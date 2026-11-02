@@ -723,6 +723,8 @@ async def generate_studio(req: GenerateStudioRequest):
     CPU render on the render service, foley made in code)."""
     if req.style not in studio_styles.STYLES:
         raise HTTPException(status_code=400, detail=f"unknown style {req.style!r}")
+    if studio_styles.STYLES[req.style].get("requires_upload") and not req.uploads:
+        raise HTTPException(status_code=400, detail="This style needs your own clip: upload it first (POST /studio/upload).")
     if not os.environ.get("RENDER_SERVICE_URL"):
         raise HTTPException(status_code=503, detail="Style Studio is not available yet (render service not connected).")
     job_id = str(uuid.uuid4())

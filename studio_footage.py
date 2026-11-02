@@ -61,7 +61,7 @@ async def uploads(urls: list[str], tmp: str) -> list[dict]:
             continue
         kind = M.kind_of(path)
         info = M.probe(path) if kind == "video" else {"duration": 0}
-        rec = {"i": i, "path": path, "kind": kind, "duration": info.get("duration", 0), "every": 1.0}
+        rec = {"i": i, "path": path, "kind": kind, "duration": info.get("duration", 0), "every": 1.0, "w": info.get("w"), "h": info.get("h")}
         try:
             if kind == "video":
                 rec["every"] = max(1.0, round(info["duration"] / 36, 1))
@@ -77,7 +77,7 @@ async def uploads(urls: list[str], tmp: str) -> list[dict]:
     return out
 
 
-async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[dict], tmp: str) -> list[dict]:
+async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[dict], tmp: str, fit: str = "band") -> list[dict]:
     """Each line's media -> a shot list with files. `claude(system, content, max_tokens, role, tool)` is the pipeline's call."""
     tl = timing["lines"]
     by_up = {u["i"]: u for u in ups}
@@ -160,7 +160,8 @@ async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[
         if m.get("upload") is not None and int(m["upload"]) in by_up:
             u = by_up[int(m["upload"])]
             src = {"path": u["path"], "kind": u["kind"], "duration": u.get("duration", 0), "credit": "", "key": f"u{u['i']}",
-                   "at": m.get("at")}
+                   "at": m.get("at"), "mode": m.get("mode"), "freeze_at": m.get("freeze_at"), "cx": m.get("cx"),
+                   "w": u.get("w"), "h": u.get("h")}
         elif m.get("search") and m["search"] in found:
             f = found[m["search"]]
             src = {"path": f["path"], "kind": f["kind"], "duration": f.get("duration", 0), "credit": f["credit"], "key": m["search"], "start": f.get("start"), "clean_until": f.get("clean_until"),
@@ -172,7 +173,18 @@ async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[
         if out and out[-1]["_src"].get("key") == src.get("key") and src.get("kind") != "video":
             out[-1]["t1"] = t1
             continue
-        sh = {"t0": t0, "t1": t1, "kind": src.get("kind"), "path": src.get("path"), "credit": src.get("credit", ""), "_src": src}
+        sh = {"t0": t0, "t1": t1, "kind": src.get("kind"), "path": src.get("path"), "credit": src.get("credit", ""), "_src": src, "fit": fit}
+        mode = src.get("mode") or "play"
+        if src.get("kind") == "video" and fit == "tele":
+            sh["mode"] = mode
+            if mode == "slow":
+                sh["speed"] = 0.65
+            if mode == "freeze":
+                sh["freeze"] = t0 + 1 / P.FPS
+            if src.get("w") and src.get("h"):        # the 4:5 window over the 16:9 clip, centred on cx
+                bw = min(1.0, (P.W / P.TELE[1]) * src["h"] / src["w"])
+                cx = float(src.get("cx") if src.get("cx") is not None else .5)
+                sh["box"] = [round(min(max(cx - bw / 2, 0), 1 - bw), 4), 0, round(bw, 4), 1]
         if src.get("kind") == "video":
             d = src.get("duration") or 0
             first = src["start"] if src.get("start") is not None else min(d * .15, 4.0)
@@ -182,15 +194,29 @@ async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[
                 start = first if first + (t1 - t0) <= cu + 1 else start      # reuse the clean stretch rather than run past it
             if d and start + (t1 - t0) > d:
                 start = max(0.0, d - (t1 - t0) - .1)
+            sp = sh.get("speed", 1)
+            if sh.get("mode") == "rewind":           # plays backwards from `at`
+                sh["reverse"], sp = True, 1.5
+                sh["speed"] = sp
+                start = max(0.0, start - (t1 - t0) * sp)
+            if src.get("freeze_at") is not None and sh.get("mode") in ("play", "slow"):
+                sh["freeze"] = min(t1 - 2 / P.FPS, max(t0 + 1 / P.FPS, t0 + (float(src["freeze_at"]) - start) / sp))
             sh["src"] = start
-            used[src["key"]] = start + (t1 - t0)
+            used[src["key"]] = start + (t1 - t0) * sp
         out.append(sh)
     return out
 
 
 def public(shots_: list[dict]) -> list[dict]:
     """What the film sees: times, kind and credit of each shot."""
-    return [{"t0": round(s["t0"], 3), "t1": round(s["t1"], 3), "kind": s.get("kind") or "card", "credit": s.get("credit", "")} for s in shots_]
+    out = []
+    for s in shots_:
+        o = {"t0": round(s["t0"], 3), "t1": round(s["t1"], 3), "kind": s.get("kind") or "card", "credit": s.get("credit", "")}
+        for k in ("mode", "speed", "src", "reverse", "freeze", "box"):
+            if s.get(k) is not None:
+                o[k] = round(s[k], 3) if isinstance(s[k], float) else s[k]
+        out.append(o)
+    return out
 
 
 def sources(shots_: list[dict]) -> list[dict]:
@@ -199,4 +225,31 @@ def sources(shots_: list[dict]) -> list[dict]:
         src = s.get("_src") or {}
         if src.get("page") and src["page"] not in seen:
             seen.add(src["page"]); out.append({"title": src.get("title"), "page": src["page"], "licence": src.get("licence"), "credit": src.get("credit")})
+    return out
+
+
+def freeze_stills(plate: str, shots_: list[dict], tmp: str, top: int = 0, height: int = 1920) -> list[dict]:
+    """The picture on screen during each freeze, with a 100 px grid in SCREEN pixels, for the animator to place drawings."""
+    import subprocess
+    from PIL import Image, ImageDraw
+    out = []
+    for n, s in enumerate(shots_):
+        if s.get("freeze") is None:
+            continue
+        t = min(s["t1"] - .05, float(s["freeze"]) + .1)
+        f = os.path.join(tmp, f"freeze{n}.png")
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.3f}", "-i", plate, "-frames:v", "1", f], capture_output=True)
+        if r.returncode != 0 or not os.path.exists(f):
+            continue
+        im = Image.open(f).convert("RGB").crop((0, top, 1080, top + height))
+        d = ImageDraw.Draw(im)
+        for x in range(0, 1081, 100):
+            d.line([(x, 0), (x, height)], fill=(255, 0, 255), width=1)
+            d.text((x + 3, 3), str(x), fill=(255, 255, 0))
+        for y in range(top - top % 100 + 100, top + height, 100):
+            d.line([(0, y - top), (1080, y - top)], fill=(255, 0, 255), width=1)
+            d.text((3, y - top + 3), str(y), fill=(255, 255, 0))
+        im.thumbnail((900, 1600))
+        b = io.BytesIO(); im.save(b, "JPEG", quality=82)
+        out.append({"t0": s["t0"], "t1": s["t1"], "freeze": s["freeze"], "jpeg": base64.b64encode(b.getvalue()).decode()})
     return out

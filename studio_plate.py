@@ -13,6 +13,7 @@ import subprocess
 FPS = 30
 W, H = 1080, 1920
 BAND = 1560
+TELE = (250, 1350)          # telestrator band: y offset, height (4:5 window of the match clip)
 GRADE = "eq=contrast=1.07:saturation=0.92:brightness=-0.01"
 
 
@@ -29,11 +30,13 @@ def _enc(out: str) -> list[str]:
 def _segment(sh: dict, out: str):
     dur = round(sh["t1"] - sh["t0"], 4)
     n = max(1, round(dur * FPS))
-    fh = H if sh.get("fit") == "full" else BAND
+    fit = sh.get("fit")
+    fh = H if fit == "full" else (TELE[1] if fit == "tele" else BAND)
+    y_off = TELE[0] if fit == "tele" else 0
     cover = (f"scale={W}:{fh}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{fh},unsharp=5:5:0.4")
     box = sh.get("box")
     pre = f"crop=iw*{box[2]:.4f}:ih*{box[3]:.4f}:iw*{box[0]:.4f}:ih*{box[1]:.4f}," if box else ""
-    pad = f",pad={W}:{H}:0:0:black" if fh < H else ""
+    pad = f",pad={W}:{H}:0:{y_off}:black" if fh < H else ""
     kind = sh.get("kind")
     if kind == "video" and sh.get("path"):
         speed = max(.1, float(sh.get("speed") or 1))
@@ -44,6 +47,8 @@ def _segment(sh: dict, out: str):
             chain = f"{pre}reverse,setpts=(PTS-STARTPTS)/{speed},fps={FPS},{cover},{GRADE}"
         chain += f",tpad=stop_mode=clone:stop_duration={dur + 1:.2f},trim=end_frame={round(play * FPS)}" if sh.get("freeze") is not None else ""
         chain += f",tpad=stop_mode=clone:stop_duration={dur + 1:.2f},trim=end_frame={n},setpts=PTS-STARTPTS"
+        if sh.get("freeze") is not None and sh.get("desat", fit == "tele"):   # the analysis look while frozen
+            chain += f",eq=saturation=0.58:contrast=1.03:enable='gte(t,{max(0.0, float(sh['freeze']) - sh['t0']):.3f})'"
         if sh.get("punch") is not None:
             p0 = max(0, round((float(sh["punch"]) - sh["t0"]) * FPS))
             chain += (f",zoompan=z='if(lt(on,{p0}),1,min(1.25,1+(on-{p0})*0.25/9))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"

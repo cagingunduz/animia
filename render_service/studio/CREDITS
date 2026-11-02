@@ -28,3 +28,15 @@ teardown
   RoundedBoxGeometry from three/examples.
   Fonts: Inter (The Inter Project Authors), JetBrains Mono (JetBrains), SIL Open Font License 1.1
   (fonts/OFL-inter.txt, fonts/OFL-jetbrains-mono.txt).
+
+caption-news
+  A Canvas2D graphics kit written for the Studio after lemo-opuscar's Caption News style (MIT).
+  Footage: the user's uploads, or openly licensed archive files (Wikimedia Commons CC0 / public domain / CC BY,
+  NASA) credited on screen per shot and listed in the job's sources.
+  Font: Inter (The Inter Project Authors), SIL Open Font License 1.1 (fonts/OFL-inter.txt).
+
+telestrator
+  A Canvas2D graphics kit written for the Studio after lemo-opuscar's Sports Telestrator style (MIT).
+  Footage: the user's own match clip only.
+  Fonts: Barlow Condensed (Jeremy Tribby), IBM Plex Mono (IBM), SIL Open Font License 1.1
+  (fonts/OFL-barlow-condensed.txt, fonts/OFL-ibm-plex-mono.txt).
