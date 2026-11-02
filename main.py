@@ -20,6 +20,7 @@ from fruit_drama_pipeline import run_fruit_drama_pipeline, regenerate_fruit_dram
 from motion_pipeline import run_motion_pipeline, submit_gate
 from yard_pipeline import run_yard_pipeline
 import explainer_pipeline
+import block_pipeline
 from survival_pipeline import run_survival_pipeline
 
 app = FastAPI(title="Animave API v3")
@@ -706,6 +707,58 @@ async def survival_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "title", "script", "rules", "choice", "post", "duration",
             "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+class BlockScriptRequest(BaseModel):
+    story: str = Field(..., min_length=5, max_length=800)
+    length: Optional[int] = Field(45, ge=35, le=55)
+
+
+@app.post("/block/pitches")
+async def block_pitches():
+    """Block Horror: three story pitches (a rule everyone obeys + the twist)."""
+    try:
+        return {"pitches": await block_pipeline.pitches()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+
+@app.post("/block/script")
+async def block_script(req: BlockScriptRequest):
+    """Block Horror: the narration, shown to the user for editing before anything is recorded."""
+    try:
+        return await block_pipeline.write_script(req.story, req.length or 45)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+
+class GenerateBlockRequest(BaseModel):
+    script: dict
+
+
+@app.post("/generate-block")
+async def generate_block(req: GenerateBlockRequest):
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Block Horror is not available yet (render service not connected).")
+    if len(block_pipeline.clean_script(req.script)["lines"]) < 10:
+        raise HTTPException(status_code=400, detail="the script needs at least 10 lines")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "block", "status": "queued", "stage": "queued", "step": 0, "total_steps": 7, "message": "Queued",
+        "title": (req.script.get("title") or "")[:120], "duration": None, "final_video_url": None, "thumbnail_url": None,
+        "error": None, "traceback": None, "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(block_pipeline.run_block_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/block/{job_id}")
+async def block_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "block":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "title", "duration", "final_video_url", "thumbnail_url", "usage", "review", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 

@@ -156,6 +156,8 @@ async function writeProject(body) {
   if (String(files['index.html']).includes('yard/')) await cp(path.join(HERE, 'yard'), path.join(dir, 'yard'), { recursive: true });
   // Explainer compositions load the explainer kit, presenter rig and fonts from explainer/.
   if (String(files['index.html']).includes('explainer/')) await cp(path.join(HERE, 'explainer'), path.join(dir, 'explainer'), { recursive: true });
+  // Block Horror compositions load three.js, the block kit and the caption font from block/.
+  if (String(files['index.html']).includes('block/blockkit.js')) await cp(path.join(HERE, 'block'), path.join(dir, 'block'), { recursive: true });
   // Survival Story compositions (three.js + cannon-es + the stage, one bundled script, and their fonts) load from survival/.
   if (String(files['index.html']).includes('survival/stage.three.js')) {
     await mkdir(path.join(dir, 'survival', 'fonts'), { recursive: true });

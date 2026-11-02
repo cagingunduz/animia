@@ -308,9 +308,9 @@ def _static_problems(code: str) -> list[str]:
     return [why for pat, why in _FORBIDDEN if re.search(pat, code)]
 
 
-async def _load(code: str, timing: dict, captions: list) -> tuple[list[str], list[dict]]:
+async def _load(code: str, timing: dict, captions: list, compose_fn=None) -> tuple[list[str], list[dict]]:
     """Load the page once (no render): (errors, sound cues)."""
-    html = compose(code, timing, captions, 360, 640, probe=True)
+    html = (compose_fn or compose)(code, timing, captions, 360, 640, probe=True)
     r = await _render_call("/cues", {"files": {"index.html": html}}, timeout=180)
     if r.status_code != 200:
         return [f"page failed to load: {r.text[:600]}"], []
@@ -376,7 +376,7 @@ async def _review(job_id: str, script: dict, timing: dict, captions: list, code:
 
 # ─────────────────────────── 5. render ───────────────────────────
 
-async def _render(job_id: str, code: str, timing: dict, captions: list, tmp: str) -> str:
+async def _render(job_id: str, code: str, timing: dict, captions: list, tmp: str, compose_fn=None, ass_fn=None) -> str:
     """Draw the video in parallel chunks on the render service, join them and upscale to 1080x1920."""
     total = int(round(timing["end"] * FPS))
     per = math.ceil(total / CHUNKS / FPS) * FPS       # whole seconds per chunk, so the joins land on frames
@@ -384,7 +384,7 @@ async def _render(job_id: str, code: str, timing: dict, captions: list, tmp: str
     done = {"n": 0}
 
     async def one(k: int, f0: int, nf: int) -> str:
-        html = compose(code, timing, [], DRAW_W, DRAW_H, start=f0 / FPS, duration=nf / FPS)
+        html = (compose_fn or compose)(code, timing, [], DRAW_W, DRAW_H, start=f0 / FPS, duration=nf / FPS)
         for attempt in range(2):
             r = await _render_call("/render", {"files": {"index.html": html}, "quality": "standard", "fps": FPS,
                                                "timeout_ms": CHUNK_TIMEOUT_MS}, timeout=CHUNK_TIMEOUT_MS / 1000 * 2.2)
@@ -412,15 +412,15 @@ async def _render(job_id: str, code: str, timing: dict, captions: list, tmp: str
             paths = await asyncio.gather(*[one(k, f0, nf) for k, (f0, nf) in enumerate(spans)])
     finally:
         _render_line.remove(job_id)
-    return _join(paths, captions, tmp)
+    return _join(paths, captions, tmp, ass_fn)
 
 
-def _join(paths: list[str], captions: list, tmp: str) -> str:
+def _join(paths: list[str], captions: list, tmp: str, ass_fn=None) -> str:
     """Chunks -> one 1080x1920 video with the captions burned in at full size."""
     lst = os.path.join(tmp, "chunks.txt")
     open(lst, "w").write("".join(f"file '{p}'\n" for p in paths))
     ass = os.path.join(tmp, "captions.ass")
-    _captions_ass(captions, ass)
+    (ass_fn or _captions_ass)(captions, ass)
     out = os.path.join(tmp, "video.mp4")
     base = f"scale={OUT_W}:{OUT_H}:flags=lanczos"
     for vf in (f"{base},subtitles=filename={ass}:fontsdir={FONT_DIR},format=yuv420p", f"{base},format=yuv420p"):
