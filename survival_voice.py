@@ -19,7 +19,7 @@ from tts import get_word_timestamps
 SR = yard_voice.SR                      # 24 kHz (Kokoro)
 NARRATOR = os.environ.get("SURVIVAL_VOICE", "am_michael")
 VOICES = {"am_michael", "bm_george", "af_bella", "bf_emma", "am_puck", "am_fenrir", "af_heart", "bm_lewis", "af_sarah",
-          "am_onyx", "am_eric", "af_sky", "am_adam", "bm_fable"}
+          "am_onyx", "am_eric", "af_sky", "am_adam", "bm_fable", "am_santa"}
 LEAD = 0.15
 
 

@@ -107,7 +107,7 @@ A menu: use the ones your story needs.
 ## 10. Our reels: vertical 9:16, a recurring cast, made in code
 
 - **The cast is fixed** (the kit draws them; never invent a different lead): **VASK**, a jaded genius in a teal bathrobe,
-  pyjamas and goggles (deadpan, low voice); **GARY**, his nervous sidekick in a red helmet, big glasses and a vest (fast,
+  pyjamas and goggles (deadpan, an old man's voice); **GARY**, his nervous sidekick in a red helmet, big glasses and a vest (fast,
   higher voice); **DECAF**, a small talking coffee cup with eyes (optional, one or two short lines, pitched up). The
   absurd creatures and worlds are new each film, drawn with the kit's shapes.
 - **The frame is 1080 x 1920.** World coordinates are the original stage (ground at y = 900, characters about 600
