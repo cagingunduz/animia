@@ -18,7 +18,8 @@ from tts import get_word_timestamps
 
 SR = yard_voice.SR                      # 24 kHz (Kokoro)
 NARRATOR = os.environ.get("SURVIVAL_VOICE", "am_michael")
-VOICES = {"am_michael", "bm_george", "af_bella", "bf_emma", "am_puck", "am_fenrir", "af_heart", "bm_lewis", "af_sarah"}
+VOICES = {"am_michael", "bm_george", "af_bella", "bf_emma", "am_puck", "am_fenrir", "af_heart", "bm_lewis", "af_sarah",
+          "am_onyx", "am_eric", "af_sky", "am_adam", "bm_fable"}
 LEAD = 0.15
 
 
@@ -126,6 +127,6 @@ async def narrate(lines: list[dict], wav_path: str, speed: float = 1.1) -> dict:
         spoken_words = (ln.get("say") or ln["text"]).split()
         spoken = _spoken_times(spoken_words, heard, a, b)
         words = _caption_words(ln["text"], ln.get("say"), spoken)
-        extra = {k: v for k, v in ln.items() if k in ("key", "voice", "nocap")}
+        extra = {k: v for k, v in ln.items() if k in ("key", "voice", "nocap", "who")}
         out.append({"i": sp["i"], "text": ln["text"].strip(), "start": a, "end": b, "words": words, **extra})
     return {"voice_end": round(spans[-1]["end"], 3), "lines": out, "seconds": round(len(audio) / SR, 2)}

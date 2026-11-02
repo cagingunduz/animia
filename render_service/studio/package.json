@@ -3,9 +3,15 @@
   "private": true,
   "type": "module",
   "description": "Builds the Style Studio kits (render_service/studio/kits/*.js) from src/ with esbuild.",
-  "scripts": { "build": "node build.mjs" },
+  "scripts": {
+    "build": "node build.mjs"
+  },
   "devDependencies": {
     "@fontsource/architects-daughter": "5.2.5",
+    "@fontsource/baloo-2": "^5.2.5",
+    "@fontsource/bungee": "^5.2.5",
+    "@fontsource/titan-one": "^5.2.5",
+    "@fontsource/vt323": "^5.2.5",
     "esbuild": "0.25.10"
   }
 }

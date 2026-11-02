@@ -9,6 +9,8 @@ import json
 import re
 import subprocess
 
+import math
+
 import numpy as np
 
 SR = 48000
@@ -101,8 +103,12 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
         x = np.asarray(x)[:N - s] * g
         out[s:s + len(x), 0] += x * np.sqrt(.5 * (1 - pan)); out[s:s + len(x), 1] += x * np.sqrt(.5 * (1 + pan))
 
+    num = lambda v, d: float(v) if isinstance(v, (int, float)) and math.isfinite(v) else d
     for e in events[:4000]:
-        ty, t = e.get("type"), float(e.get("t", 0)); pan = float(e.get("pan", 0)); z = float(e.get("z", 1))
+        if not isinstance(e, dict) or num(e.get("t"), None) is None:
+            continue
+        e = {k: v for k, v in e.items() if v is not None}
+        ty, t = e.get("type"), num(e.get("t"), 0); pan = num(e.get("pan"), 0); z = num(e.get("z"), 1)
         off = 10 ** (-9 / 20) if e.get("on", 1) == 0 else 1.0
         if ty in ("stroke", "write", "dash"):
             put(S.marker(float(e.get("dur", .1)), float(e.get("len", 50)), ty, e.get("pen"), z), t, off * (.8 if ty == "write" else 1.0), pan)
