@@ -1,5 +1,12 @@
 THE KIT: window.WB (passed to your film as K). The lemo-opuscar whiteboard engine, deterministic in t.
 
+THE SCREEN IS TALL AND NARROW (1080 x 1920), NOT 1920 x 1080. At zoom z the camera shows 1080 / z board units across
+and 1920 / z down, centred on the camera key's (x, y). So at zoom 1 everything the viewer must see in a shot fits in
+x = camX ± 450 and y = camY - 800 .. camY + 650 (the bottom 300 px are the subtitles). Lay the board out as a tall
+column: one region under the other (about 900 wide, 800-1200 tall each), all centred on the same x (e.g. 1500), and
+point each camera key at the centre of the region being drawn. Never place two things side by side wider than 900
+units at zoom 1; for a wider drawing, zoom out (z = 900 / its width). Text caps: 120-170 for a title, 50-90 for labels.
+
 SHAPES (world units; they return Stroke or Stroke[]; options: w (width, 6-11 for drawing), color, jitter, over
 (corner overshoot), bow, lap (circle overlap past closure), alpha):
 - K.line(x0, y0, x1, y1, o), K.poly([[x, y], ...], o), K.curve([[x, y], ...], o) (smoothed), K.arc(cx, cy, r, a0, a1, o),
@@ -48,11 +55,11 @@ function film(K, T, c) {
   tl.draw(B, K.text('sky blue?', 1500, 1100, { h: 160, align: 'center' }), T.w(0, 'sky'), { by: T.lines[0].end + 0.2 });
   tl.draw(O, K.circle(1500, 1010, 470, { w: 10, lap: .3 }), T.lines[0].end + 0.2, { by: T.lines[0].end + 1.0 });
   // region 2 (below): the sun and its colours, the camera travels down to it
-  const sun = [K.circle(1200, 2350, 150, { w: 11 })];
-  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; sun.push(K.line(1200 + Math.cos(a) * 200, 2350 + Math.sin(a) * 200, 1200 + Math.cos(a) * 270, 2350 + Math.sin(a) * 270, { w: 9 })); }
+  const sun = [K.circle(1250, 2350, 130, { w: 11 })];
+  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; sun.push(K.line(1250 + Math.cos(a) * 170, 2350 + Math.sin(a) * 170, 1250 + Math.cos(a) * 230, 2350 + Math.sin(a) * 230, { w: 9 })); }
   tl.draw(B, sun, T.w(1, 'sunlight'), { by: T.w(1, 'sunlight') + 1.1 });
   ['#c8413a', '#d97757', '#e0b23a', '#2e7a4d', '#2a5cb3'].forEach((col, i) =>
-    tl.draw(U, K.arrow(1420, 2300 + i * 30, 1900, 2150 + i * 90, { w: 8, color: col }), T.w(1, 'colours') + i * 0.16, { by: T.w(1, 'colours') + i * 0.16 + 0.3 }));
+    tl.draw(U, K.arrow(1500, 2300 + i * 30, 1900, 2150 + i * 90, { w: 8, color: col }), T.w(1, 'colours') + i * 0.16, { by: T.w(1, 'colours') + i * 0.16 + 0.3 }));
   tl.draw(B, K.text('all colours', 1500, 2750, { h: 80, align: 'center' }), T.w(1, 'all'), { by: T.lines[1].end });
   tl.end();
   const board = new K.Board(tl, { W: BW, H: BH, ghosts: K.ghosts(BW, BH, 36) });
