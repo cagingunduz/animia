@@ -2,7 +2,7 @@ import os
 import uuid
 import asyncio
 import tempfile
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
@@ -723,6 +723,9 @@ async def generate_studio(req: GenerateStudioRequest):
     CPU render on the render service, foley made in code)."""
     if req.style not in studio_styles.STYLES:
         raise HTTPException(status_code=400, detail=f"unknown style {req.style!r}")
+    from storybook_pipeline import R2_PUBLIC_BASE
+    if any(not str(u).startswith(f"{R2_PUBLIC_BASE}/studio-uploads/") for u in (req.uploads or [])):
+        raise HTTPException(status_code=400, detail="Uploads must come from /studio/upload.")
     if studio_styles.STYLES[req.style].get("requires_upload") and not req.uploads:
         raise HTTPException(status_code=400, detail="This style needs your own clip: upload it first (POST /studio/upload).")
     if not os.environ.get("RENDER_SERVICE_URL"):
@@ -742,9 +745,26 @@ STUDIO_UPLOAD_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov", "video/webm
                        "image/webp": "webp"}
 
 
+def _upload_token_ok(token: str) -> bool:
+    """`<expires unix>.<user id>.<hex hmac-sha256(secret, expires.user)>`, issued by the site's /api/studio/upload-token."""
+    import hashlib, hmac, time
+    secret = os.environ.get("STUDIO_UPLOAD_SECRET", "")
+    try:
+        exp, uid, sig = token.split(".", 2)
+        good = hmac.new(secret.encode(), f"{exp}.{uid}".encode(), hashlib.sha256).hexdigest()
+        return bool(secret) and hmac.compare_digest(good, sig) and int(exp) > time.time()
+    except Exception:
+        return False
+
+
 @app.post("/studio/upload")
-async def studio_upload(file: UploadFile = File(...)):
-    """Style Studio footage styles: the user's own clip or photo -> R2 -> a URL for /generate-studio's uploads."""
+async def studio_upload(file: UploadFile = File(...), x_upload_token: str = Header("")):
+    """Style Studio footage styles: the user's own clip or photo -> R2 -> a URL for /generate-studio's uploads.
+    The browser uploads here directly (big files), with a short-lived token from the site."""
+    if not os.environ.get("STUDIO_UPLOAD_SECRET"):
+        raise HTTPException(status_code=503, detail="Uploads are not configured (STUDIO_UPLOAD_SECRET).")
+    if not _upload_token_ok(x_upload_token):
+        raise HTTPException(status_code=401, detail="Upload token missing or expired. Refresh the page and try again.")
     ext = STUDIO_UPLOAD_TYPES.get((file.content_type or "").split(";")[0].lower())
     if not ext:
         raise HTTPException(status_code=400, detail="Only MP4 / MOV / WebM videos and JPG / PNG / WebP photos")
