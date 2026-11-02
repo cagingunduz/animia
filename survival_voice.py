@@ -52,6 +52,8 @@ async def speak(lines: list[dict], speed: float, progress=None) -> tuple[np.ndar
         text = (ln.get("say") or ln["text"]).strip()
         a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=float(ln.get("speed") or speed), lang="en-us")
         a = _trim(np.asarray(a, dtype=np.float32))
+        if ln.get("gain"):                                  # a mood's loudness (whisper softer, angry louder)
+            a = np.clip(a * float(ln["gain"]), -1, 1).astype(np.float32)
         spans.append({"i": i, "start": round(t, 3), "end": round(t + len(a) / SR, 3)})
         out.append(a); t += len(a) / SR
         gap = np.zeros(int(max(0.0, min(1.2, float(ln.get("pause", 0.25)))) * SR), dtype=np.float32)
@@ -134,6 +136,6 @@ async def narrate(lines: list[dict], wav_path: str, speed: float = 1.1, progress
         spoken_words = (ln.get("say") or ln["text"]).split()
         spoken = _spoken_times(spoken_words, heard, a, b)
         words = _caption_words(ln["text"], ln.get("say"), spoken)
-        extra = {k: v for k, v in ln.items() if k in ("key", "voice", "nocap", "who", "caption")}
+        extra = {k: v for k, v in ln.items() if k in ("key", "voice", "nocap", "who", "caption", "mood")}
         out.append({"i": sp["i"], "text": ln["text"].strip(), "start": a, "end": b, "words": words, **extra})
     return {"voice_end": round(spans[-1]["end"], 3), "lines": out, "seconds": round(len(audio) / SR, 2)}

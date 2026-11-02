@@ -36,6 +36,9 @@ THE CAST (only these three speak; T.lines[i].who is 'VASK', 'GARY' or 'DECAF')
   Heights: Vask ≈ 600 units (head centre ≈ y 420 at y = 900), Gary ≈ 400 (head ≈ y 600).
 - K.coffeeCup(x, y, s, K.C(T, t, { happy, arms, look, rise, eyes })): DECAF, the talking coffee cup (y = cup bottom;
   s .5 in a hand, 1 on a table). K.C adds his lip sync and blinks. rise 0 = plain cup, 1 = the creature risen.
+- T.lines[i].mood = how the line is performed (deadpan, excited, panic, whisper, confused, sad, angry, warm): match
+  the face: panic -> Gary nerv 1.5, eyeS 1.3, pupil 2.2, sweat, mouthS 1.4; excited -> arms up, brow raised; confused
+  -> look sideways, brow 1.2; deadpan -> Vask lid .55, no movement; angry -> brow -.4 (Vask), a shake on the word.
 - K.talk(T, who, t) -> { o, w, talking }; K.speaker(T, t) -> who is speaking now ('' between lines). Use it for
   reactions: the listener looks at the speaker.
 - Motion: K.walk(tq, t0, t1, xa, xb) eased x; K.landSq(t, tLand) landing squash factor (multiply sq);
