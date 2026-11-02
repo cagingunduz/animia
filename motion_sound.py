@@ -67,6 +67,9 @@ SFX_LIBRARY = {
     "catangry": ("an angry cat hissing and growling, close", 1.6, -10, 600),
     "glass": ("a window pane cracking and breaking, short", 1.8, -8, 600),
     "swell": ("a dark cinematic riser swelling up, tense, no melody", 5.0, -12, 2000),
+    # Style Studio music beds (one per style, generated once, looped under the voice)
+    "studio_bed_whiteboard": ("light curious clockwork minimal music, marimba, pizzicato strings, glockenspiel and soft woodblock, "
+                              "steady 110 bpm, warm and playful, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain

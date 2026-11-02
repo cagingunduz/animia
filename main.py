@@ -21,6 +21,8 @@ from motion_pipeline import run_motion_pipeline, submit_gate
 from yard_pipeline import run_yard_pipeline
 import explainer_pipeline
 from survival_pipeline import run_survival_pipeline
+from studio_pipeline import run_studio_pipeline
+import studio_styles
 
 app = FastAPI(title="Animave API v3")
 
@@ -704,6 +706,42 @@ async def survival_status(job_id: str):
     if not job or job.get("kind") != "survival":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "title", "script", "rules", "choice", "post", "duration",
+            "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+class GenerateStudioRequest(BaseModel):
+    style: str = Field(..., max_length=40)
+    topic: Optional[str] = Field(None, max_length=500)
+    seconds: Optional[int] = Field(None, ge=15, le=120)
+    uploads: Optional[List[str]] = Field(None, max_length=12)     # URLs of the user's footage / photos (footage styles)
+
+
+@app.post("/generate-studio")
+async def generate_studio(req: GenerateStudioRequest):
+    """Style Studio: reels in styles from lemo-opuscar (Claude script + animation code on the style's kit, Kokoro voice,
+    CPU render on the render service, foley made in code)."""
+    if req.style not in studio_styles.STYLES:
+        raise HTTPException(status_code=400, detail=f"unknown style {req.style!r}")
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Style Studio is not available yet (render service not connected).")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "studio", "style": req.style, "status": "queued", "stage": "queued", "step": 0, "total_steps": 7,
+        "message": "Queued", "title": None, "script": None, "duration": None,
+        "final_video_url": None, "thumbnail_url": None, "error": None, "traceback": None,
+        "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+    }
+    asyncio.create_task(run_studio_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/studio/{job_id}")
+async def studio_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "studio":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["style", "status", "stage", "step", "total_steps", "message", "title", "script", "post", "duration",
             "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 

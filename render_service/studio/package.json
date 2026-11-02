@@ -1,0 +1,11 @@
+{
+  "name": "animave-style-studio",
+  "private": true,
+  "type": "module",
+  "description": "Builds the Style Studio kits (render_service/studio/kits/*.js) from src/ with esbuild.",
+  "scripts": { "build": "node build.mjs" },
+  "devDependencies": {
+    "@fontsource/architects-daughter": "5.2.5",
+    "esbuild": "0.25.10"
+  }
+}

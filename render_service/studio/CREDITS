@@ -1,0 +1,12 @@
+Animave Style Studio: third-party code and fonts
+
+Engines (render_service/studio/src/*)
+  Adapted from github.com/lemomo-ai/lemo-opuscar by LemoLab, MIT License (LICENSE_lemo-opuscar).
+  The styles' look and rules follow its styles/<style>/STYLE.md (MIT).
+
+whiteboard
+  EMS Tech single-line font (src/whiteboard/EMSTech.json): SIL Open Font License 1.1. Single-line font by
+  Sheldon B. Michaels, derived from "Architects Daughter" by Kimberly Geswein; SVG conversion by Windell H. Oskay
+  (Evil Mad Scientist), via the npm package "hersheytext" (MIT); JSON conversion by LemoLab (lemo-opuscar).
+  Architects Daughter (fonts/ArchitectsDaughter-400.woff2): Kimberly Geswein, SIL Open Font License 1.1
+  (fonts/OFL-ArchitectsDaughter.txt), from @fontsource/architects-daughter.
