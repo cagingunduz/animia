@@ -72,7 +72,7 @@ THE STYLE (follow all of it):
 {st['style_md']}"""
 
 
-FIX_NOTE = """The film failed to load or threw while seeking. Fix the cause with the smallest edits to your film() function.
+FIX_NOTE = """The film failed to load, threw while seeking, or has the layout problems listed. Fix the cause with the smallest edits to your film() function.
 Each edit replaces one exact snippet ('find', copied verbatim from the code, unique) with 'replace'."""
 
 

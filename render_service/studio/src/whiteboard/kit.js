@@ -75,7 +75,7 @@ export function renderer(board, cam, o = {}) {
 
 // the timeline's events with the stroke's screen pan and the camera zoom, for the sound designer (marker foley)
 export function soundCues(tl, cam) {
-  const out = [];
+  const out = [{ t: 0, type: 'layout', overlaps: layoutReport(tl) }];   // not a sound: the Studio's layout check reads it
   for (const e of tl.ev) {
     const c = { ...e };
     if (e.x != null) {
@@ -86,6 +86,27 @@ export function soundCues(tl, cam) {
     out.push(c);
   }
   return out;
+}
+
+// layout check for the Studio: draw jobs whose boxes collide (text on text, text half over a drawing), not separated
+// by an eraser. A box fully around text (a circle, a frame) and text fully inside a drawing (a label in a box) are fine.
+export function layoutReport(tl) {
+  const J = tl.jobs || [], out = [];
+  const area = b => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+  const inter = (a, b) => area([Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])]);
+  const shrink = (b, k) => { const w = (b[2] - b[0]) * k, h = (b[3] - b[1]) * k; return [b[0] + w, b[1] + h, b[2] - w, b[3] - h]; };
+  for (let i = 0; i < J.length; i++) for (let j = i + 1; j < J.length; j++) {
+    const a = J[i], b = J[j];
+    if (!a.text && !b.text) continue;
+    if (a.epoch !== b.epoch) continue;                                  // an eraser came between them
+    const A = shrink(a.box, .06), B = shrink(b.box, .06), I = inter(A, B); if (I <= 0) continue;
+    const fa = I / Math.max(1, area(A)), fb = I / Math.max(1, area(B));
+    if (a.text && b.text) { if (Math.max(fa, fb) > .12) out.push([a, b]); continue; }
+    const T = a.text ? a : b, D = a.text ? b : a, ft = a.text ? fa : fb;
+    if (ft > .2 && ft < .85) out.push([T, D]);                          // text half over a drawing
+  }
+  return out.slice(0, 20).map(([a, b]) => ({ a: { label: String(a.label).slice(0, 40), t: +a.t0.toFixed(2), box: a.box.map(Math.round) },
+    b: { label: String(b.label).slice(0, 40), t: +b.t0.toFixed(2), box: b.box.map(Math.round) } }));
 }
 
 // ghost marks: the faint residue of old lessons (a seeded scatter over the board)
