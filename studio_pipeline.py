@@ -334,8 +334,13 @@ async def run_studio_pipeline(job_id: str, p: dict):
 
         _stage(job_id, "voice", 2, "Recording the narrator")
         voice_wav = os.path.join(tmp, "voice.wav")
+        def said(stage, i, n):
+            _job(job_id)["message"] = {"model": "Loading the voice model (first reel after a restart)",
+                                       "line": f"Recording the narrator ({i}/{n})", "align": "Lining up the words"}[stage]
+        if _voice_sem.locked():
+            _job(job_id)["message"] = "Waiting for the narrator (another reel is recording)"
         async with _voice_sem:
-            timing = await survival_voice.narrate(s["lines"], voice_wav, speed=st.get("speed", 1.05))
+            timing = await survival_voice.narrate(s["lines"], voice_wav, speed=st.get("speed", 1.05), progress=said)
         timing["end"] = round(timing["voice_end"] + st.get("tail", TAIL), 3)
         if st.get("cast"):
             timing["lips"] = await asyncio.to_thread(_lips, voice_wav, timing)
