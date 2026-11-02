@@ -40,3 +40,9 @@ telestrator
   Footage: the user's own match clip only.
   Fonts: Barlow Condensed (Jeremy Tribby), IBM Plex Mono (IBM), SIL Open Font License 1.1
   (fonts/OFL-barlow-condensed.txt, fonts/OFL-ibm-plex-mono.txt).
+
+premium
+  A Canvas2D kit written for the Studio after the "Premium faceless Reels with Claude" workflow guide by @aygramm.ai
+  (look and rules only; no code or assets from it).
+  Fonts: Inter (The Inter Project Authors), Playfair Display (Claus Eggers Sørensen), SIL Open Font License 1.1
+  (fonts/OFL-inter.txt, fonts/OFL-playfair-display.txt).
