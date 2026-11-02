@@ -34,7 +34,7 @@ COPY survival/stage.three.js survival/LICENSE_story-video-studio survival/THREE_
 COPY survival/fonts ./survival/fonts
 COPY studio/kits ./studio/kits
 COPY studio/fonts ./studio/fonts
-COPY studio/LICENSE_lemo-opuscar studio/CREDITS ./studio/
+COPY studio/LICENSE_lemo-opuscar studio/THREE_LICENSE studio/CREDITS ./studio/
 
 # Run as an unprivileged user.
 RUN useradd -m -u 10001 render && mkdir -p /tmp/hf-home && chown -R render /tmp/hf-home

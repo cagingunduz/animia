@@ -74,6 +74,8 @@ SFX_LIBRARY = {
                         "brushed drums, playful and deadpan, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
     "studio_bed_lantern": ("gentle east asian folk storytelling music, guzheng, soft bamboo flute and low drum, warm candlelit "
                            "mood, slow 70 bpm, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_teardown": ("precise minimal product film music, tuned marimba and vibraphone pulses, glass mallets, round "
+                            "bass, small dry percussion, 112 bpm, clean and modern, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain

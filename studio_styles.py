@@ -57,6 +57,19 @@ STYLES: dict[str, dict] = {
         "foley": "paper",
         "inputs": [],
     },
+    "teardown": {
+        "name": "Exploded Teardown",
+        "kit_file": "teardown.three.js", "kit_global": "TD",
+        "fonts": [{"family": "Inter", "file": "Inter-500.woff2", "weight": 500},
+                  {"family": "Inter", "file": "Inter-700.woff2", "weight": 700},
+                  {"family": "JetBrainsMono", "file": "JetBrainsMono-500.woff2", "weight": 500}],
+        "background": "#0d0e10",
+        "voice": "am_michael", "speed": 1.0,
+        "seconds": (35, 75),
+        "bed": "studio_bed_teardown", "bed_db": -16.0,
+        "foley": "teardown",
+        "inputs": [],
+    },
 }
 
 

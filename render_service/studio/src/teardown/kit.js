@@ -16,9 +16,9 @@ export let ACCENT = '#ff6b3d';
 // one per film: a WebGL renderer drawing into its own canvas, copied onto the page's 2D canvas each frame
 export function studio(o = {}) {
   ACCENT = o.accent || ACCENT;
-  const canvas = document.createElement('canvas'); canvas.width = SW; canvas.height = SH;
+  const rs = o.scale ?? .75, canvas = document.createElement('canvas'); canvas.width = Math.round(SW * rs); canvas.height = Math.round(SH * rs);   // the 3D picture at 75 % (CPU), upscaled; type stays sharp on the 2D canvas
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(1); renderer.setSize(SW, SH, false);
+  renderer.setPixelRatio(1); renderer.setSize(canvas.width, canvas.height, false);
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = o.exposure ?? 1.0;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -47,7 +47,7 @@ export function studio(o = {}) {
       const g = ctx.createRadialGradient(SW / 2, SH * .42, 0, SW / 2, SH * .5, Math.hypot(SW, SH) * .62);
       g.addColorStop(0, bg[0]); g.addColorStop(1, bg[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, SW, SH);
       // keep the key light's shadow box on what the camera looks at
-      renderer.render(scene, cam); ctx.drawImage(canvas, 0, 0, SW, SH);
+      renderer.render(scene, cam); ctx.imageSmoothingQuality = 'high'; ctx.drawImage(canvas, 0, 0, SW, SH);
       const v = ctx.createRadialGradient(SW / 2, SH / 2, Math.min(SW, SH) * .45, SW / 2, SH / 2, Math.hypot(SW, SH) * .58);
       v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.45)'); ctx.fillStyle = v; ctx.fillRect(0, 0, SW, SH);
       ctx.restore();
@@ -128,7 +128,7 @@ export function board(w, d, { t = 1.6, seed = 1, color = '#1f5b3a', chips = [], 
   }
   for (let i = 0; i < 6; i++) { x.fillStyle = cu; x.beginPath(); x.arc((R() * .9 + .05) * W, (R() * .9 + .05) * H, 1.4 * k, 0, TAU); x.fill(); x.fillStyle = '#111'; x.beginPath(); x.arc(0, 0, 0, 0, 0); x.fill(); }
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-  const top = new THREE.MeshPhysicalMaterial({ map: tex, roughness: .45, metalness: .1, clearcoat: .6, clearcoatRoughness: .3 });
+  const top = new THREE.MeshPhysicalMaterial({ map: tex, roughness: .6, metalness: .05, clearcoat: .25, clearcoatRoughness: .5 });
   const edge = new THREE.MeshStandardMaterial({ color: '#c9b98a', roughness: .7 });
   const b = mesh(new THREE.BoxGeometry(w, t, d), [edge, edge, top, edge, edge, edge]); b.position.y = t / 2;
   const grp = G(b);

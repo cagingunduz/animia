@@ -10,3 +10,21 @@ whiteboard
   (Evil Mad Scientist), via the npm package "hersheytext" (MIT); JSON conversion by LemoLab (lemo-opuscar).
   Architects Daughter (fonts/ArchitectsDaughter-400.woff2): Kimberly Geswein, SIL Open Font License 1.1
   (fonts/OFL-ArchitectsDaughter.txt), from @fontsource/architects-daughter.
+
+scifi-toon
+  Engine (toon.js, chars.js, worlds.js) and the original cast from lemo-opuscar's Sci-Fi Sitcom Toon demo (MIT).
+  Fonts (SIL Open Font License 1.1, from @fontsource): Baloo 2 (Ek Type), Bungee (David Jonathan Ross),
+  VT323 (Peter Hull), Titan One (Rodrigo Fuenzalida). Licence texts: fonts/OFL-baloo-2.txt, OFL-bungee.txt,
+  OFL-vt323.txt, OFL-titan-one.txt.
+
+paper-lantern
+  A Canvas2D lightbox engine written for the Studio after lemo-opuscar's Paper-cut Lightbox style (MIT); paper grain
+  and pulp textures and the peaks / firs motifs follow its demo's paper.js and world.js.
+  Font: Cormorant Garamond (Christian Thalmann), SIL Open Font License 1.1 (fonts/OFL-cormorant-garamond.txt).
+
+teardown
+  A three.js kit written for the Studio after lemo-opuscar's Exploded Teardown style (MIT).
+  three.js r160 (MIT, THREE_LICENSE), bundled into kits/teardown.three.js, including RoomEnvironment and
+  RoundedBoxGeometry from three/examples.
+  Fonts: Inter (The Inter Project Authors), JetBrains Mono (JetBrains), SIL Open Font License 1.1
+  (fonts/OFL-inter.txt, fonts/OFL-jetbrains-mono.txt).

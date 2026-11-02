@@ -152,11 +152,32 @@ class _Synth:
             return self.ring([80, 130], [.12, .06], [.8, .3], .4)
         return None
 
+    # ── teardown: the materials
+    def teardown(self, ty, d=None):
+        t = self.tt
+        if ty == "lift":
+            dd = d or .7; return self.bp(self.rng.standard_normal(int(dd * SR)), 500, 5000) * np.sin(np.pi * t(dd) / dd) ** 2 * .22
+        if ty == "whoosh":
+            return self.whoosh(d or .9, 1.0)
+        if ty == "land":
+            dd = .25; return (self.ring([620, 1340, 2310], [.03, .02, .012], [.5, .3, .15], dd) + self.bp(self.rng.standard_normal(int(dd * SR)), 800, 5000) * np.exp(-t(dd) / .01) * .6) * .6
+        if ty == "clack":
+            dd = .12; return (self.ring([900, 1900], [.018, .01], [.6, .3], dd) + self.bp(self.rng.standard_normal(int(dd * SR)), 1500, 7000) * np.exp(-t(dd) / .006)) * .55
+        if ty == "click":
+            dd = .15; return (self.bp(self.rng.standard_normal(int(dd * SR)), 2500, 8000) * np.exp(-t(dd) / .004) + self.ring([140], [.04], [.8], dd)) * .5
+        if ty == "tick":
+            n = int(.03 * SR); return self.ring([3200], [.006], [.25], .03)[:n]
+        if ty == "hiss":
+            dd = d or .6; return self.bp(self.rng.standard_normal(int(dd * SR)), 4000, 11000) * np.minimum(1, t(dd) / .05) * np.minimum(1, (dd - t(dd)) / .08) * .06
+        if ty == "thud":
+            return self.ring([70, 115], [.14, .06], [.9, .3], .5) * .8
+        return None
+
 
 def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
     """The style's foley as a stereo buffer (N, 2)."""
     N = int(total * SR); out = np.zeros((N, 2))
-    if kind not in ("marker", "toon", "paper") or not events:
+    if kind not in ("marker", "toon", "paper", "teardown") or not events:
         return out
     S = _Synth()
 
@@ -186,8 +207,8 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
             put(S.eraser(float(e.get("dur", .5)), True), t, .8, -.2)
         elif ty == "whoosh" and kind == "marker":
             put(S.whoosh(float(e.get("dur", .5))), t, 1.0, 0)
-        elif kind in ("toon", "paper"):
-            x = (S.toon if kind == "toon" else S.paper)(str(ty), num(e.get("d"), None))
+        elif kind in ("toon", "paper", "teardown"):
+            x = getattr(S, kind)(str(ty), num(e.get("d"), None))
             if x is not None:
                 put(x, t, num(e.get("v"), 1.0), pan)
     return out
