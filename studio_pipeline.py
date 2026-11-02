@@ -141,11 +141,28 @@ def _lips(wav: str, timing: dict) -> list[float]:
     return [round(float(v), 2) for v in out]
 
 
+def _options(st: dict, raw) -> dict:
+    """The user's per-style choices, cleaned: accent (#rrggbb), handle (end card), voice (one of the style's), audience."""
+    raw = raw if isinstance(raw, dict) else {}
+    allowed, out = st.get("options") or [], {}
+    if "accent" in allowed and re.fullmatch(r"#[0-9a-fA-F]{6}", str(raw.get("accent") or "")):
+        out["accent"] = str(raw["accent"])
+    if "handle" in allowed and str(raw.get("handle") or "").strip():
+        out["handle"] = re.sub(r"[^\w@.\- ]", "", str(raw["handle"]).strip())[:40]
+    if "voice" in allowed and raw.get("voice") in (st.get("voices") or []):
+        out["voice"] = raw["voice"]
+    if "audience" in allowed and str(raw.get("audience") or "").strip():
+        out["audience"] = str(raw["audience"]).strip()[:160]
+    return out
+
+
 async def _write(job_id: str, st: dict, p: dict, media: dict | None = None) -> dict:
     lo, hi = st["seconds"]
     secs = max(lo, min(hi, int(p.get("seconds") or (lo + hi) // 2)))
     ask = [f"The topic: {p['topic'].strip()}" if (p.get("topic") or "").strip() else "No topic given: pick the best one for this style yourself."]
     ask.append(f"The length: about {secs} seconds of narration (about {round(secs * 2.4)} words).")
+    if (p.get("_opts") or {}).get("audience"):
+        ask.append(f"The audience: {p['_opts']['audience']}")
     content = "\n".join(ask) + "\n\nWrite it, then submit the script."
     if st.get("media"):
         content = [{"type": "text", "text": "\n".join(ask)}]
@@ -167,7 +184,8 @@ async def _write(job_id: str, st: dict, p: dict, media: dict | None = None) -> d
 
 def _block(s: dict, timing: dict) -> str:
     rows = "\n".join(f'{i:>3}  {l["start"]:6.2f}-{l["end"]:6.2f}  {(l["who"] + ": ") if l.get("who") else ""}{l["text"]}' for i, l in enumerate(timing["lines"]))
-    return (f'TITLE: {s.get("title")}\n\nLINES (i, start-end seconds, text):\n{rows}\n\nT.end = {timing["end"]}\n\n'
+    opts = f'\n\nT.options = {json.dumps(timing["options"])}' if timing.get("options") else ""
+    return (f'TITLE: {s.get("title")}\n\nLINES (i, start-end seconds, text):\n{rows}\n\nT.end = {timing["end"]}{opts}\n\n'
             f'SHOT NOTES FROM THE WRITER:\n{s.get("visual_notes") or "-"}')
 
 
@@ -349,6 +367,10 @@ async def run_studio_pipeline(job_id: str, p: dict):
     tmp = tempfile.mkdtemp(prefix="studio-")
     try:
         st = studio_styles.style(p["style"])
+        opts = _options(st, p.get("options"))
+        p = {**p, "_opts": opts}
+        if opts.get("voice"):
+            st["voice"] = opts["voice"]
         media = None
         if st.get("media"):
             _stage(job_id, "script", 1, "Looking at your footage")
@@ -367,6 +389,8 @@ async def run_studio_pipeline(job_id: str, p: dict):
         async with _voice_sem:
             timing = await survival_voice.narrate(s["lines"], voice_wav, speed=st.get("speed", 1.05), progress=said)
         timing["end"] = round(timing["voice_end"] + st.get("tail", TAIL), 3)
+        if opts:
+            timing["options"] = {k: v for k, v in opts.items() if k in ("accent", "handle")}
         if st.get("cast"):
             timing["lips"] = await asyncio.to_thread(_lips, voice_wav, timing)
         _job(job_id)["duration"] = timing["end"]

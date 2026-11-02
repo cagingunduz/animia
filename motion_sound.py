@@ -95,6 +95,8 @@ SFX_LIBRARY = {
                         "electric bass, sixteenth-note marimba ostinato, vibraphone stabs, driving and clean, loopable, no vocals", 22.0, -20, 99999),
     "studio_bed_tele": ("energetic sports analysis show music, 120 bpm drum kit groove, electric bass, staccato trumpet and "
                         "trombone stabs, timpani accents, glockenspiel, upbeat studio TV feel, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_premium": ("minimal premium tech product music, soft pulsing synth arpeggio, deep clean sub bass, crisp "
+                           "light percussion, airy pads, confident and modern, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain

@@ -730,6 +730,7 @@ class GenerateStudioRequest(BaseModel):
     topic: Optional[str] = Field(None, max_length=500)
     seconds: Optional[int] = Field(None, ge=15, le=120)
     uploads: Optional[List[str]] = Field(None, max_length=12)     # URLs of the user's footage / photos (footage styles)
+    options: Optional[dict] = None                                  # per-style choices (accent, handle, voice, audience)
 
 
 @app.post("/generate-studio")

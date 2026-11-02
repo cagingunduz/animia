@@ -100,6 +100,21 @@ STYLES: dict[str, dict] = {
         "requires_upload": True,
         "inputs": ["uploads"],
     },
+    "premium": {
+        "name": "Premium Faceless Reel",
+        "kit_file": "premium.js", "kit_global": "PR",
+        "fonts": [{"family": "Inter", "file": f"Inter-{w}.woff2", "weight": w} for w in (500, 600, 700)]
+                 + [{"family": "PlayfairDisplay", "file": "PlayfairDisplay-600i.woff2", "weight": 600, "style": "italic"}],
+        "background": "#ffffff",
+        "voice": "am_michael", "speed": 1.05,
+        "voices": ["am_michael", "am_adam", "bm_george", "af_heart", "af_bella", "bf_emma"],
+        "seconds": (20, 45),
+        "tail": 1.6,
+        "bed": "studio_bed_premium", "bed_db": -14.0,
+        "foley": "tech",
+        "options": ["accent", "handle", "voice", "audience"],
+        "inputs": [],
+    },
 }
 
 
