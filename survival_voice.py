@@ -50,7 +50,8 @@ async def speak(lines: list[dict], speed: float, progress=None) -> tuple[np.ndar
             progress("line", i + 1, len(lines))
         voice = ln.get("voice") if ln.get("voice") in VOICES else NARRATOR
         text = (ln.get("say") or ln["text"]).strip()
-        a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=float(ln.get("speed") or speed), lang="en-us")
+        lang = "en-gb" if voice.startswith("b") else "en-us"      # British voices with British pronunciation
+        a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=float(ln.get("speed") or speed), lang=lang)
         a = _trim(np.asarray(a, dtype=np.float32))
         if ln.get("gain"):                                  # a mood's loudness (whisper softer, angry louder)
             a = np.clip(a * float(ln["gain"]), -1, 1).astype(np.float32)

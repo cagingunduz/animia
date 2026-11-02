@@ -24,6 +24,7 @@ import traceback
 import anthropic
 
 import motion_sound
+import studio_collage
 import studio_footage
 import studio_plate
 import studio_sound
@@ -201,9 +202,33 @@ async def _write(job_id: str, st: dict, p: dict, media: dict | None = None) -> d
             content.append({"type": "text", "text": "No uploads: every footage line gets a media.search (archive footage is found for it)."})
         content.append({"type": "text", "text": "Write it, then submit the script."})
     s = await _claude(job_id, writer_system(st), content, 5000, "writer", tool=SCRIPT_TOOL)
+    if st.get("fact_check"):
+        s = await _fact_check(job_id, st, s)
     s["lines"] = _clean_lines(s.get("lines"), st)
     if len(s["lines"]) < 5:
         raise ValueError("the script came back too short")
+    return s
+
+
+async def _fact_check(job_id: str, st: dict, s: dict) -> dict:
+    """True stories (Collage Documentary): every line is checked before anything is recorded; doubtful claims are
+    softened or cut ("could barely hear" rather than "was completely deaf" when sources disagree)."""
+    _job(job_id)["message"] = "Checking the facts"
+    draft = json.dumps({k: s.get(k) for k in ("title", "lines", "visual_notes", "post")}, ensure_ascii=False)
+    ask = (f"THE DRAFT SCRIPT:\n{draft}\n\nFact-check it line by line before it is recorded. For every claim (names, dates, "
+           "numbers, quotes, causes, 'first' / 'only' / 'never'): keep it only if it is well established. If sources disagree, "
+           "say it the careful way; if it is a legend or a misattributed quote, cut it or call it a legend. Keep the length, the "
+           "structure, the moods and the punch; only change what is wrong or doubtful. Then submit the full corrected script, "
+           "with a `fact_notes` line in visual_notes' first line listing what you changed (or 'no changes').")
+    try:
+        fixed = await _claude(job_id, writer_system(st), ask, 5000, "fact_check", tool=SCRIPT_TOOL)
+        if fixed.get("lines") and len(fixed["lines"]) >= 5:
+            _job(job_id)["fact_notes"] = str(fixed.get("visual_notes") or "").split("\n", 1)[0][:400]
+            return fixed
+    except BillingError:
+        raise
+    except Exception as e:
+        print(f"[studio] fact check skipped: {e!r}")
     return s
 
 
@@ -228,8 +253,11 @@ def _static(code: str) -> list[str]:
     return [why for pat, why in _FORBIDDEN if re.search(pat, code)]
 
 
-async def _load(st: dict, code: str, timing: dict) -> tuple[list[str], dict, list]:
-    r = await _render_call("/cues", {"files": {"index.html": compose(st, code, timing, probe=True)}}, timeout=300)
+async def _load(st: dict, code: str, timing: dict, bins: dict | None = None) -> tuple[list[str], dict, list]:
+    payload = {"files": {"index.html": compose(st, code, timing, probe=True)}}
+    if bins:
+        payload["binary_files"] = bins
+    r = await _render_call("/cues", payload, timeout=300)
     if r.status_code != 200:
         return [f"page failed to load: {r.text[:600]}"], {}, []
     d = r.json(); cues = d.get("cues", [])
@@ -262,7 +290,8 @@ def _offscreen(st: dict, foley: list) -> list[str]:
     return out
 
 
-async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | None = None) -> tuple[str, dict, list]:
+async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | None = None, bins: dict | None = None,
+                sheets: list | None = None) -> tuple[str, dict, list]:
     system = film_system(st)
     content = _block(s, timing) + "\n\nWrite film(K, T, c) for this reel."
     if timing.get("shots"):
@@ -273,13 +302,21 @@ async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | Non
             content.append({"type": "text", "text": f"FREEZE {f['freeze']:.2f}-{f['t1']:.2f} s: the frozen picture as it is on screen (grid = SCREEN pixels, x across, y down; draw at these coordinates):"})
             content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": f["jpeg"]}})
         content.append({"type": "text", "text": "Write film(K, T, c) for this reel."})
+    if sheets:
+        rows = "\n".join(f'- T.img.{im["id"]}: {im["kind"]}, {im["w"]}x{im["h"]} px' + (f' — {im["use"]}' if im.get("use") else "")
+                         + (f' (credit on screen: "{im["credit"]}")' if im.get("credit") else "") for im in timing["images"])
+        content = [{"type": "text", "text": _block(s, timing) + f"\n\nTHE PICTURES (T.img[id], already loaded; cut-outs have transparent backgrounds):\n{rows}"}]
+        for k, jpg in enumerate(sheets):
+            content.append({"type": "text", "text": f"Contact sheet {k + 1} (checkerboard = transparent):"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": jpg}})
+        content.append({"type": "text", "text": "Write film(K, T, c) for this reel."})
     text = await _claude(job_id, system, content, 24000, "film", model=FILM_MODEL)
     code = _extract(text)
     for attempt in range(MAX_FIXES + 1):
         problems = _static(code)
         errors, spec, foley = ([], {}, [])
         if not problems:
-            errors, spec, foley = await _load(st, code, timing)
+            errors, spec, foley = await _load(st, code, timing, bins)
             if not errors and attempt < 2:
                 errors = _offscreen(st, foley)
         if not problems and not errors:
@@ -303,13 +340,15 @@ def _small_jpeg(png_b64: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-async def _review(job_id: str, st: dict, s: dict, timing: dict, code: str, plate: str | None = None):
+async def _review(job_id: str, st: dict, s: dict, timing: dict, code: str, plate: str | None = None, bins: dict | None = None):
     lines = timing["lines"]
     picks = sorted({min(len(lines) - 1, round(i * (len(lines) - 1) / 5)) for i in range(6)})
     at = [round((lines[i]["start"] + lines[i]["end"]) / 2, 2) for i in picks]
     payload = {"files": {"index.html": compose(st, code, timing, plate="plate.mp4" if plate else None)}, "at": at}
     if plate:
         payload["binary_files"] = {"plate.mp4": base64.b64encode(open(plate, "rb").read()).decode()}
+    if bins:
+        payload["binary_files"] = {**payload.get("binary_files", {}), **bins}
     r = await _render_call("/snapshot", payload, timeout=900)
     if r.status_code != 200:
         print(f"[studio] review skipped, snapshot failed: {r.text[:300]}")
@@ -326,13 +365,13 @@ async def _review(job_id: str, st: dict, s: dict, timing: dict, code: str, plate
         return code, None
     if _static(new):
         return code, None
-    errors, spec, foley = await _load(st, new, timing)
+    errors, spec, foley = await _load(st, new, timing, bins)
     return (new, (spec, foley)) if not errors else (code, None)
 
 
 # ─────────────────────────── 5. render ───────────────────────────
 
-async def _render(job_id: str, st: dict, code: str, timing: dict, tmp: str, plate: str | None = None) -> str:
+async def _render(job_id: str, st: dict, code: str, timing: dict, tmp: str, plate: str | None = None, bins: dict | None = None) -> str:
     total = int(round(timing["end"] * FPS))
     per = math.ceil(total / CHUNKS / FPS) * FPS
     spans = [(k * per, min(per, total - k * per)) for k in range(CHUNKS) if total - k * per > 0]
@@ -344,6 +383,8 @@ async def _render(job_id: str, st: dict, code: str, timing: dict, tmp: str, plat
         if plate:   # this chunk's frames of the footage plate, starting at the chunk's first frame
             part = await asyncio.to_thread(studio_plate.cut, plate, f0 / FPS, nf / FPS, os.path.join(tmp, f"plate{k}.mp4"))
             payload["binary_files"] = {"plate.mp4": base64.b64encode(open(part, "rb").read()).decode()}
+        if bins:
+            payload["binary_files"] = {**payload.get("binary_files", {}), **bins}
         for attempt in range(2):
             r = await _render_call("/render", payload, timeout=2400)
             if r.status_code == 200 and r.content:
@@ -404,6 +445,18 @@ async def run_studio_pipeline(job_id: str, p: dict):
         s = await _write(job_id, st, p, media)
         _job(job_id).update(title=s.get("title"), script=s["lines"], post=s.get("post"))
 
+        art = None
+        if st.get("art"):              # the pictures are cast and made while the narrator records
+            pics_state = {"n": 0, "of": 0}
+            def pic_progress(n, of):
+                pics_state.update(n=n, of=of)
+                if _job(job_id).get("stage") == "pictures":
+                    _job(job_id)["message"] = f"Making the pictures ({n}/{of})"
+            tool = lambda system, content, mt, role, tl: _claude(job_id, system, content, mt, role, tool=tl)
+            async def look(content):
+                return await _claude(job_id, "You pick pictures. Answer with a number only.", content, 50, "art_pick")
+            art = asyncio.create_task(studio_collage.make(job_id, tool, look, st, s, tmp, progress=pic_progress))
+
         _stage(job_id, "voice", 2, "Recording the narrator")
         voice_wav = os.path.join(tmp, "voice.wav")
         def said(stage, i, n):
@@ -420,6 +473,16 @@ async def run_studio_pipeline(job_id: str, p: dict):
             timing["lips"] = await asyncio.to_thread(_lips, voice_wav, timing)
         _job(job_id)["duration"] = timing["end"]
 
+        bins = sheets = None
+        if art is not None:
+            _stage(job_id, "pictures", 2, f"Making the pictures ({pics_state['n']}/{pics_state['of'] or '…'})")
+            got = await art
+            timing["images"] = studio_collage.public(got["pictures"])
+            bins = studio_collage.binaries(got["pictures"])
+            sheets = await asyncio.to_thread(studio_collage.sheet, got["pictures"])
+            _job(job_id)["sources"] = studio_collage.sources(got["pictures"])
+            _job(job_id)["pictures"] = len(got["pictures"])
+
         plate = proxy = None
         stills = []
         if st.get("media"):
@@ -435,11 +498,11 @@ async def run_studio_pipeline(job_id: str, p: dict):
                 stills = await asyncio.to_thread(studio_footage.freeze_stills, plate, timing["shots"], tmp, studio_plate.TELE[0], studio_plate.TELE[1])
 
         _stage(job_id, "scene", 3, "Animating")
-        code, spec, foley = await _film(job_id, st, s, timing, stills)
+        code, spec, foley = await _film(job_id, st, s, timing, stills, bins, sheets)
 
         _stage(job_id, "check", 4, "Checking the key frames")
         try:
-            code2, extra = await _review(job_id, st, s, timing, code, proxy)
+            code2, extra = await _review(job_id, st, s, timing, code, proxy, bins)
             if extra is not None:
                 code, (spec, foley) = code2, extra
         except BillingError:
@@ -449,7 +512,7 @@ async def run_studio_pipeline(job_id: str, p: dict):
         _job(job_id)["scene_code"] = code
 
         _stage(job_id, "render", 5, "Rendering")
-        video = await _render(job_id, st, code, timing, tmp, plate)
+        video = await _render(job_id, st, code, timing, tmp, plate, bins)
 
         _stage(job_id, "sound", 6, "Mixing the sound")
         final = await _sound(job_id, st, video, voice_wav, timing, spec, foley, tmp)

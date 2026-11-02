@@ -115,6 +115,24 @@ STYLES: dict[str, dict] = {
         "options": ["accent", "handle", "voice", "audience"],
         "inputs": [],
     },
+    "collage-doc": {
+        "name": "Collage Documentary",
+        "kit_file": "collage-doc.js", "kit_global": "CD",
+        "fonts": [{"family": "PlayfairDisplay", "file": "PlayfairDisplay-600i.woff2", "weight": 600, "style": "italic"},
+                  {"family": "Cormorant", "file": "Cormorant-500i.woff2", "weight": 500, "style": "italic"},
+                  {"family": "Cormorant", "file": "Cormorant-600.woff2", "weight": 600}],
+        "background": "#e9e4d8",
+        "voice": "bm_george", "speed": 0.95,
+        "voices": ["bm_george", "bm_fable", "bm_lewis", "am_michael", "bf_emma", "af_heart"],
+        "seconds": (20, 45),
+        "tail": 1.8,
+        "bed": "studio_bed_doc", "bed_db": -15.0,
+        "foley": "collage",
+        "art": True,                        # pictures cast by an art director and made per reel (studio_collage)
+        "fact_check": True,                 # true stories: every line is checked before it is recorded
+        "options": ["voice", "audience"],
+        "inputs": [],
+    },
 }
 
 
