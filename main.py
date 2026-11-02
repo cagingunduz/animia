@@ -27,6 +27,19 @@ import studio_styles
 
 app = FastAPI(title="Animave API v3")
 
+
+@app.on_event("startup")
+async def _warm_voice():
+    """Download and load the Kokoro voice model when the server starts, not inside the first reel's narration."""
+    async def warm():
+        try:
+            import yard_voice
+            await yard_voice._model()
+            print("[startup] Kokoro voice model ready")
+        except Exception as e:
+            print(f"[startup] Kokoro warm-up failed (will retry on first use): {e!r}")
+    asyncio.create_task(warm())
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

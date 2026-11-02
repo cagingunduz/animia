@@ -38,11 +38,16 @@ def _trim(a: np.ndarray) -> np.ndarray:
     return a[max(0, idx[0] - int(0.02 * SR)): idx[-1] + int(0.08 * SR)]
 
 
-async def speak(lines: list[dict], speed: float) -> tuple[np.ndarray, list[dict]]:
-    """lines -> (mono float32 audio at 24 kHz, spans [{i, start, end}]). Lines are spoken one by one with their pause."""
+async def speak(lines: list[dict], speed: float, progress=None) -> tuple[np.ndarray, list[dict]]:
+    """lines -> (mono float32 audio at 24 kHz, spans [{i, start, end}]). Lines are spoken one by one with their pause.
+    progress(stage, i, n) is called with 'model' while the voice model loads, then 'line' before each line."""
+    if progress and yard_voice._kokoro is None:
+        progress("model", 0, len(lines))
     k = await yard_voice._model()
     out, spans, t = [np.zeros(int(LEAD * SR), dtype=np.float32)], [], LEAD
     for i, ln in enumerate(lines):
+        if progress:
+            progress("line", i + 1, len(lines))
         voice = ln.get("voice") if ln.get("voice") in VOICES else NARRATOR
         text = (ln.get("say") or ln["text"]).strip()
         a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=float(ln.get("speed") or speed), lang="en-us")
@@ -107,13 +112,15 @@ def _caption_words(text: str, say: str | None, spoken: list[tuple[str, float, fl
     return [{**w, "s": round(w["s"], 3), "e": round(w["e"], 3)} for w in out]
 
 
-async def narrate(lines: list[dict], wav_path: str, speed: float = 1.1) -> dict:
+async def narrate(lines: list[dict], wav_path: str, speed: float = 1.1, progress=None) -> dict:
     """lines -> wav_path (24 kHz mono) and the TIMING the film reads: {voice_end, lines: [{i, text, start, end, words, ...}]}."""
     import soundfile as sf
-    audio, spans = await speak(lines, speed)
+    audio, spans = await speak(lines, speed, progress)
     sf.write(wav_path, audio, SR)
     mp3 = wav_path[:-4] + ".mp3"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", wav_path, "-c:a", "libmp3lame", "-b:a", "96k", mp3], check=True)
+    if progress:
+        progress("align", len(lines), len(lines))
     try:
         heard_all = await get_word_timestamps(open(mp3, "rb").read())
     except Exception as e:
