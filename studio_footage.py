@@ -22,6 +22,17 @@ PICK_TOOL = {
         "query": {"type": "string"}, "choice": {"type": "integer", "description": "the candidate number, or -1 for none"},
         "why": {"type": "string"}}, "required": ["query", "choice"]}}}, "required": ["picks"]},
 }
+SPAN_TOOL = {
+    "name": "pick_spans",
+    "description": "Pick where each clip should start.",
+    "input_schema": {"type": "object", "properties": {"spans": {"type": "array", "items": {"type": "object", "properties": {
+        "query": {"type": "string"}, "start": {"type": "number", "description": "seconds into the clip"},
+        "clean_until": {"type": "number", "description": "seconds into the clip where clean footage ends"}},
+        "required": ["query", "start"]}}}, "required": ["spans"]},
+}
+SPAN_SYSTEM = """Each sheet shows one archive clip, one frame every few seconds with its time in the corner. For each
+clip, give the start second of the longest stretch of clean footage of the subject: no title cards, no burned-in
+captions or big text, no logos, no presenter talking to camera, no graphics when real footage exists."""
 PICK_SYSTEM = """You pick archive footage for a vertical social news reel. For each search you see numbered candidate
 thumbnails (from Wikimedia Commons or NASA, all openly licensed). Pick the one that best shows what the line is about.
 Reject (choice -1 if all are bad): burned-in titles or big text, logos and watermarks, collages and diagrams when the
@@ -116,6 +127,29 @@ async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[
             except Exception as e:
                 print(f"[footage] fetch failed for {q}: {e!r}")
                 found.pop(q, None)
+    # where to start in each chosen video (avoid title cards and burned-in text inside the clip)
+    vids = [(q, f) for q, f in found.items() if f["kind"] == "video" and f.get("path") and (f.get("duration") or 0) > 4]
+    if vids:
+        content = []
+        for n, (q, f) in enumerate(vids):
+            try:
+                every = max(1.0, round(f["duration"] / 18, 1))
+                sheet = os.path.join(tmp, f"arch_sheet{n}.jpg")
+                await asyncio.to_thread(P.frames_sheet, f["path"], sheet, every, 6, 240)
+                content += [{"type": "text", "text": f"CLIP for '{q}' ({f['duration']:.0f} s, a frame every {every:g} s)"},
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _jpeg(open(sheet, "rb").read(), 1400)}}]
+            except Exception as e:
+                print(f"[footage] sheet failed for {q}: {e!r}")
+        if content:
+            try:
+                res = await claude(SPAN_SYSTEM, content, 1500, "footage", SPAN_TOOL)
+                for sp in res.get("spans") or []:
+                    if sp.get("query") in found:
+                        found[sp["query"]]["start"] = max(0.0, float(sp.get("start") or 0))
+                        if sp.get("clean_until"):
+                            found[sp["query"]]["clean_until"] = float(sp["clean_until"])
+            except Exception as e:
+                print(f"[footage] spans failed: {e!r}")
     # the shot list: one shot per line (from its start to the next line's start), same media merged
     out, used = [], {}
     for i, ln in enumerate(lines):
@@ -129,7 +163,7 @@ async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[
                    "at": m.get("at")}
         elif m.get("search") and m["search"] in found:
             f = found[m["search"]]
-            src = {"path": f["path"], "kind": f["kind"], "duration": f.get("duration", 0), "credit": f["credit"], "key": m["search"],
+            src = {"path": f["path"], "kind": f["kind"], "duration": f.get("duration", 0), "credit": f["credit"], "key": m["search"], "start": f.get("start"), "clean_until": f.get("clean_until"),
                    "page": f.get("page"), "licence": f.get("licence"), "title": f.get("title")}
         elif m.get("card") or not m:
             src = {"kind": None, "credit": "", "key": "card"}
@@ -141,7 +175,11 @@ async def shots(job_id: str, claude, lines: list[dict], timing: dict, ups: list[
         sh = {"t0": t0, "t1": t1, "kind": src.get("kind"), "path": src.get("path"), "credit": src.get("credit", ""), "_src": src}
         if src.get("kind") == "video":
             d = src.get("duration") or 0
-            start = float(src["at"]) if src.get("at") is not None else used.get(src["key"], min(d * .15, 4.0))
+            first = src["start"] if src.get("start") is not None else min(d * .15, 4.0)
+            start = float(src["at"]) if src.get("at") is not None else used.get(src["key"], first)
+            cu = src.get("clean_until")
+            if cu and start + (t1 - t0) > cu and src.get("at") is None:
+                start = first if first + (t1 - t0) <= cu + 1 else start      # reuse the clean stretch rather than run past it
             if d and start + (t1 - t0) > d:
                 start = max(0.0, d - (t1 - t0) - .1)
             sh["src"] = start
