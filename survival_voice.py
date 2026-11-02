@@ -127,6 +127,6 @@ async def narrate(lines: list[dict], wav_path: str, speed: float = 1.1) -> dict:
         spoken_words = (ln.get("say") or ln["text"]).split()
         spoken = _spoken_times(spoken_words, heard, a, b)
         words = _caption_words(ln["text"], ln.get("say"), spoken)
-        extra = {k: v for k, v in ln.items() if k in ("key", "voice", "nocap", "who")}
+        extra = {k: v for k, v in ln.items() if k in ("key", "voice", "nocap", "who", "caption")}
         out.append({"i": sp["i"], "text": ln["text"].strip(), "start": a, "end": b, "words": words, **extra})
     return {"voice_end": round(spans[-1]["end"], 3), "lines": out, "seconds": round(len(audio) / SR, 2)}

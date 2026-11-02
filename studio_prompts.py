@@ -30,7 +30,11 @@ SCRIPT_TOOL = {
             "title": {"type": "string", "description": "a short title, 2 to 6 words"},
             "lines": {"type": "array", "items": {"type": "object", "properties": {
                 "text": {"type": "string"}, "say": {"type": "string"}, "pause": {"type": "number"},
-                "who": {"type": "string", "description": "dialogue styles only: the speaker, one of the cast names"}},
+                "who": {"type": "string", "description": "dialogue styles only: the speaker, one of the cast names"},
+                "caption": {"type": "string", "description": "footage styles only: the on-screen caption, chunks split by |, one {keyword}"},
+                "media": {"type": "object", "description": "footage styles only: the footage under this line",
+                          "properties": {"upload": {"type": "integer"}, "search": {"type": "string"},
+                                         "kind": {"type": "string", "enum": ["video", "image"]}, "card": {"type": "boolean"}}}},
                 "required": ["text"]}},
             "visual_notes": {"type": "string"},
             "post": {"type": "string", "description": "a short post caption with 3 to 5 hashtags"},

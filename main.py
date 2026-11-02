@@ -2,7 +2,7 @@ import os
 import uuid
 import asyncio
 import tempfile
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
@@ -706,7 +706,7 @@ async def survival_status(job_id: str):
     if not job or job.get("kind") != "survival":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "title", "script", "rules", "choice", "post", "duration",
-            "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
+            "final_video_url", "thumbnail_url", "usage", "review", "sound", "sources", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 
@@ -734,6 +734,23 @@ async def generate_studio(req: GenerateStudioRequest):
     }
     asyncio.create_task(run_studio_pipeline(job_id, req.model_dump()))
     return {"job_id": job_id, "status": "queued"}
+
+
+STUDIO_UPLOAD_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm", "image/jpeg": "jpg", "image/png": "png",
+                       "image/webp": "webp"}
+
+
+@app.post("/studio/upload")
+async def studio_upload(file: UploadFile = File(...)):
+    """Style Studio footage styles: the user's own clip or photo -> R2 -> a URL for /generate-studio's uploads."""
+    ext = STUDIO_UPLOAD_TYPES.get((file.content_type or "").split(";")[0].lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="Only MP4 / MOV / WebM videos and JPG / PNG / WebP photos")
+    data = await file.read(400 * 1024 * 1024 + 1)
+    if len(data) > 400 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File is larger than 400 MB")
+    url = await asyncio.to_thread(upload_bytes_to_r2, data, "studio-uploads", ext, file.content_type)
+    return {"url": url, "kind": "video" if ext in ("mp4", "mov", "webm") else "image", "bytes": len(data)}
 
 
 @app.get("/studio/{job_id}")

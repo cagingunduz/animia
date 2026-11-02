@@ -24,6 +24,8 @@ import traceback
 import anthropic
 
 import motion_sound
+import studio_footage
+import studio_plate
 import studio_sound
 import studio_styles
 import survival_voice
@@ -111,6 +113,10 @@ def _clean_lines(lines: list, st: dict) -> list[dict]:
         say = str(ln.get("say") or "").strip()
         if say and say != text:
             o["say"] = say
+        if st.get("media") and ln.get("caption"):
+            o["caption"] = str(ln["caption"])[:160]
+        if st.get("media") and isinstance(ln.get("media"), dict):
+            o["media"] = ln["media"]
         out.append(o)
     return out
 
@@ -135,12 +141,24 @@ def _lips(wav: str, timing: dict) -> list[float]:
     return [round(float(v), 2) for v in out]
 
 
-async def _write(job_id: str, st: dict, p: dict) -> dict:
+async def _write(job_id: str, st: dict, p: dict, media: dict | None = None) -> dict:
     lo, hi = st["seconds"]
     secs = max(lo, min(hi, int(p.get("seconds") or (lo + hi) // 2)))
     ask = [f"The topic: {p['topic'].strip()}" if (p.get("topic") or "").strip() else "No topic given: pick the best one for this style yourself."]
     ask.append(f"The length: about {secs} seconds of narration (about {round(secs * 2.4)} words).")
-    s = await _claude(job_id, writer_system(st), "\n".join(ask) + "\n\nWrite it, then submit the script.", 5000, "writer", tool=SCRIPT_TOOL)
+    content = "\n".join(ask) + "\n\nWrite it, then submit the script."
+    if st.get("media"):
+        content = [{"type": "text", "text": "\n".join(ask)}]
+        ups = (media or {}).get("uploads") or []
+        if ups:
+            content.append({"type": "text", "text": f"THE USER'S UPLOADS ({len(ups)}), use them first (media.upload = the number):"})
+            for i, u in enumerate(ups):
+                content.append({"type": "text", "text": f"upload {i}: {u['kind']}" + (f", {u['duration']:.1f} s (sheet: one frame per {u['every']:g} s, time in the corner)" if u['kind'] == 'video' else "")})
+                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": u["sheet"]}})
+        else:
+            content.append({"type": "text", "text": "No uploads: every footage line gets a media.search (archive footage is found for it)."})
+        content.append({"type": "text", "text": "Write it, then submit the script."})
+    s = await _claude(job_id, writer_system(st), content, 5000, "writer", tool=SCRIPT_TOOL)
     s["lines"] = _clean_lines(s.get("lines"), st)
     if len(s["lines"]) < 5:
         raise ValueError("the script came back too short")
@@ -208,11 +226,14 @@ def _small_jpeg(png_b64: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-async def _review(job_id: str, st: dict, s: dict, timing: dict, code: str):
+async def _review(job_id: str, st: dict, s: dict, timing: dict, code: str, plate: str | None = None):
     lines = timing["lines"]
     picks = sorted({min(len(lines) - 1, round(i * (len(lines) - 1) / 5)) for i in range(6)})
     at = [round((lines[i]["start"] + lines[i]["end"]) / 2, 2) for i in picks]
-    r = await _render_call("/snapshot", {"files": {"index.html": compose(st, code, timing)}, "at": at}, timeout=900)
+    payload = {"files": {"index.html": compose(st, code, timing, plate="plate.mp4" if plate else None)}, "at": at}
+    if plate:
+        payload["binary_files"] = {"plate.mp4": base64.b64encode(open(plate, "rb").read()).decode()}
+    r = await _render_call("/snapshot", payload, timeout=900)
     if r.status_code != 200:
         print(f"[studio] review skipped, snapshot failed: {r.text[:300]}")
         return code, None
@@ -234,16 +255,20 @@ async def _review(job_id: str, st: dict, s: dict, timing: dict, code: str):
 
 # ─────────────────────────── 5. render ───────────────────────────
 
-async def _render(job_id: str, st: dict, code: str, timing: dict, tmp: str) -> str:
+async def _render(job_id: str, st: dict, code: str, timing: dict, tmp: str, plate: str | None = None) -> str:
     total = int(round(timing["end"] * FPS))
     per = math.ceil(total / CHUNKS / FPS) * FPS
     spans = [(k * per, min(per, total - k * per)) for k in range(CHUNKS) if total - k * per > 0]
     done = {"n": 0}
 
     async def one(k: int, f0: int, nf: int) -> str:
-        html = compose(st, code, timing, start=f0 / FPS, duration=nf / FPS)
+        html = compose(st, code, timing, start=f0 / FPS, duration=nf / FPS, plate="plate.mp4" if plate else None)
+        payload = {"files": {"index.html": html}, "quality": "standard", "fps": FPS, "timeout_ms": 1800000}
+        if plate:   # this chunk's frames of the footage plate, starting at the chunk's first frame
+            part = await asyncio.to_thread(studio_plate.cut, plate, f0 / FPS, nf / FPS, os.path.join(tmp, f"plate{k}.mp4"))
+            payload["binary_files"] = {"plate.mp4": base64.b64encode(open(part, "rb").read()).decode()}
         for attempt in range(2):
-            r = await _render_call("/render", {"files": {"index.html": html}, "quality": "standard", "fps": FPS, "timeout_ms": 1800000}, timeout=2400)
+            r = await _render_call("/render", payload, timeout=2400)
             if r.status_code == 200 and r.content:
                 path = os.path.join(tmp, f"chunk{k}.mp4"); open(path, "wb").write(r.content)
                 done["n"] += 1; _job(job_id)["message"] = f"Rendering ({done['n']}/{len(spans)})"
@@ -290,8 +315,12 @@ async def run_studio_pipeline(job_id: str, p: dict):
     tmp = tempfile.mkdtemp(prefix="studio-")
     try:
         st = studio_styles.style(p["style"])
+        media = None
+        if st.get("media"):
+            _stage(job_id, "script", 1, "Looking at your footage")
+            media = {"uploads": await studio_footage.uploads(p.get("uploads") or [], tmp)}
         _stage(job_id, "script", 1, "Writing the script")
-        s = await _write(job_id, st, p)
+        s = await _write(job_id, st, p, media)
         _job(job_id).update(title=s.get("title"), script=s["lines"], post=s.get("post"))
 
         _stage(job_id, "voice", 2, "Recording the narrator")
@@ -303,12 +332,22 @@ async def run_studio_pipeline(job_id: str, p: dict):
             timing["lips"] = await asyncio.to_thread(_lips, voice_wav, timing)
         _job(job_id)["duration"] = timing["end"]
 
+        plate = proxy = None
+        if st.get("media"):
+            _stage(job_id, "voice", 2, "Finding the footage")
+            ask = lambda system, content, mt, role, tool: _claude(job_id, system, content, mt, role, tool=tool)
+            shots = await studio_footage.shots(job_id, ask, s["lines"], timing, media["uploads"], tmp)
+            timing["shots"] = studio_footage.public(shots)
+            _job(job_id)["sources"] = studio_footage.sources(shots)
+            plate = await asyncio.to_thread(studio_plate.build, shots, timing["end"], os.path.join(tmp, "plate.mp4"), tmp)
+            proxy = await asyncio.to_thread(studio_plate.proxy, plate, os.path.join(tmp, "proxy.mp4"))
+
         _stage(job_id, "scene", 3, "Animating")
         code, spec, foley = await _film(job_id, st, s, timing)
 
         _stage(job_id, "check", 4, "Checking the key frames")
         try:
-            code2, extra = await _review(job_id, st, s, timing, code)
+            code2, extra = await _review(job_id, st, s, timing, code, proxy)
             if extra is not None:
                 code, (spec, foley) = code2, extra
         except BillingError:
@@ -318,7 +357,7 @@ async def run_studio_pipeline(job_id: str, p: dict):
         _job(job_id)["scene_code"] = code
 
         _stage(job_id, "render", 5, "Rendering")
-        video = await _render(job_id, st, code, timing, tmp)
+        video = await _render(job_id, st, code, timing, tmp, plate)
 
         _stage(job_id, "sound", 6, "Mixing the sound")
         final = await _sound(job_id, st, video, voice_wav, timing, spec, foley, tmp)

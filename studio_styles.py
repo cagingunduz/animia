@@ -70,6 +70,19 @@ STYLES: dict[str, dict] = {
         "foley": "teardown",
         "inputs": [],
     },
+    "caption-news": {
+        "name": "Caption News",
+        "kit_file": "caption-news.js", "kit_global": "CN",
+        "fonts": [{"family": "Inter", "file": f"Inter-{w}.woff2", "weight": w} for w in (500, 600, 700, 800, 900)],
+        "background": "#000",
+        "voice": "am_michael", "speed": 1.12,
+        "seconds": (30, 75),
+        "tail": 1.0,
+        "bed": "studio_bed_news", "bed_db": -15.0,
+        "foley": "news",
+        "media": "footage",                 # uploads first, else open archives (studio_footage / studio_plate)
+        "inputs": ["uploads"],
+    },
 }
 
 

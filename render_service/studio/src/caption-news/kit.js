@@ -23,7 +23,7 @@ export function begin(ctx, t) {
 }
 
 // —— the caption: the line, slammed in chunks; `cap` = 'Bees are dying | {faster} | than ever' (| = chunk, {} = keyword)
-function parseCap(cap) { return String(cap).split('|').map(c => c.trim()).filter(Boolean).map(c => { const m = c.match(/^(.*?)\{(.+?)\}(.*)$/); return m ? [{ s: m[1], key: false }, { s: m[2], key: true }, { s: m[3], key: false }].filter(p => p.s) : [{ s: c, key: false }]; }); }
+function parseCap(cap) { const cs = String(cap).split('|').map(c => c.trim()).filter(Boolean); return cs.map((c, i) => { const m = c.match(/^(.*?)\{(.+?)\}(.*)$/); const ps = m ? [{ s: m[1], key: false }, { s: m[2], key: true }, { s: m[3], key: false }].filter(p => p.s) : [{ s: c, key: false }]; if (i < cs.length - 1) ps.push({ s: ' ', key: false }); return ps; }); }
 // layout: chunks flow left to right over up to 3 rows in the deck (x 64..1016), size shrinks to fit
 export function caption(ctx, t, cap, t0, t1, o = {}) {
   if (t < t0 - .01 || t >= t1) return;

@@ -173,11 +173,35 @@ class _Synth:
             return self.ring([70, 115], [.14, .06], [.9, .3], .5) * .8
         return None
 
+    # ── caption news: graphics hits
+    def news(self, ty, d=None):
+        t = self.tt
+        if ty == "slam":
+            dd = .18; return (self.bp(self.rng.standard_normal(int(dd * SR)), 2000, 7000) * np.exp(-t(dd) / .004) * .6 + self.ring([90, 160], [.06, .03], [.9, .3], dd)) * .5
+        if ty == "rattle":
+            dd = d or .45; x = np.zeros(int(dd * SR))
+            for k in range(int(dd / .045)):
+                i = int(k * .045 * SR); n = min(int(.012 * SR), len(x) - i); x[i:i + n] += self.bp(self.rng.standard_normal(n), 3000, 8000) * np.exp(-np.arange(n) / SR / .002) * .4
+            return x
+        if ty == "whoosh":
+            return self.whoosh(d or .35, 1.2)
+        if ty == "squeak":
+            dd = .35; return self.sweep(1800, 2600, dd) * np.sin(np.pi * t(dd) / dd) ** 2 * .06
+        if ty == "shutter":
+            dd = .2; return (self.bp(self.rng.standard_normal(int(dd * SR)), 1500, 8000) * (np.exp(-t(dd) / .006) + np.exp(-np.maximum(0, t(dd) - .08) / .006) * (t(dd) > .08))) * .5
+        if ty == "stamp":
+            return (self.ring([60, 110], [.18, .08], [1, .4], .5) + self.bp(self.rng.standard_normal(int(.5 * SR)), 200, 3000) * np.exp(-t(.5) / .02) * .5) * .7
+        if ty == "pop":
+            return self.toon("pop")
+        if ty == "riser":
+            dd = d or 1.5; return (self.sweep(200, 1600, dd, curve=2) * .15 + self.bp(self.rng.standard_normal(int(dd * SR)), 800, 6000) * .12) * (t(dd) / dd) ** 2
+        return None
+
 
 def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
     """The style's foley as a stereo buffer (N, 2)."""
     N = int(total * SR); out = np.zeros((N, 2))
-    if kind not in ("marker", "toon", "paper", "teardown") or not events:
+    if kind not in ("marker", "toon", "paper", "teardown", "news") or not events:
         return out
     S = _Synth()
 
@@ -207,7 +231,7 @@ def foley(kind: str, events: list[dict], total: float) -> np.ndarray:
             put(S.eraser(float(e.get("dur", .5)), True), t, .8, -.2)
         elif ty == "whoosh" and kind == "marker":
             put(S.whoosh(float(e.get("dur", .5))), t, 1.0, 0)
-        elif kind in ("toon", "paper", "teardown"):
+        elif kind in ("toon", "paper", "teardown", "news"):
             x = getattr(S, kind)(str(ty), num(e.get("d"), None))
             if x is not None:
                 put(x, t, num(e.get("v"), 1.0), pan)
