@@ -52,8 +52,14 @@ SCRIPT_TOOL = {
 }
 
 
+def _fmt(st: dict) -> tuple[str, str]:
+    w, h = st.get("size") or (1080, 1920)
+    return ("horizontal (16:9) video section" if w > h else "vertical (9:16) reel"), f"{w} x {h}"
+
+
 def film_system(st: dict) -> str:
-    return f"""You animate one vertical (1080 x 1920) reel in the {st['name']} style, in JavaScript, on the style's kit.
+    kind, size = _fmt(st)
+    return f"""You animate one {kind} ({size}) in the {st['name']} style, in JavaScript, on the style's kit.
 Write ONE function:
 
     function film(K, T, c) {{
@@ -66,7 +72,7 @@ Reply with only that function in a ```js code block. No imports, no HTML, no oth
 THE PAGE calls film() once, then seek(t, ctx) for every frame, t in seconds from 0 to T.end, in any order.
 - seek(t) MUST be a pure function of t: no Date, no Math.random (use K.mulberry(seed) at build time), no timers, no
   animation loops, no fetch, no DOM, no async code.
-- The canvas is 1080 x 1920. Draw every frame completely (the kit's render does this for you).
+- The canvas is {size}. Draw every frame completely (the kit's render does this for you).
 
 TIMING (T): T.lines[i] = {{ text, start, end, words: [{{ w, s, e }}] }} for each 0-based voice line i; T.end = the end of
 the video; T.w(i, 'word', nth = 1) = when that word is spoken in line i. Key every drawing, move and cut to the word
@@ -83,7 +89,8 @@ Each edit replaces one exact snippet ('find', copied verbatim from the code, uni
 
 
 def review_system(st: dict) -> str:
-    return f"""You review stills from a vertical reel in the {st['name']} style against its script and fix the film code.
+    kind, _ = _fmt(st)
+    return f"""You review stills from a {kind} in the {st['name']} style against its script and fix the film code.
 Each still is labelled with its time and the line being spoken.
 
 Look for, in order of importance:

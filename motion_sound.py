@@ -99,6 +99,8 @@ SFX_LIBRARY = {
                            "light percussion, airy pads, confident and modern, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
     "studio_bed_doc": ("melancholic documentary underscore, slow solo felt piano with soft sustained strings and a low cello "
                        "drone, intimate and reflective, 68 bpm, loopable, no vocals", 22.0, -20, 99999),
+    "studio_bed_flat": ("light curious documentary explainer music, pizzicato strings, soft marimba and glockenspiel, "
+                        "gentle shaker, playful and inquisitive, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain

@@ -17,3 +17,4 @@ kokoro-onnx>=0.4.7
 soundfile>=0.12.1
 Pillow>=10.3.0
 pocket-tts>=4.0.0
+scipy>=1.11

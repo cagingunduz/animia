@@ -15,7 +15,7 @@ def compose(style: dict, code: str, timing: dict, start: float = 0.0, duration: 
             probe: bool = False, plate: str | None = None) -> str:
     """style: a studio_styles.STYLES entry. The page is always 1080x1920 (the kits draw in screen pixels and some
     reset the canvas transform). plate: an optional footage video (project-relative path) under the canvas."""
-    w, h = W, H
+    w, h = style.get("size") or (W, H)          # 1080x1920 reels; long videos set (1920, 1080)
     total = round(timing["end"], 3)
     dur = round(duration if duration is not None else total, 4)
     fonts = "".join(f"@font-face{{font-family:{f['family']};src:url(studio/fonts/{f['file']}) format('woff2');font-weight:{f.get('weight', 400)};font-style:{f.get('style', 'normal')}}}"
@@ -55,7 +55,7 @@ html,body{{margin:0;background:#000}}
   const tl = K.timeline(), OFFSET = {round(start, 4)}, KIT = window.{style['kit_global']};
   window.__kCues = window.__kCues || [];
   const canvas = document.getElementById('film'), c = canvas.getContext('2d');
-  if (KIT.setScreen) KIT.setScreen({W}, {H});
+  if (KIT.setScreen) KIT.setScreen({w}, {h});
   const T = window.TIMING;
   T.img = {{}};
   for (const el of document.querySelectorAll('img[data-k]')) if (el.naturalWidth) T.img[el.dataset.k] = el;
@@ -69,7 +69,7 @@ html,body{{margin:0;background:#000}}
   let F = null;
   try {{
     if (typeof film !== 'function') throw new Error('film(K, T, c) is not defined');
-    c.setTransform({w} / {W}, 0, 0, {h} / {H}, 0, 0);
+    c.setTransform(1, 0, 0, 1, 0, 0);
     F = film(KIT, T, c);
     if (!F || typeof F.seek !== 'function') throw new Error('film() must return {{ seek(t, c), cues, sfx }}');
     window.__kCues.push({{ t: 0, kind: 'spec', spec: F.sfx || {{}} }});

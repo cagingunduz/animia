@@ -733,11 +733,108 @@ class GenerateStudioRequest(BaseModel):
     options: Optional[dict] = None                                  # per-style choices (accent, handle, voice, audience)
 
 
+# ─── Long videos (YouTube, 16:9): resumable projects (long_pipeline). The site's server calls these with the shared
+# key (X-Studio-Key = STUDIO_UPLOAD_SECRET), so credits are always charged by the site before production starts.
+
+class LongCreate(BaseModel):
+    template: str = Field("flat-explainer", max_length=40)
+    topic: Optional[str] = Field(None, max_length=300)
+    minutes: int = Field(5, ge=1, le=20)
+    voice: Optional[str] = Field(None, max_length=40)
+    notes: Optional[str] = Field(None, max_length=600)
+
+
+class LongPitch(BaseModel):
+    template: str = Field("flat-explainer", max_length=40)
+    hint: Optional[str] = Field(None, max_length=300)
+
+
+def _long_key(key: str):
+    import hmac
+    secret = os.environ.get("STUDIO_UPLOAD_SECRET", "")
+    if not secret or not hmac.compare_digest(key or "", secret):
+        raise HTTPException(status_code=401, detail="Not allowed")
+
+
+def _long_get(pid: str) -> dict:
+    import long_pipeline
+    s = long_pipeline.load(pid)
+    if not s:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return s
+
+
+@app.post("/long/pitch")
+async def long_pitch(req: LongPitch, x_studio_key: str = Header("")):
+    _long_key(x_studio_key)
+    import long_pipeline
+    if req.template not in long_pipeline.TEMPLATES:
+        raise HTTPException(status_code=400, detail="Unknown template")
+    return {"pitches": await long_pipeline.pitch(req.template, req.hint or "")}
+
+
+@app.post("/long/projects")
+async def long_create(req: LongCreate, x_studio_key: str = Header("")):
+    _long_key(x_studio_key)
+    import long_pipeline
+    if req.template not in long_pipeline.TEMPLATES:
+        raise HTTPException(status_code=400, detail="Unknown template")
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Long videos are not available yet (render service not connected).")
+    s = await asyncio.to_thread(long_pipeline.create, req.template, req.topic or "", req.minutes, req.voice, req.notes)
+    asyncio.create_task(long_pipeline.run(s["id"]))
+    return long_pipeline.public(s)
+
+
+@app.get("/long/projects/{pid}")
+async def long_status(pid: str, x_studio_key: str = Header("")):
+    _long_key(x_studio_key)
+    import long_pipeline
+    s = await asyncio.to_thread(_long_get, pid)
+    return long_pipeline.public(s)
+
+
+@app.patch("/long/projects/{pid}/plan")
+async def long_edit(pid: str, body: dict, x_studio_key: str = Header("")):
+    _long_key(x_studio_key)
+    import long_pipeline
+    s = await asyncio.to_thread(_long_get, pid)
+    try:
+        s = await asyncio.to_thread(long_pipeline.update_plan, s, body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return long_pipeline.public(s)
+
+
+@app.post("/long/projects/{pid}/approve")
+async def long_approve(pid: str, x_studio_key: str = Header("")):
+    _long_key(x_studio_key)
+    import long_pipeline
+    s = await asyncio.to_thread(_long_get, pid)
+    if s["status"] != "awaiting_approval":
+        raise HTTPException(status_code=409, detail="This project is not waiting for approval")
+    s.update(status="producing", stage="art", message="Starting", approved=__import__("time").time())
+    await asyncio.to_thread(long_pipeline.save, s)
+    asyncio.create_task(long_pipeline.run(pid))
+    return long_pipeline.public(s)
+
+
+@app.post("/long/projects/{pid}/resume")
+async def long_resume(pid: str, x_studio_key: str = Header("")):
+    _long_key(x_studio_key)
+    import long_pipeline
+    s = await asyncio.to_thread(_long_get, pid)
+    if s["status"] not in ("planning", "producing"):
+        raise HTTPException(status_code=409, detail="Nothing to resume")
+    asyncio.create_task(long_pipeline.run(pid))
+    return {**long_pipeline.public(s), "running": True}
+
+
 @app.post("/generate-studio")
 async def generate_studio(req: GenerateStudioRequest):
     """Style Studio: reels in styles from lemo-opuscar (Claude script + animation code on the style's kit, Kokoro voice,
     CPU render on the render service, foley made in code)."""
-    if req.style not in studio_styles.STYLES:
+    if req.style not in studio_styles.STYLES or studio_styles.STYLES[req.style].get("long"):
         raise HTTPException(status_code=400, detail=f"unknown style {req.style!r}")
     from storybook_pipeline import R2_PUBLIC_BASE
     if any(not str(u).startswith(f"{R2_PUBLIC_BASE}/studio-uploads/") for u in (req.uploads or [])):
