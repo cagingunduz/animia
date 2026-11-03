@@ -15,7 +15,7 @@ import urllib.parse
 
 import httpx
 
-UA = os.environ.get("STUDIO_MEDIA_UA", "AnimaveStudio/1.0 (https://animave.app; media@animave.app)")
+UA = os.environ.get("STUDIO_MEDIA_UA", "AnimaveStudio/1.0 (https://animave.com; support@animave.com)")
 MAX_VIDEO_MB = 120
 MAX_IMAGE_MB = 25
 
@@ -48,7 +48,7 @@ async def search_commons(q: str, kind: str = "video", n: int = 6) -> list[dict]:
     ft = "video" if kind == "video" else "bitmap"
     url = ("https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrnamespace=6"
            f"&gsrlimit={n * 3}&gsrsearch={urllib.parse.quote(f'filetype:{ft} {q}')}"
-           "&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=640"
+           "&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=500"
            "&iiextmetadatafilter=LicenseShortName|Artist|Credit|ImageDescription|DateTimeOriginal")
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
         r = await _get(c, url)

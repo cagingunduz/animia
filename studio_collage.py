@@ -1,5 +1,12 @@
 """Collage Documentary: the pictures. After the script, an art director (Claude) casts every picture the reel needs,
-then they are made in parallel:
+then they are found or made in parallel. Two sources:
+
+ARCHIVE (the default): every picture is a real, openly licensed
+photo from Wikimedia Commons / NASA (public domain, CC0 or CC BY; credited). Claude picks the best of a few candidates
+by thumbnail; cut-outs get their background removed on our CPU (IS-Net, the rembg "isnet-general-use" model); all of
+them get one shared archival grade so the reel looks like one piece.
+
+GENERATED (STUDIO_COLLAGE_SOURCE=generate, with GEMINI_API_KEY):
 
   plate     a full-bleed background: an EMPTY room, street, landscape, sky (Gemini image, 9:16)
   cutout    a person (from behind / far away / a silhouette), a hand or an arm, an animal, an object: generated on a
@@ -28,6 +35,11 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"
 IMAGE_MODEL = os.environ.get("STUDIO_IMAGE_MODEL", "gemini-3.1-flash-image")
 IMAGE_FALLBACK = os.environ.get("STUDIO_IMAGE_FALLBACK", "gemini-2.5-flash-image")
 MAX_PICTURES = 14
+# archive photos by default; STUDIO_COLLAGE_SOURCE=generate (with GEMINI_API_KEY) makes them with Gemini instead
+SOURCE = "generate" if GEMINI_KEY and os.environ.get("STUDIO_COLLAGE_SOURCE", "archive") == "generate" else "archive"
+MODEL_DIR = os.environ.get("STUDIO_MODEL_DIR") or os.environ.get("KOKORO_DIR") or "/tmp/models"
+ISNET_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
+_archive_sem = asyncio.Semaphore(3)            # Commons rate limits: a few searches at a time
 _sem = asyncio.Semaphore(int(os.environ.get("STUDIO_IMAGE_PARALLEL", "5")))
 
 KINDS = ("plate", "cutout", "document", "portrait")
@@ -59,7 +71,32 @@ ART_TOOL = {
 }
 
 
+ARCHIVE_RULES = f"""THE PICTURES COME FROM PHOTO ARCHIVES (Wikimedia Commons and NASA), not from a generator. For every picture
+give a `search`: 2 to 5 plain English words that an archive photo would be titled with, e.g. "New York street 1905",
+"Hotel New Yorker", "feral pigeon", "incandescent light bulb", "Wardenclyffe Tower", "concert hall interior", "old
+letter handwriting", "Nikola Tesla portrait". Prefer subjects that were really photographed (places, buildings, objects,
+animals, the person's own photos and paintings); avoid scenes nobody photographed.
+- plate: a place or a texture to fill the frame (a street, a room, a building, a sky, a landscape, a sea).
+- cutout: ONE clear subject to be cut out of its photo (an animal, an object, a machine, a person standing): pick
+  searches where it is likely to be big and alone in the picture.
+- document: a letter, a newspaper page, a patent drawing, a map, a ticket, a manuscript page.
+- portrait: the real person (a photograph or a painting of them).
+- Real photographs of real people are fine here (they are not invented). No modern stock-photo subjects.
+- 6 to {MAX_PICTURES} pictures. One clear idea per scene: don't cast pictures nobody needs.
+- Leave `prompt` empty; set `aspect` to what you expect (it is only a hint)."""
+
+
 def art_system(st: dict) -> str:
+    if SOURCE == "archive":
+        return f"""You are the art director of a vertical documentary collage reel. Read the script and its shot notes and cast
+EVERY picture the animator will need, then call the tool (`look` = one line describing the shared look, e.g. "sepia
+archival photographs"). The animator places them like paper cut-outs on photo plates and paper, with big words and
+hand-drawn white rings; they can reuse a picture in several scenes, flip it, scale it.
+
+{ARCHIVE_RULES}
+
+THE STYLE:
+{st['style_md']}"""
     return f"""You are the art director of a vertical documentary collage reel. Read the script and its shot notes and cast
 EVERY picture the animator will need, then call the tool. The animator places them like paper cut-outs on photo plates and
 paper, with big words and hand-drawn white rings; they can reuse a picture in several scenes, flip it, scale it.
@@ -97,9 +134,9 @@ def _clean(res: dict) -> tuple[str, list[dict]]:
         kind = p.get("kind") if p.get("kind") in KINDS else None
         if not pid or pid in seen or not kind:
             continue
-        if kind == "portrait" and not str(p.get("search") or "").strip():
+        if (kind == "portrait" or SOURCE == "archive") and not str(p.get("search") or "").strip():
             continue
-        if kind != "portrait" and not str(p.get("prompt") or "").strip():
+        if kind != "portrait" and SOURCE != "archive" and not str(p.get("prompt") or "").strip():
             continue
         seen.add(pid)
         out.append({"id": pid, "kind": kind, "prompt": str(p.get("prompt") or "").strip()[:900], "search": str(p.get("search") or "").strip()[:160],
@@ -204,10 +241,132 @@ def _jpeg(raw: bytes, w: int) -> bytes:
     im = Image.open(io.BytesIO(raw)).convert("RGB"); im.thumbnail((w, w * 2)); b = io.BytesIO(); im.save(b, "JPEG", quality=80); return b.getvalue()
 
 
+# ─────────────────────────── archive photos ───────────────────────────
+
+_isnet = None
+import threading
+_isnet_lock = threading.Lock()
+
+
+def _isnet_session():
+    global _isnet
+    with _isnet_lock:
+        return _load_isnet()
+
+
+def _load_isnet():
+    global _isnet
+    if _isnet is None:
+        import onnxruntime as ort
+        path = os.path.join(MODEL_DIR, "isnet-general-use.onnx")
+        if not os.path.exists(path) or os.path.getsize(path) < 100_000_000:
+            os.makedirs(MODEL_DIR, exist_ok=True)
+            print("[collage] downloading the background-removal model (once)")
+            with httpx.stream("GET", ISNET_URL, follow_redirects=True, timeout=600) as r:
+                r.raise_for_status()
+                with open(path + ".part", "wb") as f:
+                    for chunk in r.iter_bytes(1 << 20):
+                        f.write(chunk)
+            os.replace(path + ".part", path)
+        opts = ort.SessionOptions(); opts.intra_op_num_threads = 2
+        _isnet = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+    return _isnet
+
+
+def cut_out(img: Image.Image) -> Image.Image:
+    """A photo -> RGBA with only the main subject (IS-Net salient object mask), cropped to it."""
+    rgb = img.convert("RGB")
+    x = np.asarray(rgb.resize((1024, 1024), Image.BILINEAR)).astype(np.float32) / 255.0
+    x = ((x - .5) / 1.0).transpose(2, 0, 1)[None]
+    sess = _isnet_session()
+    pred = sess.run(None, {sess.get_inputs()[0].name: x})[0][0, 0]
+    pred = (pred - pred.min()) / (pred.max() - pred.min() + 1e-8)
+    mask = Image.fromarray((pred * 255).astype(np.uint8)).resize(rgb.size, Image.BILINEAR)
+    m = np.asarray(mask).astype(np.float32)
+    m = np.clip((m - 40) / 170, 0, 1) * 255                     # firm the edges a little
+    out = rgb.convert("RGBA"); out.putalpha(Image.fromarray(m.astype(np.uint8)))
+    bb = Image.fromarray(m.astype(np.uint8)).point(lambda v: 255 if v > 60 else 0).getbbox()
+    if not bb or (bb[2] - bb[0]) * (bb[3] - bb[1]) < .02 * rgb.width * rgb.height:
+        raise ValueError("no clear subject to cut out")
+    pad = 6
+    return out.crop((max(0, bb[0] - pad), max(0, bb[1] - pad), min(rgb.width, bb[2] + pad), min(rgb.height, bb[3] + pad)))
+
+
+def grade(img: Image.Image, keep_colour: float = 0.0) -> Image.Image:
+    """One archival look for pictures from many sources: monochrome with a warm silver tone, levels evened out.
+    keep_colour 0..1 keeps some of the original colour (portraits)."""
+    from PIL import ImageEnhance
+    alpha = img.getchannel("A") if img.mode == "RGBA" else None
+    rgb = img.convert("RGB")
+    g = ImageOps.autocontrast(rgb.convert("L"), cutoff=1)
+    toned = ImageOps.colorize(g, black=(22, 18, 14), white=(244, 236, 220), mid=(128, 118, 104))
+    if keep_colour > 0:
+        col = ImageEnhance.Color(ImageOps.autocontrast(rgb, cutoff=1)).enhance(.75)
+        toned = Image.blend(toned, col, keep_colour)
+    if alpha is not None:
+        toned = toned.convert("RGBA"); toned.putalpha(alpha)
+    return toned
+
+
+def _big(c: dict, w: int = 1280) -> str:
+    """A larger rendition of a candidate. Commons serves only standard thumbnail widths (w.wiki/GHai: 500, 960, 1280,
+    1920...), so ask for 1280 when the original is bigger, else the original."""
+    t = c.get("thumb") or ""
+    if c.get("source") == "commons" and re.search(r"/\d+px-", t) and (c.get("w") or 0) > w:
+        return re.sub(r"/\d+px-", f"/{w}px-", t)
+    return c.get("url") or t
+
+
+async def _archive(p: dict, claude) -> dict | None:
+    async with _archive_sem:
+        cands = await studio_media.search(p["search"], kind="image", n=6)
+    cands = [c for c in cands if (c.get("w") or 1000) >= 500]
+    if not cands:
+        return None
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        thumbs = await asyncio.gather(*[studio_media.thumb(c, x) for x in cands])
+    pairs = [(x, th) for x, th in zip(cands, thumbs) if th] or [(x, None) for x in cands[:1]]   # no thumbnails: take the top hit
+    pick = 0
+    if claude and len(pairs) > 1:
+        want = {"plate": "a full-frame background (a place, no big text, no modern things, sharp)",
+                "cutout": "ONE clear subject, big and whole in the frame, easy to cut out of its background",
+                "document": "a flat document filling the frame", "portrait": "the person's face clearly visible"}[p["kind"]]
+        content = [{"type": "text", "text": f"Pick the best archive picture for: {p['search']} — {p.get('use') or ''}. It must be {want}; "
+                                            "no watermark, no collage, no screenshot. Answer with the number only, or -1 if none fits."}]
+        for i, (x, th) in enumerate(pairs):
+            content += [{"type": "text", "text": f"{i}: {x['title'][:80]}"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(_jpeg(th, 320)).decode()}}]
+        try:
+            m = re.search(r"-?\d+", await claude(content))
+            pick = int(m.group()) if m else 0
+        except Exception as e:
+            print(f"[collage] archive pick failed: {e!r}")
+        if pick < 0 or pick >= len(pairs):
+            return None
+    src = pairs[pick][0]
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        r = await studio_media._get(c, _big(src))                 # our User-Agent, waits and retries on 429
+        if r.status_code != 200 and src.get("url") and _big(src) != src["url"]:
+            r = await studio_media._get(c, src["url"])
+        r.raise_for_status()
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(r.content))).convert("RGB")
+    return {"img": img, "credit": src.get("credit"), "page": src.get("page"), "title": src.get("title"), "licence": src.get("licence")}
+
+
 async def _one(p: dict, look: str, tmp: str, claude) -> dict | None:
     async with _sem:
         try:
-            if p["kind"] == "portrait":
+            if SOURCE == "archive":
+                got = await _archive(p, claude)
+                if not got:
+                    print(f"[collage] nothing in the archives for {p['search']!r}")
+                    return None
+                img = _fit(got["img"], 1400 if p["kind"] == "plate" else 1100)
+                if p["kind"] == "cutout":
+                    img = await asyncio.to_thread(cut_out, img)
+                img = grade(img, .55 if p["kind"] == "portrait" else 0)
+                meta = {"credit": got["credit"], "page": got["page"], "source_title": got["title"], "licence": got["licence"]}
+            elif p["kind"] == "portrait":
                 got = await _portrait(p, claude)
                 if not got:
                     print(f"[collage] no portrait found for {p['search']!r}")
@@ -245,9 +404,9 @@ async def make(job_id: str, claude_tool, claude_text, st: dict, s: dict, tmp: st
             progress(done["n"], len(plan))
         return r
     pics = [p for p in await asyncio.gather(*[run(p) for p in plan]) if p]
-    if len([p for p in pics if p["kind"] != "portrait"]) < max(3, len([p for p in plan if p["kind"] != "portrait"]) // 2):
-        raise RuntimeError("most of the pictures failed to generate")
-    return {"look": look, "pictures": pics}
+    if len(pics) < max(3, len(plan) // 3):
+        raise RuntimeError("most of the pictures could not be found or made")
+    return {"look": look, "pictures": pics, "source": SOURCE}
 
 
 def public(pics: list[dict]) -> list[dict]:
