@@ -152,6 +152,26 @@ STYLES: dict[str, dict] = {
         "minutes": (2, 12),
         "inputs": [],
     },
+    "collage-doc-long": {
+        "name": "Collage Documentary",
+        "kit_file": "collage-doc.js", "kit_global": "CD",
+        "size": (1920, 1080),
+        "fonts": [{"family": "PlayfairDisplay", "file": "PlayfairDisplay-600i.woff2", "weight": 600, "style": "italic"},
+                  {"family": "Cormorant", "file": "Cormorant-500i.woff2", "weight": 500, "style": "italic"},
+                  {"family": "Cormorant", "file": "Cormorant-600.woff2", "weight": 600}],
+        "background": "#e9e4d8",
+        "voice": "pt_michael", "speed": 1.08,
+        "voices": ["pt_michael", "pt_george", "pt_charles", "pt_paul", "pt_alba", "am_michael", "af_heart"],
+        "mood_pace": 0.4,
+        "wps": 2.7,
+        "tail": 1.0,
+        "bed": "studio_bed_doc", "bed_db": -15.0,
+        "foley": "collage",
+        "long": True,
+        "art_source": "archive",            # every picture from open archives (studio_collage), credited
+        "minutes": (3, 15),
+        "inputs": [],
+    },
 }
 
 

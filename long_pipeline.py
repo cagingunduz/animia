@@ -34,7 +34,7 @@ from jobs import job_store
 from motion_pipeline import BillingError
 from storybook_pipeline import R2_BUCKET, R2_PUBLIC_BASE, get_r2_client
 
-TEMPLATES = ("flat-explainer",)
+TEMPLATES = ("flat-explainer", "collage-doc-long")
 _running: set[str] = set()
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -130,7 +130,51 @@ PLAN_TOOL = {
 }
 
 
+_LINES = {"type": "array", "items": {"type": "object", "properties": {
+    "text": {"type": "string"}, "say": {"type": "string"}, "pause": {"type": "number"},
+    "mood": {"type": "string", "enum": ["neutral", "deadpan", "excited", "panic", "whisper", "confused", "sad", "angry", "warm"]}},
+    "required": ["text"]}}
+
+ARCHIVE_PLAN_TOOL = {
+    "name": "submit_plan",
+    "description": "Submit the video plan.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "the YouTube title (under 70 characters)"},
+            "description": {"type": "string", "description": "a 2-3 sentence YouTube description"},
+            "pictures": {"type": "array", "items": {"type": "object", "properties": {
+                "id": {"type": "string"}, "kind": {"type": "string", "enum": ["plate", "cutout", "document", "portrait"]},
+                "search": {"type": "string"}, "alts": {"type": "array", "items": {"type": "string"}},
+                "use": {"type": "string", "description": "what it shows in the story (one short sentence)"}},
+                "required": ["id", "kind", "search"]}},
+            "sections": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "the chapter title"},
+                "lines": _LINES,
+                "shots": {"type": "array", "description": "the picture track", "items": {"type": "object", "properties": {
+                    "line": {"type": "integer"}, "at": {"type": "string"},
+                    "show": {"type": "array", "items": {"type": "string"}, "description": "picture ids (1-3)"},
+                    "words": {"type": "string"}, "ring": {"type": "string"}, "action": {"type": "string", "description": "how they are placed / move"}},
+                    "required": ["line", "show"]}}},
+                "required": ["title", "lines", "shots"]}},
+        },
+        "required": ["title", "pictures", "sections"],
+    },
+}
+
+
 def plan_system(st: dict) -> str:
+    if st.get("art_source") == "archive":
+        return f"""You plan a long YouTube documentary in the {st['name']} style: the script (in chapters), the archive pictures
+and the picture track. The pictures are then found in open archives; an animator animates each chapter from your track.
+
+{st['plan_md']}
+
+THE LOOK:
+{st['style_md']}
+
+THE LINES: `text` is the caption form; `say` the spoken form only when it differs (numbers, symbols). `mood` sets the
+delivery; `pause` 0.2-0.6 s. Only true claims."""
     return f"""You plan a long YouTube video in the {st['name']} style: the script (in parts) and the shot plan. The art is
 generated from your place, cast and prop descriptions; an animator then animates each part from your shots.
 
@@ -187,13 +231,40 @@ def _clean_plan(res: dict, st: dict) -> dict:
             "places": places, "cast": cast, "props": props, "sections": sections}
 
 
+def _clean_archive_plan(res: dict) -> dict:
+    slug = long_art.slug
+    pics, seen = [], set()
+    for p in res.get("pictures") or []:
+        pid = slug(p.get("id") or "")
+        if not pid or pid in seen or not str(p.get("search") or "").strip():
+            continue
+        seen.add(pid)
+        pics.append({"id": pid, "kind": p.get("kind") if p.get("kind") in ("plate", "cutout", "document", "portrait") else "document",
+                     "search": str(p["search"]).strip()[:160], "alts": [str(a)[:160] for a in (p.get("alts") or [])][:2], "use": str(p.get("use") or "")[:200]})
+    sections = []
+    for k, sec in enumerate(res.get("sections") or []):
+        lines = [{"text": str(l.get("text") or "").strip()[:300], **({"say": str(l["say"])[:300]} if l.get("say") else {}),
+                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in sec.get("lines") or [] if str(l.get("text") or "").strip()]
+        if not lines:
+            continue
+        shots = [{"line": int(sh.get("line") or 0), "at": str(sh.get("at") or "")[:40], "show": [slug(x) for x in sh.get("show") or []][:3],
+                  "words": str(sh.get("words") or "")[:60], "ring": str(sh.get("ring") or "")[:40], "action": str(sh.get("action") or "")[:200],
+                  "place": slug((sh.get("show") or ["paper"])[0])} for sh in sec.get("shots") or []][:90]
+        sections.append({"id": f"p{k + 1}", "title": str(sec.get("title") or f"Chapter {k + 1}")[:80], "lines": lines, "shots": shots})
+    if not sections or not pics:
+        raise ValueError("the plan came back empty")
+    return {"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
+            "pictures": pics[:90], "places": [], "cast": [], "props": [], "sections": sections}
+
+
 async def _plan(st_: dict, s: dict):
     _step(s, "plan", "Writing the script and the shot plan", 0.02)
     words = round(s["minutes"] * 60 * st_.get("wps", 3.1))
     ask = (f"The topic: {s['topic'] or 'pick the best one yourself'}\nThe length: {s['minutes']} minutes (about {words} words), "
            f"in parts of 150-280 words.\n" + (f"Notes from the creator: {s['notes']}\n" if s.get("notes") else "") + "Write the plan.")
-    res = await _claude(s["id"], plan_system(st_), ask, 32000, "plan", PLAN_TOOL)
-    s["plan"] = _clean_plan(res, st_)
+    archive = st_.get("art_source") == "archive"
+    res = await _claude(s["id"], plan_system(st_), ask, 32000, "plan", ARCHIVE_PLAN_TOOL if archive else PLAN_TOOL)
+    s["plan"] = _clean_archive_plan(res) if archive else _clean_plan(res, st_)
     s["title"] = s["plan"]["title"]
     s.update(status="awaiting_approval", stage="review", message="Read the script and the shot plan, then approve", progress=0.08)
 
@@ -208,6 +279,37 @@ def _art_list(plan: dict) -> list[dict]:
                         "use": f"{c['id']} — {pose}"})
     out += [{"id": f"prop_{p['id']}", "kind": "prop", "prompt": long_art.object_prompt(p["desc"]), "aspect": "1:1", "use": p["desc"][:80]} for p in plan["props"]]
     return out
+
+
+async def _art_archive(s: dict, tmp: str):
+    """Every picture from the open archives (studio_collage: search + alternatives, a line-aware pick, cut-outs checked,
+    one archival grade, credits), uploaded to R2."""
+    import studio_collage
+    pics = s["plan"]["pictures"]; assets = s.setdefault("assets", {})
+    todo = [p for p in pics if p["id"] not in assets and p["id"] not in (s.get("art_missing") or [])]
+    said = {}
+    for sec in s["plan"]["sections"]:
+        for sh in sec["shots"]:
+            for x in sh["show"]:
+                said.setdefault(x, []).append(sec["lines"][min(len(sec["lines"]) - 1, sh["line"])]["text"])
+    async def pick(content):
+        return await _claude(s["id"], "You pick archive pictures for a documentary. Answer exactly in the format asked.", content, 120, "art_pick")
+    done = {"n": len(pics) - len(todo)}
+
+    async def one(p):
+        got = await studio_collage._one(dict(p), "", tmp, pick, " / ".join(said.get(p["id"], []))[:400])
+        if got:
+            url = await asyncio.to_thread(_put, s["id"], f"art/{p['id']}.webp", open(got["path"], "rb").read(), "image/webp")
+            assets[p["id"]] = {"url": url, "kind": got["kind"], "use": p.get("use", ""), **({"shows": got["shows"]} if got.get("shows") else {}),
+                               **({"credit": got["credit"]} if got.get("credit") else {}), **({"page": got["page"]} if got.get("page") else {})}
+        else:
+            s.setdefault("art_missing", []).append(p["id"])
+        done["n"] += 1
+        _step(s, "art", f"Finding the pictures ({done['n']}/{len(pics)})", 0.1 + 0.15 * done["n"] / len(pics))
+        save(s)
+    await asyncio.gather(*[one(p) for p in todo])
+    if len(assets) < max(4, len(pics) // 3):
+        raise RuntimeError("too few pictures were found in the archives: resume to search again")
 
 
 async def _art(s: dict):
@@ -262,6 +364,22 @@ def _part_style(st_: dict, voice: str | None) -> dict:
     if voice and voice in (st.get("voices") or []):
         st["voice"] = voice
     return st
+
+
+def _track_notes(sec: dict, timing: dict, assets: dict) -> str:
+    norm = lambda w: re.sub(r"[^a-z0-9]", "", str(w).lower())
+    rows = []
+    for sh in sec["shots"]:
+        i = max(0, min(len(timing["lines"]) - 1, int(sh.get("line") or 0)))
+        ln = timing["lines"][i]; when = ln["start"]
+        if sh.get("at"):
+            hit = next((w for w in ln["words"] if norm(w["w"]) == norm(str(sh["at"]).split()[0])), None)
+            if hit:
+                when = hit["s"]
+        show = [f'{x} ({assets[x].get("shows") or assets[x].get("use") or assets[x]["kind"]})' for x in sh["show"] if x in assets]
+        rows.append(f'{when:6.2f} s (line {i}, "{sh.get("at") or "start"}"): ' + (", ".join(show) if show else "NO PICTURE FOUND: keep the previous picture dimmed, or paper, with the big words")
+                    + (f' | words: {sh["words"]}' if sh.get("words") else "") + f' | ring: {sh.get("ring") or "none"}' + (f' | {sh["action"]}' if sh.get("action") else ""))
+    return "THE PICTURE TRACK (binding: each picture comes on screen at its time, the moment its word is spoken):\n" + "\n".join(rows)
 
 
 def _shot_notes(sec: dict, timing: dict) -> str:
@@ -347,16 +465,22 @@ async def _part(s: dict, st_: dict, k: int, tmp: str):
     # the pictures this part uses
     used = set()
     for sh in sec["shots"]:
+        used |= set(sh.get("show") or [])
         if sh.get("place") and sh["place"] != "headline":
             used.add(long_art.slug(sh["place"]))
         used |= {long_art.slug(str(c).replace(":", "_")) for c in sh.get("cast") or []}
         used |= {"prop_" + long_art.slug(p) for p in sh.get("props") or []}
     assets = {k2: v for k2, v in s["assets"].items() if k2 in used} or s["assets"]
     raws = dict(zip(assets, await asyncio.gather(*[_fetch(a["url"]) for a in assets.values()])))
-    timing["images"] = [{"id": i, "file": f"img/{i}.png", "kind": a["kind"], **({"boards": a["boards"]} if a.get("boards") else {}),
-                         **({"use": a["use"]} if a.get("use") else {})} for i, a in assets.items()]
-    bins = {f"img/{i}.png": base64.b64encode(r).decode() for i, r in raws.items()}
-    script = {"title": f'{s["plan"]["title"]} — part {k + 1}: {sec["title"]}', "visual_notes": _shot_notes(sec, timing), "lines": sec["lines"]}
+    ext = lambda a: "webp" if a["url"].endswith(".webp") else "png"
+    timing["images"] = [{"id": i, "file": f"img/{i}.{ext(a)}", "w": 0, "h": 0, "kind": a["kind"], **({"boards": a["boards"]} if a.get("boards") else {}),
+                         **({k2: a[k2] for k2 in ("use", "shows", "credit") if a.get(k2)})} for i, a in assets.items()]
+    for im, raw in zip(timing["images"], raws.values()):
+        from PIL import Image
+        im["w"], im["h"] = Image.open(io.BytesIO(raw)).size
+    bins = {im["file"]: base64.b64encode(raws[im["id"]]).decode() for im in timing["images"]}
+    notes = _track_notes(sec, timing, assets) if st.get("art_source") == "archive" else _shot_notes(sec, timing)
+    script = {"title": f'{s["plan"]["title"]} — part {k + 1}: {sec["title"]}', "visual_notes": notes, "lines": sec["lines"]}
 
     # film
     if not part.get("code"):
@@ -425,7 +549,11 @@ async def run(pid: str):
                 await _plan(st_, s); save(s); return
             if s["status"] != "producing":
                 return
-            await _art(s); save(s)
+            if st_.get("art_source") == "archive":
+                await _art_archive(s, tmp)
+            else:
+                await _art(s)
+            save(s)
             if not s.get("parts"):
                 s["parts"] = [{"id": sec["id"], "title": sec["title"], "status": "waiting"} for sec in s["plan"]["sections"]]
                 save(s)
