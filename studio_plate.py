@@ -27,7 +27,8 @@ def _enc(out: str) -> list[str]:
     return ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", str(FPS), "-g", str(FPS), out]
 
 
-def _segment(sh: dict, out: str):
+def _segment(sh: dict, out: str, W: int = W, H: int = H):
+    BAND = globals()["BAND"] if (W, H) == (1080, 1920) else H
     dur = round(sh["t1"] - sh["t0"], 4)
     n = max(1, round(dur * FPS))
     fit = sh.get("fit")
@@ -63,7 +64,7 @@ def _segment(sh: dict, out: str):
         _run(["-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:r={FPS}:d={dur + .2:.3f}", "-frames:v", str(n), *_enc(out)])
 
 
-def build(shots: list[dict], total: float, out: str, tmp: str) -> str:
+def build(shots: list[dict], total: float, out: str, tmp: str, size: tuple[int, int] = (W, H)) -> str:
     """The shots (sorted, gaps filled with black) -> one plate video of exactly `total` seconds."""
     shots = sorted([dict(s) for s in shots if s["t1"] > s["t0"]], key=lambda s: s["t0"])
     seq, t = [], 0.0
@@ -85,10 +86,10 @@ def build(shots: list[dict], total: float, out: str, tmp: str) -> str:
             continue
         p = os.path.join(tmp, f"seg{i:03d}.mp4")
         try:
-            _segment(s, p)
+            _segment(s, p, *size)
         except Exception as e:
             print(f"[plate] shot {i} failed ({e}); black instead")
-            _segment({**s, "kind": None}, p)
+            _segment({**s, "kind": None}, p, *size)
         paths.append(p)
     lst = os.path.join(tmp, "plate.txt")
     open(lst, "w").write("".join(f"file '{p}'\n" for p in paths))
@@ -102,9 +103,9 @@ def cut(plate: str, start: float, dur: float, out: str) -> str:
     return out
 
 
-def proxy(plate: str, out: str) -> str:
+def proxy(plate: str, out: str, size: tuple[int, int] = (540, 960)) -> str:
     """A small copy for the stills (review), same timing."""
-    _run(["-i", plate, "-vf", "scale=540:960", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-r", str(FPS), out])
+    _run(["-i", plate, "-vf", f"scale={size[0]}:{size[1]}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-r", str(FPS), out])
     return out
 
 

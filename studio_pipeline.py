@@ -303,11 +303,17 @@ async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | Non
             content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": f["jpeg"]}})
         content.append({"type": "text", "text": "Write film(K, T, c) for this reel."})
     if sheets:
+        imgs = timing.get("images") or []
         rows = "\n".join(f'- T.img.{im["id"]}: {im["kind"]}, {im["w"]}x{im["h"]} px' + (f' — shows: {im["shows"]}' if im.get("shows") else "") + (f' — {im["use"]}' if im.get("use") else "")
-                         + (f' (credit on screen: "{im["credit"]}")' if im.get("credit") else "") for im in timing["images"])
-        content = [{"type": "text", "text": _block(s, timing) + f"\n\nTHE PICTURES (T.img[id], already loaded; cut-outs have transparent backgrounds):\n{rows}"}]
+                         + (f' (credit on screen: "{im["credit"]}")' if im.get("credit") else "") for im in imgs)
+        head = _block(s, timing)
+        if imgs:
+            head += f"\n\nTHE PICTURES (T.img[id], already loaded; cut-outs have transparent backgrounds):\n{rows}"
+        if timing.get("shots"):
+            head += "\n\nT.shots (the plate under your canvas):\n" + json.dumps(timing["shots"], ensure_ascii=False)
+        content = [{"type": "text", "text": head}]
         for k, jpg in enumerate(sheets):
-            content.append({"type": "text", "text": f"Contact sheet {k + 1} (checkerboard = transparent):"})
+            content.append({"type": "text", "text": f"Contact sheet {k + 1}" + (" (checkerboard = transparent):" if imgs else " (one frame from the middle of each shot, in order):")})
             content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": jpg}})
         content.append({"type": "text", "text": "Write film(K, T, c) for this reel."})
     text = await _claude(job_id, system, content, 24000, "film", model=FILM_MODEL)

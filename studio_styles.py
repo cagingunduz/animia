@@ -172,6 +172,26 @@ STYLES: dict[str, dict] = {
         "minutes": (3, 15),
         "inputs": [],
     },
+    "doc-analysis": {
+        "name": "Documentary Analysis",
+        "kit_file": "doc-analysis.js", "kit_global": "DA",
+        "size": (1920, 1080),
+        "fonts": [{"family": "Inter", "file": f"Inter-{w}.woff2", "weight": w} for w in (500, 600, 700, 800, 900)]
+                 + [{"family": "PlayfairDisplay", "file": "PlayfairDisplay-600i.woff2", "weight": 600, "style": "italic"},
+                    {"family": "IBMPlexMono", "file": "IBMPlexMono-500.woff2", "weight": 500}],
+        "background": "#000",
+        "voice": "pt_george", "speed": 1.05,
+        "voices": ["pt_george", "pt_michael", "pt_charles", "pt_paul", "pt_alba", "am_michael"],
+        "mood_pace": 0.4,
+        "wps": 2.8,
+        "tail": 0.8,
+        "bed": "studio_bed_analysis", "bed_db": -12.0,
+        "foley": "flat",
+        "long": True,
+        "art_source": "mixed",              # layer A generated (long_art) + layer B open-archive footage, in a plate
+        "minutes": (3, 20),
+        "inputs": [],
+    },
 }
 
 
