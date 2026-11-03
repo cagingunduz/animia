@@ -483,8 +483,8 @@ async def run_studio_pipeline(job_id: str, p: dict):
             bins = studio_collage.binaries(got["pictures"])
             sheets = await asyncio.to_thread(studio_collage.sheet, got["pictures"])
             plan = studio_collage.scene_plan(got.get("scenes") or [], got["pictures"], timing["lines"])
-            s = {**s, "visual_notes": ("THE SCENE PLAN (binding: put exactly these pictures on screen while each line is spoken; "
-                                       "a ring only where it says, never anywhere else):\n" + plan
+            s = {**s, "visual_notes": ("THE PICTURE TRACK (binding: each picture comes on screen at the time listed, the moment its word "
+                                       "is spoken, and stays until the next entry; a ring only where it says, never anywhere else):\n" + plan
                                        + "\n\nTHE WRITER'S NOTES:\n" + str(s.get("visual_notes") or "-"))}
             _job(job_id)["sources"] = studio_collage.sources(got["pictures"])
             _job(job_id)["pictures"] = len(got["pictures"])

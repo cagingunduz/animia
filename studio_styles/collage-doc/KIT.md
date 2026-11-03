@@ -1,9 +1,10 @@
 THE KIT (K = window.CD): a hand-made documentary collage. Screen pixels: the frame is 1080 x 1920, (0, 0) top left,
 y DOWN. Draw every frame from scratch, back to front.
 
-THE SCENE PLAN in the notes is binding: while line i is spoken, show exactly the pictures it lists for line i (each one
-matches what the line says), its words, and a ring only if it names one. NO PICTURE = paper (or the previous plate,
-dimmed) with the big words; never fill a scene with an unrelated picture.
+THE PICTURE TRACK in the notes is binding: what the narrator says is what is on screen. Each entry gives a time (the
+moment its word is spoken: use T.w(i, 'word')), the pictures, the big words and a ring or none. Cut or bring the picture
+in at exactly that time and keep it until the next entry; a line with two entries changes picture mid-line. NO PICTURE
+FOUND = keep the previous picture dimmed (or paper) with the big words; never fill in with an unrelated picture.
 
 THE PICTURES: T.img[id] (already loaded; the list with sizes and a contact sheet comes with the script). Kinds:
 plate (a full-bleed photo of a place), cutout (transparent PNG: a person, an arm, an object), document (a flat
