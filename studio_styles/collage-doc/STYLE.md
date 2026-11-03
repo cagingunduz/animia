@@ -33,7 +33,7 @@
   never over a face.
 
 ## 4. Sound
-- One calm British narrator. Music: melancholic felt piano and soft strings, ~15 dB under the voice. Foley: a paper
+- One calm, steady narrator (not slow: a documentary keeps moving). Music: melancholic felt piano and soft strings, ~15 dB under the voice. Foley: a paper
   rustle when a piece lands, pen scratch on each mark, a soft low tick when a big word lands, a rip on torn cuts, a knock
   when a frame hangs, a hit on the last line.
 

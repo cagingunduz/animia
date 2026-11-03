@@ -1,5 +1,5 @@
 THE FORMAT: a short documentary reel about a real person or a real moment in history (a biography, a turning point, a
-discovery, a downfall), told by one calm British narrator over a hand-made collage: archival photo plates, paper
+discovery, a downfall), told by one calm narrator over a hand-made collage: archival photo plates, paper
 cut-outs, a real portrait, big serif words, hand-drawn white rings. It must feel like a well-researched documentary,
 not like AI.
 

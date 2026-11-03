@@ -122,8 +122,9 @@ STYLES: dict[str, dict] = {
                   {"family": "Cormorant", "file": "Cormorant-500i.woff2", "weight": 500, "style": "italic"},
                   {"family": "Cormorant", "file": "Cormorant-600.woff2", "weight": 600}],
         "background": "#e9e4d8",
-        "voice": "bm_george", "speed": 0.95,
-        "voices": ["bm_george", "bm_fable", "bm_lewis", "am_michael", "bf_emma", "af_heart"],
+        "voice": "am_michael", "speed": 1.1,
+        "voices": ["am_michael", "am_fenrir", "af_heart", "af_bella", "bf_emma", "bm_george"],
+        "mood_pace": 0.4,                   # moods change the pace only a little (a documentary keeps moving)
         "seconds": (20, 45),
         "tail": 1.8,
         "bed": "studio_bed_doc", "bed_db": -15.0,

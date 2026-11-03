@@ -2,7 +2,7 @@ THE KIT (K = window.CD): a hand-made documentary collage. Screen pixels: the fra
 y DOWN. Draw every frame from scratch, back to front.
 
 THE PICTURES: T.img[id] (already loaded; the list with sizes and a contact sheet comes with the script). Kinds:
-plate (a full-bleed photo of an empty place), cutout (transparent PNG: a person, an arm, an object), document (a flat
+plate (a full-bleed photo of a place), cutout (transparent PNG: a person, an arm, an object), document (a flat
 letter / paper / map, rectangular), portrait (a real portrait, rectangular; frame it, caption it with the credit).
 Use only ids from the list. Every K function skips a missing picture, so never test for them.
 
@@ -35,6 +35,8 @@ WORDS (Playfair Display italic; white with a soft shadow by default: pass color:
   (use it under the portrait; add the credit line under it, size 26).
 - K.measure(text, size, font) -> its width in px (to place a ring around a word).
 - K.scrim(ctx, { y, h: 420, alpha: .45 }) a soft dark band behind words on a busy photo.
+- K.credits(ctx, t, T.images, at, { y: 1760 }) the picture credits in small type: ALWAYS call it for the last 2.5 s
+  (at = T.end - 2.5), after the scenes and before K.finish (archive photos must be credited on screen).
 
 HAND-DRAWN MARKS (white pen, drawn on over `dur`; color / width optional)
 - K.ring(ctx, t, { x, y (centre), w, h, at, dur: .5, rot: -6, out }) a loose ring around a word or an object.
@@ -96,6 +98,7 @@ function film(K, T, c) {
         });
       }
       K.tear(ctx, t, cut[2]);               // one torn-paper cut; the others are hard cuts
+      K.credits(ctx, t, T.images, T.end - 2.5);
       K.finish(ctx, t, { fadeOut: [T.end - .5, T.end] });
     },
     cues: K.sounds([{ t: .1, type: 'paper' }, { t: clap, type: 'swing' }, { t: clap + .5, type: 'swing' },

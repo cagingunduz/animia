@@ -133,8 +133,9 @@ def _clean_lines(lines: list, st: dict) -> list[dict]:
             o["say"] = say
         # the mood: pace, the silence after the line, loudness; excited / angry end on '!' in the spoken form
         m = MOODS[mood]
-        o["speed"] = round(float(o.get("speed") or st.get("speed", 1.0)) * m["speed"], 3)
-        o["pause"] = round(max(0.08, min(1.4, o["pause"] + m["pause"])), 3)
+        k = float(st.get("mood_pace", 1.0))       # how much a mood may change the pace (1 = fully)
+        o["speed"] = round(float(o.get("speed") or st.get("speed", 1.0)) * (1 + (m["speed"] - 1) * k), 3)
+        o["pause"] = round(max(0.08, min(1.4, o["pause"] + m["pause"] * k)), 3)
         if m.get("gain", 1) != 1:
             o["gain"] = m["gain"]
         if m.get("bang") and not re.search(r"[!?]$", (o.get("say") or text)):

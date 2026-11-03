@@ -289,6 +289,18 @@ export function caption(ctx, t, text, at, o = {}) {
   ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 8; ctx.fillText(text, o.x ?? SW / 2, o.y ?? SH * .9); ctx.restore();
 }
 
+// the picture credits (archive photos under CC BY need them on screen): small lines over the last seconds
+// K.credits(ctx, t, T.images, at, { y: 1740, size: 24, color }) — draws nothing if no picture carries a credit
+export function credits(ctx, t, images, at, o = {}) {
+  if (t < at) return; const list = [...new Set((images || []).map(m => m.credit).filter(Boolean))]; if (!list.length) return;
+  const a = clamp(seg(t, at, at + .4)), size = o.size ?? 24, lines = [];
+  ctx.save(); ctx.font = FONT.light(size); let cur = 'Pictures: ';
+  for (const c of list) { const s = (cur.endsWith(': ') ? '' : ' · ') + c; if (ctx.measureText(cur + s).width > 960 && cur !== 'Pictures: ') { lines.push(cur); cur = c; } else cur += s; }
+  lines.push(cur); ctx.globalAlpha *= a * .85; ctx.textAlign = 'center'; ctx.fillStyle = o.color || C.white; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 6;
+  let y = (o.y ?? 1760) - (lines.length - 1) * size * 1.3; for (const l of lines.slice(-4)) { ctx.fillText(l, SW / 2, y); y += size * 1.3; }
+  ctx.restore();
+}
+
 // —— a torn-paper cut between scenes: call it LAST in the frame, around the cut time `at` ——
 // the torn sheet sweeps across (dur 0.5 s): the first half covers the old scene, the second half uncovers the new one
 export function tear(ctx, t, at, { dur = .5, dir = 'up', tone = 'light' } = {}) {
