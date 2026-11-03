@@ -71,7 +71,13 @@ def public(st: dict) -> dict:
     out["running"] = st["id"] in _running
     if st.get("status") in ("planning", "producing") and not out["running"]:
         out["status_note"] = "paused"          # the server restarted mid-way: resume continues from the last finished step
-    out["parts"] = [{k: v for k, v in p.items() if k not in ("code", "timing_url_internal")} for p in st.get("parts", [])]
+    parts = []
+    for p in st.get("parts", []):
+        q = {k: v for k, v in p.items() if k not in ("code", "spec", "foley", "timing")}
+        if p.get("timing"):
+            q["lines"] = [{"text": l["text"], "start": l["start"], "end": l["end"]} for l in p["timing"].get("lines", [])]
+        parts.append(q)
+    out["parts"] = parts
     return out
 
 
