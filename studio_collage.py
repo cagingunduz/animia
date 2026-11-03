@@ -85,8 +85,10 @@ give a `search`: 2 to 5 plain English words that an archive photo would be title
 letter handwriting", "Nikola Tesla portrait". Prefer subjects that were really photographed (places, buildings, objects,
 animals, the person's own photos and paintings); avoid scenes nobody photographed.
 - plate: a place or a texture to fill the frame (a street, a room, a building, a sky, a landscape, a sea).
-- cutout: ONE clear subject to be cut out of its photo (an animal, an object, a machine, a person standing): pick
-  searches where it is likely to be big and alone in the picture.
+- cutout: ONLY a simple, solid subject that archives photograph alone on a plain background (a hat, a sword, a
+  statue, a bust, a medal, a coin, a bottle, a book, a telephone, a bird, a single figure). Every cut-out is checked;
+  a fragment is replaced by the whole photo. Anything big or in context (a ship, a cannon in a battle, a building, a
+  crowd, a machine in a room) is a `document` (a photo print taped on the collage), not a cut-out.
 - document: a letter, a newspaper page, a patent drawing, a map, a ticket, a manuscript page.
 - portrait: the real person (a photograph or a painting of them).
 - Real photographs of real people are fine here (they are not invented). No modern stock-photo subjects.
@@ -403,6 +405,24 @@ async def _archive_one(p: dict, q: str, claude, said: str) -> dict | None:
             "shows": shows or src.get("title", "")[:120]}
 
 
+async def _cut_ok(cut: Image.Image, p: dict, claude) -> bool:
+    """Is the cut-out the WHOLE subject, recognisable on its own (not a fragment such as one wheel of a cannon)?"""
+    if not claude:
+        return True
+    im = cut.copy(); im.thumbnail((420, 420))
+    bg = Image.new("RGBA", im.size, (235, 230, 220, 255)); bg.alpha_composite(im)
+    b = io.BytesIO(); bg.convert("RGB").save(b, "JPEG", quality=80)
+    content = [{"type": "text", "text": f"This was cut out of an archive photo to show: {p['search']} ({p.get('use') or ''}). Is it the WHOLE "
+                                        "subject, clean and recognisable on its own by a viewer, not a fragment (e.g. one wheel of a "
+                                        "cannon, half a person, a piece of a building) and not a messy blob? Answer yes or no."},
+               {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(b.getvalue()).decode()}}]
+    try:
+        return (await claude(content)).strip().lower().startswith("y")
+    except Exception as e:
+        print(f"[collage] cut-out check failed: {e!r}")
+        return False
+
+
 async def _one(p: dict, look: str, tmp: str, claude, said: str = "") -> dict | None:
     async with _sem:
         try:
@@ -413,7 +433,16 @@ async def _one(p: dict, look: str, tmp: str, claude, said: str = "") -> dict | N
                     return None
                 img = _fit(got["img"], 1400 if p["kind"] == "plate" else 1100)
                 if p["kind"] == "cutout":
-                    img = await asyncio.to_thread(cut_out, img)
+                    try:
+                        cut = await asyncio.to_thread(cut_out, img)
+                        ok = await _cut_ok(cut, p, claude)
+                    except ValueError:
+                        cut, ok = None, False
+                    if ok:
+                        img = cut
+                    else:            # a fragment (a wheel instead of the cannon): show the whole photo as a taped print instead
+                        print(f"[collage] cut-out of {p['id']} is not clean: using the photo as a print")
+                        p = {**p, "kind": "document", "use": (p.get("use") or "") + " (shown as a whole photo print: tape it on the paper or a plate, do not treat it as a cut-out)"}
                 img = grade(img, .55 if p["kind"] == "portrait" else 0)
                 meta = {"credit": got["credit"], "page": got["page"], "source_title": got["title"], "licence": got["licence"], "shows": got["shows"]}
             elif p["kind"] == "portrait":

@@ -41,6 +41,9 @@
 ## 5. Mistakes to avoid
 - A picture that is not what the narrator is saying at that moment (a generic or loosely related photo). Every picture
   on screen illustrates the line being spoken, literally.
+- A cut-out floating over the middle of a busy photo, or at a size that makes no sense. A cut-out stands ON something
+  (the ground line of the plate, a table, the bottom edge) at a believable scale, or alone on paper; a photo print is
+  taped on the paper or over a dimmed plate.
 - A ring around nothing, around empty space, off the word it is meant for, or in a scene that has no ring in the plan.
 - A cartoon look: limbs that are not attached, flat clip-art, smooth floaty tweens. Use cut-outs with shadows and
   stepped movement.
