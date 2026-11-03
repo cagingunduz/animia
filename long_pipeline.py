@@ -34,7 +34,7 @@ from jobs import job_store
 from motion_pipeline import BillingError
 from storybook_pipeline import R2_BUCKET, R2_PUBLIC_BASE, get_r2_client
 
-TEMPLATES = ("flat-explainer", "collage-doc-long")
+TEMPLATES = ("flat-explainer", "collage-doc-long", "doc-analysis")
 _running: set[str] = set()
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -164,6 +164,18 @@ ARCHIVE_PLAN_TOOL = {
 
 
 def plan_system(st: dict) -> str:
+    if st.get("art_source") == "mixed":
+        return f"""You plan a long YouTube analysis documentary in the {st['name']} style: the script (in chapters) and, for every
+shot, its picture layer (A generated illustration, or B real archive footage / photo) and the typography over it. The
+pictures are then made or found; an animator adds the typography and the marks over them, chapter by chapter.
+
+{st['plan_md']}
+
+THE LOOK:
+{st['style_md']}
+
+THE LINES: `text` is the caption form; `say` the spoken form only when it differs (numbers, symbols). `mood` sets the
+delivery; `pause` 0.2-0.5 s. Only true claims."""
     if st.get("art_source") == "archive":
         return f"""You plan a long YouTube documentary in the {st['name']} style: the script (in chapters), the archive pictures
 and the picture track. The pictures are then found in open archives; an animator animates each chapter from your track.
@@ -262,9 +274,10 @@ async def _plan(st_: dict, s: dict):
     words = round(s["minutes"] * 60 * st_.get("wps", 3.1))
     ask = (f"The topic: {s['topic'] or 'pick the best one yourself'}\nThe length: {s['minutes']} minutes (about {words} words), "
            f"in parts of 150-280 words.\n" + (f"Notes from the creator: {s['notes']}\n" if s.get("notes") else "") + "Write the plan.")
-    archive = st_.get("art_source") == "archive"
-    res = await _claude(s["id"], plan_system(st_), ask, 32000, "plan", ARCHIVE_PLAN_TOOL if archive else PLAN_TOOL)
-    s["plan"] = _clean_archive_plan(res) if archive else _clean_plan(res, st_)
+    src = st_.get("art_source")
+    tool = ARCHIVE_PLAN_TOOL if src == "archive" else MIXED_PLAN_TOOL if src == "mixed" else PLAN_TOOL
+    res = await _claude(s["id"], plan_system(st_), ask, 32000, "plan", tool)
+    s["plan"] = _clean_archive_plan(res) if src == "archive" else _clean_mixed_plan(res) if src == "mixed" else _clean_plan(res, st_)
     s["title"] = s["plan"]["title"]
     s.update(status="awaiting_approval", stage="review", message="Read the script and the shot plan, then approve", progress=0.08)
 
@@ -463,6 +476,9 @@ async def _part(s: dict, st_: dict, k: int, tmp: str):
         open(wav, "wb").write(await _fetch(part["voice_url"]))
 
     # the pictures this part uses
+    if st.get("art_source") == "mixed":
+        return await _part_mixed(s, st, k, sec, part, timing, wav, d, base, span, n)
+
     used = set()
     for sh in sec["shots"]:
         used |= set(sh.get("show") or [])
@@ -551,6 +567,8 @@ async def run(pid: str):
                 return
             if st_.get("art_source") == "archive":
                 await _art_archive(s, tmp)
+            elif st_.get("art_source") == "mixed":
+                await _art_mixed(s, tmp)
             else:
                 await _art(s)
             save(s)
@@ -605,3 +623,252 @@ def update_plan(s: dict, edits: dict) -> dict:
                 sec["lines"][i].pop("say", None)
     save(s)
     return s
+
+
+
+# ─────────────────────────── documentary analysis: layer A (generated) + layer B (archive footage) ───────────────────────────
+
+LOCK = ("Cinematic editorial illustration for a documentary analysis video, muted desaturated palette (graphite, slate blue, "
+        "warm grey) with one warm accent (signal yellow), soft directional light from the upper left, subtle film grain, clean "
+        "composition with negative space on one side for on-screen text, 16:9. ")
+NEG = (" No text, no letters, no numbers, no logos, no watermark, no UI, no frames or borders, no collage, no photorealistic "
+       "news-photo look, no identifiable real person's face (people as silhouettes or from behind).")
+
+MIXED_PLAN_TOOL = {
+    "name": "submit_plan",
+    "description": "Submit the video plan.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "the YouTube title (under 70 characters)"},
+            "description": {"type": "string", "description": "a 2-3 sentence YouTube description"},
+            "sections": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "the chapter title"},
+                "lines": _LINES,
+                "shots": {"type": "array", "description": "a new picture every 3-6 s, in order", "items": {"type": "object", "properties": {
+                    "line": {"type": "integer"}, "at": {"type": "string", "description": "the word the shot starts on"},
+                    "layer": {"type": "string", "enum": ["A", "B"]},
+                    "prompt": {"type": "string", "description": "layer A: the illustration's subject and composition (the style lock is added)"},
+                    "search": {"type": "string", "description": "layer B: 2-5 words an archive would title it with"},
+                    "alts": {"type": "array", "items": {"type": "string"}},
+                    "kind": {"type": "string", "enum": ["video", "image"], "description": "layer B: video when motion matters"},
+                    "lower": {"type": "object", "properties": {"title": {"type": "string"}, "sub": {"type": "string"}}, "description": "layer B: place / date for the lower third"},
+                    "overlay": {"type": "string", "description": "the typography and marks over this shot (title card / counter / quote / compare / timeline / ring / map pins), with their words"}},
+                    "required": ["line", "layer"]}}},
+                "required": ["title", "lines", "shots"]}},
+        },
+        "required": ["title", "sections"],
+    },
+}
+
+
+def _clean_mixed_plan(res: dict) -> dict:
+    sections = []
+    for k, sec in enumerate(res.get("sections") or []):
+        lines = [{"text": str(l.get("text") or "").strip()[:320], **({"say": str(l["say"])[:320]} if l.get("say") else {}),
+                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in sec.get("lines") or [] if str(l.get("text") or "").strip()]
+        if not lines:
+            continue
+        sid = f"p{k + 1}"; shots = []
+        for j, sh in enumerate(sec.get("shots") or []):
+            layer = "B" if sh.get("layer") == "B" and str(sh.get("search") or "").strip() else "A"
+            prompt = str(sh.get("prompt") or sh.get("search") or "").strip()[:600]
+            if not prompt:
+                continue
+            shots.append({"id": f"{sid}_s{j + 1}", "line": max(0, min(len(lines) - 1, int(sh.get("line") or 0))), "at": str(sh.get("at") or "")[:40],
+                          "layer": layer, "prompt": prompt, "search": str(sh.get("search") or "")[:160], "alts": [str(a)[:160] for a in (sh.get("alts") or [])][:2],
+                          "kind": sh.get("kind") if sh.get("kind") in ("video", "image") else "image",
+                          "lower": {kk: str(v)[:80] for kk, v in (sh.get("lower") or {}).items() if kk in ("title", "sub") and v} or None,
+                          "overlay": str(sh.get("overlay") or "")[:300], "place": f"{sid}_s{j + 1}", "action": str(sh.get("overlay") or "")[:200]})
+        if not shots:
+            shots = [{"id": f"{sid}_s1", "line": 0, "at": "", "layer": "A", "prompt": sec.get("title") or "an abstract establishing image",
+                      "search": "", "alts": [], "kind": "image", "lower": None, "overlay": "", "place": f"{sid}_s1", "action": ""}]
+        sections.append({"id": sid, "title": str(sec.get("title") or f"Chapter {k + 1}")[:80], "lines": lines, "shots": shots[:90]})
+    if not sections:
+        raise ValueError("the plan came back empty")
+    return {"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
+            "places": [], "cast": [], "props": [], "sections": sections}
+
+
+async def _pick_footage(s: dict, sh: dict, said: str, cands: list) -> dict | None:
+    import studio_media
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        thumbs = await asyncio.gather(*[studio_media.thumb(c, x) for x in cands])
+    pairs = [(x, th) for x, th in zip(cands, thumbs) if th]
+    if not pairs:
+        return None
+    from PIL import Image
+    content = [{"type": "text", "text": f"A documentary needs real archive {sh['kind']} of: {sh['search']}.\nWhile it is on screen the narrator says: {said}\n"
+                                        "Pick the candidate that CLEARLY shows exactly that, so the viewer sees what is said; no watermark, no "
+                                        "big text, no collage. If none does, answer -1.\nAnswer on one line: the number | what it actually shows (under 15 words)."}]
+    for i, (x, th) in enumerate(pairs):
+        im = Image.open(io.BytesIO(th)).convert("RGB"); im.thumbnail((320, 320)); b = io.BytesIO(); im.save(b, "JPEG", quality=78)
+        content += [{"type": "text", "text": f"{i}: {x.get('title', '')[:80]}"}, {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(b.getvalue()).decode()}}]
+    try:
+        ans = await _claude(s["id"], "You pick archive footage for a documentary. Answer exactly in the format asked.", content, 120, "footage_pick")
+        m = re.search(r"-?\d+", ans); i = int(m.group()) if m else -1
+        if 0 <= i < len(pairs):
+            return {**pairs[i][0], "shows": ans.split("|", 1)[1].strip()[:120] if "|" in ans else pairs[i][0].get("title", "")[:120]}
+    except BillingError:
+        raise
+    except Exception as e:
+        print(f"[long] footage pick failed: {e!r}")
+    return None
+
+
+async def _footage(s: dict, sh: dict, said: str, tmp: str) -> dict | None:
+    """Layer B: the search and its alternatives in open archives; the picked clip trimmed to 10 s (or the photo), graded later in the plate."""
+    import studio_media
+    for q in [sh["search"], *sh.get("alts", [])]:
+        cands = []
+        for kind in ([sh["kind"], "image"] if sh["kind"] == "video" else ["image"]):
+            try:
+                cands = [c for c in await studio_media.search(q, kind=kind, n=6) if (c.get("w") or 1000) >= 480]
+            except Exception as e:
+                print(f"[long] archive search failed: {e!r}")
+            if cands:
+                break
+        if not cands:
+            continue
+        got = await _pick_footage(s, sh, said, cands)
+        if not got:
+            continue
+        kind = got.get("kind") or "image"
+        try:
+            if kind == "video":
+                raw = os.path.join(tmp, f"{sh['id']}_src"); await studio_media.fetch(got["url"], raw)
+                out = os.path.join(tmp, f"{sh['id']}.mp4")
+                dur = studio_media.probe(raw).get("duration") or 10
+                start = max(0.0, min(dur * .15, dur - 10))
+                r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-i", raw, "-t", "10", "-an", "-vf", "scale=1280:-2",
+                                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", out], capture_output=True, text=True)
+                if r.returncode != 0:
+                    continue
+                url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.mp4", open(out, "rb").read(), "video/mp4")
+            else:
+                async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+                    r = await studio_media._get(c, got.get("thumb", "").replace("/500px-", "/1280px-") if got.get("source") == "commons" and (got.get("w") or 0) > 1280 else got["url"])
+                    if r.status_code != 200:
+                        r = await studio_media._get(c, got["url"])
+                    r.raise_for_status()
+                from PIL import Image, ImageOps
+                im = ImageOps.exif_transpose(Image.open(io.BytesIO(r.content))).convert("RGB"); im.thumbnail((2200, 2200)); b = io.BytesIO(); im.save(b, "JPEG", quality=88)
+                url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.jpg", b.getvalue(), "image/jpeg")
+            return {"url": url, "kind": kind, "layer": "B", "shows": got.get("shows", ""), "credit": got.get("credit"), "page": got.get("page")}
+        except Exception as e:
+            print(f"[long] footage {sh['id']} failed: {e!r}")
+    return None
+
+
+async def _art_mixed(s: dict, tmp: str):
+    """Every shot's picture: layer B from the open archives (falls back to a layer-A illustration of the same subject,
+    never a wrong real picture), layer A generated with the style lock."""
+    assets = s.setdefault("assets", {})
+    shots = [(sec, sh) for sec in s["plan"]["sections"] for sh in sec["shots"]]
+    todo = [(sec, sh) for sec, sh in shots if sh["id"] not in assets]
+    done = {"n": len(shots) - len(todo)}
+    sem = asyncio.Semaphore(4)
+
+    async def one(sec, sh):
+        async with sem:
+            said = sec["lines"][sh["line"]]["text"]
+            got = None
+            if sh["layer"] == "B":
+                got = await _footage(s, sh, said, tmp)
+            if not got:
+                try:
+                    prompt = LOCK + (sh["prompt"] if sh["layer"] == "A" else f"An illustration of {sh['prompt']}") + "." + NEG
+                    raw = await long_art.make(prompt, "16:9")
+                    url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.png", raw, "image/png")
+                    got = {"url": url, "kind": "image", "layer": "A", "shows": sh["prompt"][:120]}
+                except Exception as e:
+                    print(f"[long] art {sh['id']} failed: {e!r}")
+                    s.setdefault("art_errors", {})[sh["id"]] = str(e)[:200]
+            if got:
+                assets[sh["id"]] = got
+            done["n"] += 1
+            _step(s, "art", f"Finding the footage and drawing the scenes ({done['n']}/{len(shots)})", 0.1 + 0.15 * done["n"] / len(shots))
+            save(s)
+    await asyncio.gather(*[one(sec, sh) for sec, sh in todo])
+    if len(assets) < len(shots) * .6:
+        raise RuntimeError("too many shots have no picture yet: resume to try them again")
+
+
+def _shot_times(sec: dict, timing: dict) -> list[tuple[float, float]]:
+    norm = lambda w: re.sub(r"[^a-z0-9]", "", str(w).lower())
+    starts = []
+    for sh in sec["shots"]:
+        ln = timing["lines"][max(0, min(len(timing["lines"]) - 1, sh["line"]))]; t = ln["start"]
+        if sh.get("at"):
+            hit = next((w for w in ln["words"] if norm(w["w"]) == norm(str(sh["at"]).split()[0])), None)
+            if hit:
+                t = hit["s"]
+        starts.append(t)
+    fixed, last = [], 0.0
+    for i, t in enumerate(starts):        # in order, at least 1.2 s each, the first from 0
+        t = 0.0 if i == 0 else max(t, last + 1.2)
+        fixed.append(t); last = t
+    return [(a, fixed[i + 1] if i + 1 < len(fixed) else timing["end"]) for i, a in enumerate(fixed)]
+
+
+async def _part_mixed(s, st, k, sec, part, timing, wav, d, base, span, n):
+    import studio_pipeline as SP
+    import studio_plate
+    times = _shot_times(sec, timing)
+    shots, plate_shots = [], []
+    for sh, (t0, t1) in zip(sec["shots"], times):
+        a = s["assets"].get(sh["id"])
+        if t1 - t0 < .05:
+            continue
+        if a:
+            ext = a["url"].rsplit(".", 1)[-1]
+            path = os.path.join(d, f"{sh['id']}.{ext}")
+            if not os.path.exists(path):
+                open(path, "wb").write(await _fetch(a["url"]))
+            plate_shots.append({"t0": t0, "t1": t1, "kind": a["kind"], "path": path, "src": 0.0, "fit": "full"})
+        shots.append({"t0": round(t0, 3), "t1": round(t1, 3), "layer": (a or {}).get("layer", "A"), "kind": (a or {}).get("kind"),
+                      "shows": (a or {}).get("shows", ""), "credit": (a or {}).get("credit"), "lower": sh.get("lower"), "overlay": sh.get("overlay", "")})
+    timing["shots"] = shots
+    plate = os.path.join(d, "plate.mp4")
+    if not os.path.exists(plate):
+        _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: cutting the footage", base + span * .12)
+        await asyncio.to_thread(studio_plate.build, plate_shots, timing["end"], plate, d, (1920, 1080))
+    rows = "\n".join(f'{x["t0"]:6.2f}-{x["t1"]:6.2f} s · layer {x["layer"]} {x["kind"] or "-"} · {x["shows"]}' + (f' · lower: {x["lower"]}' if x.get("lower") else "")
+                     + (f' · credit: {x["credit"]}' if x.get("credit") else "") + (f' · OVERLAY: {x["overlay"]}' if x.get("overlay") else "") for x in shots)
+    script = {"title": f'{s["plan"]["title"]} — part {k + 1}: {sec["title"]}', "lines": sec["lines"],
+              "visual_notes": "THE SHOTS (already playing in the plate under your canvas; binding): add each shot's overlay over it, on its words.\n" + rows}
+
+    if not part.get("code"):
+        _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: animating", base + span * .2)
+        sheet = os.path.join(d, "sheet.jpg")
+        mids = [round((x["t0"] + x["t1"]) / 2, 2) for x in shots][:24]
+        sel = "+".join(f"between(t\\,{m - .02:.2f}\\,{m + .02:.2f})" for m in mids)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", plate, "-vf", f"select='{sel}',scale=480:270,tile=4x{max(1, (len(mids) + 3) // 4)}",
+                        "-frames:v", "1", "-vsync", "vfr", sheet], capture_output=True)
+        sheets = [base64.b64encode(open(sheet, "rb").read()).decode()] if os.path.exists(sheet) else None
+        code, spec, foley = await SP._film(s["id"], st, script, timing, None, None, sheets)
+        try:
+            _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: checking the frames", base + span * .45)
+            proxy = await asyncio.to_thread(studio_plate.proxy, plate, os.path.join(d, "proxy.mp4"), (960, 540))
+            code2, extra = await SP._review(s["id"], st, script, timing, code, proxy, None)
+            if extra is not None:
+                code, (spec, foley) = code2, extra
+        except BillingError:
+            raise
+        except Exception as e:
+            print(f"[long] review skipped: {e!r}")
+        part.update(code=code, spec=spec, foley=foley)
+        save(s)
+
+    if not part.get("video_url"):
+        _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: rendering", base + span * .55)
+        video = await SP._render(s["id"], st, part["code"], timing, d, plate, None)
+        _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: mixing the sound", base + span * .9)
+        final = await SP._sound(s["id"], st, video, wav, timing, part.get("spec") or {}, part.get("foley") or [], d)
+        part["video_url"] = await asyncio.to_thread(_put, s["id"], f"part{k + 1}/part.mp4", open(final, "rb").read(), "video/mp4")
+        part["status"] = "done"
+        if k == 0 and not s.get("thumbnail_url"):
+            th = os.path.join(d, "thumb.jpg")
+            if subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "2.0", "-i", final, "-frames:v", "1", "-q:v", "3", th]).returncode == 0:
+                s["thumbnail_url"] = await asyncio.to_thread(_put, s["id"], "thumb.jpg", open(th, "rb").read(), "image/jpeg")
+        save(s)
