@@ -186,7 +186,7 @@ async def _write(job_id: str, st: dict, p: dict, media: dict | None = None) -> d
     lo, hi = st["seconds"]
     secs = max(lo, min(hi, int(p.get("seconds") or (lo + hi) // 2)))
     ask = [f"The topic: {p['topic'].strip()}" if (p.get("topic") or "").strip() else "No topic given: pick the best one for this style yourself."]
-    ask.append(f"The length: about {secs} seconds of narration (about {round(secs * 2.4)} words).")
+    ask.append(f"The length: about {secs} seconds of narration (about {round(secs * st.get('wps', 2.4))} words).")
     if (p.get("_opts") or {}).get("audience"):
         ask.append(f"The audience: {p['_opts']['audience']}")
     content = "\n".join(ask) + "\n\nWrite it, then submit the script."

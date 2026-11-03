@@ -16,8 +16,9 @@
    push on every scene; nothing is ever still.
 
 ## 2. Scenes
-- ONE clear idea per line (or per two lines). Scale and contrast tell the story: a tiny man under two giant clapping
-  hands, a tiny piano under a giant ear trumpet, a full hall seen from the stage behind one figure.
+- ONE clear idea per line (or per two lines). Scale and contrast tell the story: something tiny under something huge,
+  a place seen from an unusual point of view behind one figure, a document with one phrase ringed. Invent fresh scenes
+  for every reel.
 - A scene = a ground (a photo plate full-bleed, or the paper / dark paper) + 1-3 pieces + the line's word(s) + maybe a mark.
 - The real portrait appears ONCE, at the reveal or the payoff, in a frame, with a small caption (name and dates). Before
   that, the person is only seen from behind, far away or as a silhouette.

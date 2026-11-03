@@ -41,17 +41,23 @@ def _trim(a: np.ndarray) -> np.ndarray:
 async def speak(lines: list[dict], speed: float, progress=None) -> tuple[np.ndarray, list[dict]]:
     """lines -> (mono float32 audio at 24 kHz, spans [{i, start, end}]). Lines are spoken one by one with their pause.
     progress(stage, i, n) is called with 'model' while the voice model loads, then 'line' before each line."""
-    if progress and yard_voice._kokoro is None:
+    import pocket_voice
+    pocket = any(pocket_voice.is_pocket(ln.get("voice")) for ln in lines)
+    kokoro = any(not pocket_voice.is_pocket(ln.get("voice")) for ln in lines)
+    if progress and ((kokoro and yard_voice._kokoro is None) or (pocket and not pocket_voice.loaded())):
         progress("model", 0, len(lines))
-    k = await yard_voice._model()
+    k = await yard_voice._model() if kokoro else None
     out, spans, t = [np.zeros(int(LEAD * SR), dtype=np.float32)], [], LEAD
     for i, ln in enumerate(lines):
         if progress:
             progress("line", i + 1, len(lines))
-        voice = ln.get("voice") if ln.get("voice") in VOICES else NARRATOR
         text = (ln.get("say") or ln["text"]).strip()
-        lang = "en-gb" if voice.startswith("b") else "en-us"      # British voices with British pronunciation
-        a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=float(ln.get("speed") or speed), lang=lang)
+        if pocket_voice.is_pocket(ln.get("voice")):       # Kyutai Pocket TTS: the speed is a tempo change (pitch kept)
+            a = await asyncio.to_thread(pocket_voice.say, text, ln["voice"], float(ln.get("speed") or speed))
+        else:
+            voice = ln.get("voice") if ln.get("voice") in VOICES else NARRATOR
+            lang = "en-gb" if voice.startswith("b") else "en-us"      # British voices with British pronunciation
+            a, _ = await asyncio.to_thread(k.create, text, voice=voice, speed=float(ln.get("speed") or speed), lang=lang)
         a = _trim(np.asarray(a, dtype=np.float32))
         if ln.get("gain"):                                  # a mood's loudness (whisper softer, angry louder)
             a = np.clip(a * float(ln["gain"]), -1, 1).astype(np.float32)

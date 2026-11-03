@@ -1,32 +1,35 @@
-THE FORMAT: a short documentary reel about a real person or a real moment in history (a biography, a turning point, a
-discovery, a downfall), told by one calm narrator over a hand-made collage: archival photo plates, paper
-cut-outs, a real portrait, big serif words, hand-drawn white rings. It must feel like a well-researched documentary,
-not like AI.
+THE FORMAT: a short documentary reel about a real person, a real event or a real moment in history, told by one calm
+narrator over a hand-made collage: archival photo plates, paper cut-outs, a real portrait, big serif words, hand-drawn
+white rings. It must feel like a well-researched documentary, not like AI.
 
-PICK THE STORY (if the topic is a person, find the one story in their life that works in under 40 seconds):
-- a surprising start (the hook, under 3 s: the most striking true fact, a contradiction, a scene),
-- a twist in the middle (what nobody expects),
-- an ending that pays off the start (a callback, an irony, a quiet fact that lands).
-  e.g. Beethoven: "The greatest applause of his life made no sound." -> he could barely hear by the Ninth -> he had to be
-  turned around to see the crowd clapping.
+TELL THE STORY THE USER ASKED FOR, AT THE SCOPE THEY ASKED
+- "X's life" / just a name = their WHOLE life, told as a story: where they came from, what made them, the rise, the
+  turning point, the cost, how it ended and why it still matters. Pick the 6-10 moments that tell that arc best,
+  including at least two most viewers don't know.
+- A specific moment / question / angle = exactly that, in depth.
+- Never swap the user's topic for the single most famous anecdote about that person, and never reuse a story from
+  these notes or from any example: every reel is researched fresh.
+- The title says what the reel is about in the user's terms (e.g. "The Life of Nikola Tesla"), not a clever new angle.
+
+THE SHAPE: a surprising first line (the hook, under 3 s: a striking true fact, a contradiction, a scene) -> the story
+in order, each line one concrete moment -> a twist or turning point in the middle -> an ending that pays off the
+start (a callback, an irony, a quiet fact that lands).
 
 RULES
-- 6-9 short lines, 45-75 words (20-35 seconds). Lines of 3-12 words; some of 2-4 words. Short is better: the best one
-  was 51 words.
+- The length is given in the brief: write for it (about 2.4 words per second; 45 s is about 105 words). Lines of
+  3-14 words; some of 2-4 words. One scene per line: 8-14 lines for 40-45 s. Keep it moving: nothing filler, no
+  repeated idea, so the viewer never gets bored.
 - TRUE. Names, dates, numbers and quotes only if they are well established; if sources disagree, say it the careful way
-  ("could barely hear", "is said to have"). No invented quotes. The script is fact-checked before it is recorded.
-- Concrete and visual: every line must have ONE clear picture (a place, an object, a gesture, a document). Avoid
-  abstract lines nobody can show.
+  ("is said to have", "by some accounts"). No invented quotes. The script is fact-checked before it is recorded.
+- Concrete and visual: every line has ONE clear picture (a place, an object, a gesture, a document, a machine).
+  Avoid abstract lines nobody can show.
 - Spoken English: easy to hear on the first listen. Avoid an "it" / "this" whose meaning is unclear when heard. No
   clichés ("little did he know", "changed the world forever"), no questions to the viewer, no hashtags.
-- The person's name early (line 1 or 2) and the dates in the visual notes (for the portrait caption).
-- Moods: mostly neutral / warm; sad or whisper for the low point; deadpan for an irony. pause 0.25-0.6 (let the
-  big lines breathe).
+- The person's name early (line 1 or 2) and their dates in the visual notes (for the portrait caption).
+- Moods: mostly neutral / warm; sad or whisper for the low point; deadpan for an irony. pause 0.2-0.5.
 - If the user gave an audience, pick the angle for them, but keep the documentary voice (no "you").
 
-visual_notes: per line ONE clear scene idea, made of the pieces the collage can show: a plate (an empty place), cut-outs
-placed on it (people from behind, hands / arms, objects), a document, the real portrait (once, at the payoff or the
-reveal), the big word(s) of the line and the word that gets a hand-drawn ring. e.g.
-- "made no sound" -> the concert hall seen from the stage, full of people clapping, the composer from behind; words "no sound".
-- "a letter he never sent" -> the letter taped on dark paper; a white ring drawn around "never sent".
-- "He kept composing" -> a tiny piano under a giant ear trumpet on paper; word "composing".
+visual_notes: per line ONE clear scene idea made of the pieces the collage can show: a plate (a place), cut-outs placed
+on it (people, hands, animals, objects, machines), a document, the real portrait (once, at the reveal or the payoff),
+the big word(s) of the line and the word that gets a hand-drawn ring. Use scale and contrast (something tiny under
+something huge), a place seen from an unusual point of view, a document with one phrase ringed.
