@@ -135,6 +135,23 @@ STYLES: dict[str, dict] = {
         "options": ["voice", "audience"],
         "inputs": [],
     },
+    # long videos (16:9), made by long_pipeline: a plan you approve, then parts made one by one, resumable
+    "flat-explainer": {
+        "name": "Flat Explainer",
+        "kit_file": "flat-explainer.js", "kit_global": "FX",
+        "size": (1920, 1080),
+        "fonts": [{"family": "Montserrat", "file": "Montserrat-800.woff2", "weight": 800}],
+        "background": "#e8dcc5",
+        "voice": "pt_michael", "speed": 1.12,
+        "voices": ["pt_michael", "pt_george", "pt_charles", "pt_paul", "pt_alba", "am_michael", "af_heart"],
+        "wps": 3.1,
+        "tail": 0.6,
+        "bed": "studio_bed_flat", "bed_db": -10.5,
+        "foley": "flat",
+        "long": True,
+        "minutes": (2, 12),
+        "inputs": [],
+    },
 }
 
 
@@ -146,4 +163,5 @@ def style(key: str) -> dict:
     s["style_md"] = _read(key, "STYLE.md")
     s["kit_md"] = _read(key, "KIT.md")
     s["writer_md"] = _read(key, "WRITER.md")
+    s["plan_md"] = _read(key, "PLAN.md")
     return s
