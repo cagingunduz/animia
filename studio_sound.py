@@ -232,8 +232,8 @@ class _Synth:
             x[:n] += self.bp(self.rng.standard_normal(n), 800, 5000) * np.exp(-t(.03) / .005) * .25
             return x
         if ty == "tear":        # paper torn across
-            dd = d or .45; n = self.rng.standard_normal(int(dd * SR)); crk = (self.rng.random(int(dd * SR)) < .012) * self.rng.standard_normal(int(dd * SR)) * 3
-            return self.bp(n * .5 + crk, 900, 9000) * np.sin(np.pi * t(dd) / dd) ** .7 * .35
+            dd = d or .45; n = self.rng.standard_normal(int(dd * SR))     # a soft, smooth rip (no crackle spikes)
+            return self.bp(n, 700, 5000) * np.sin(np.pi * t(dd) / dd) ** 1.2 * .18
         if ty == "frame":       # a frame knocks the wall / a photo drops
             return self.ring([70, 140, 420], [.15, .08, .03], [.9, .35, .15], .5) * .7
         if ty == "swing":

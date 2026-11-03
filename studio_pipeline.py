@@ -303,7 +303,7 @@ async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | Non
             content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": f["jpeg"]}})
         content.append({"type": "text", "text": "Write film(K, T, c) for this reel."})
     if sheets:
-        rows = "\n".join(f'- T.img.{im["id"]}: {im["kind"]}, {im["w"]}x{im["h"]} px' + (f' — {im["use"]}' if im.get("use") else "")
+        rows = "\n".join(f'- T.img.{im["id"]}: {im["kind"]}, {im["w"]}x{im["h"]} px' + (f' — shows: {im["shows"]}' if im.get("shows") else "") + (f' — {im["use"]}' if im.get("use") else "")
                          + (f' (credit on screen: "{im["credit"]}")' if im.get("credit") else "") for im in timing["images"])
         content = [{"type": "text", "text": _block(s, timing) + f"\n\nTHE PICTURES (T.img[id], already loaded; cut-outs have transparent backgrounds):\n{rows}"}]
         for k, jpg in enumerate(sheets):
@@ -455,7 +455,7 @@ async def run_studio_pipeline(job_id: str, p: dict):
                     _job(job_id)["message"] = f"Making the pictures ({n}/{of})"
             tool = lambda system, content, mt, role, tl: _claude(job_id, system, content, mt, role, tool=tl)
             async def look(content):
-                return await _claude(job_id, "You pick pictures. Answer with a number only.", content, 50, "art_pick")
+                return await _claude(job_id, "You pick archive pictures for a documentary. Answer exactly in the format asked.", content, 120, "art_pick")
             art = asyncio.create_task(studio_collage.make(job_id, tool, look, st, s, tmp, progress=pic_progress))
 
         _stage(job_id, "voice", 2, "Recording the narrator")
@@ -482,6 +482,10 @@ async def run_studio_pipeline(job_id: str, p: dict):
             timing["images"] = studio_collage.public(got["pictures"])
             bins = studio_collage.binaries(got["pictures"])
             sheets = await asyncio.to_thread(studio_collage.sheet, got["pictures"])
+            plan = studio_collage.scene_plan(got.get("scenes") or [], got["pictures"], timing["lines"])
+            s = {**s, "visual_notes": ("THE SCENE PLAN (binding: put exactly these pictures on screen while each line is spoken; "
+                                       "a ring only where it says, never anywhere else):\n" + plan
+                                       + "\n\nTHE WRITER'S NOTES:\n" + str(s.get("visual_notes") or "-"))}
             _job(job_id)["sources"] = studio_collage.sources(got["pictures"])
             _job(job_id)["pictures"] = len(got["pictures"])
 

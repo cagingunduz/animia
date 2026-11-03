@@ -35,7 +35,12 @@ def _trim(a: np.ndarray) -> np.ndarray:
     idx = np.where(np.abs(a) > 0.01)[0]
     if not len(idx):
         return a
-    return a[max(0, idx[0] - int(0.02 * SR)): idx[-1] + int(0.08 * SR)]
+    a = a[max(0, idx[0] - int(0.02 * SR)): idx[-1] + int(0.08 * SR)].astype(np.float32).copy()
+    f = min(len(a) // 4, int(0.008 * SR))          # 8 ms fades: a cut mid-waveform clicks
+    if f > 1:
+        ramp = np.linspace(0, 1, f, dtype=np.float32)
+        a[:f] *= ramp; a[-f:] *= ramp[::-1]
+    return a
 
 
 async def speak(lines: list[dict], speed: float, progress=None) -> tuple[np.ndarray, list[dict]]:

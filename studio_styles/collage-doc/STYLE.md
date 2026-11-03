@@ -39,6 +39,9 @@
   when a frame hangs, a hit on the last line.
 
 ## 5. Mistakes to avoid
+- A picture that is not what the narrator is saying at that moment (a generic or loosely related photo). Every picture
+  on screen illustrates the line being spoken, literally.
+- A ring around nothing, around empty space, off the word it is meant for, or in a scene that has no ring in the plan.
 - A cartoon look: limbs that are not attached, flat clip-art, smooth floaty tweens. Use cut-outs with shadows and
   stepped movement.
 - Music notes, icons or symbols drawn from fonts (they look "vibecoded"): use pictures or hand-drawn marks.
