@@ -21,6 +21,7 @@ from motion_pipeline import run_motion_pipeline, submit_gate
 from yard_pipeline import run_yard_pipeline
 import explainer_pipeline
 import block_pipeline
+import recipe_pipeline
 from survival_pipeline import run_survival_pipeline
 from studio_pipeline import run_studio_pipeline
 import studio_styles
@@ -947,6 +948,49 @@ async def block_status(job_id: str):
     if not job or job.get("kind") != "block":
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "title", "duration", "final_video_url", "thumbnail_url", "usage", "review", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+class RecipeScriptRequest(BaseModel):
+    dish: str = Field(..., min_length=2, max_length=1500)
+    length: Optional[int] = Field(30, ge=25, le=45)
+
+
+@app.post("/recipe/script")
+async def recipe_script(req: RecipeScriptRequest):
+    """Recipe reels: the plan (steps, amounts, narration), shown to the user for editing before anything is recorded."""
+    try:
+        return await recipe_pipeline.write_recipe(req.dish, req.length or 30)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+
+class GenerateRecipeRequest(BaseModel):
+    recipe: dict
+
+
+@app.post("/generate-recipe")
+async def generate_recipe(req: GenerateRecipeRequest):
+    if not os.environ.get("RENDER_SERVICE_URL"):
+        raise HTTPException(status_code=503, detail="Recipe reels are not available yet (render service not connected).")
+    if len(recipe_pipeline.clean_recipe(req.recipe)["steps"]) < 3:
+        raise HTTPException(status_code=400, detail="the recipe needs at least 3 steps")
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = {
+        "kind": "recipe", "status": "queued", "stage": "queued", "step": 0, "total_steps": recipe_pipeline.STEPS,
+        "message": "Queued", "title": (req.recipe.get("name") or "")[:120], "duration": None, "final_video_url": None,
+        "thumbnail_url": None, "error": None, "traceback": None,
+    }
+    asyncio.create_task(recipe_pipeline.run_recipe_pipeline(job_id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/recipe/{job_id}")
+async def recipe_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "recipe":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "title", "duration", "final_video_url", "thumbnail_url", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 

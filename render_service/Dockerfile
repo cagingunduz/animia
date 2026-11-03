@@ -31,6 +31,7 @@ COPY server.mjs kit.js kit.css ./
 COPY yard ./yard
 COPY explainer ./explainer
 COPY block ./block
+COPY recipe ./recipe
 COPY survival/stage.three.js survival/LICENSE_story-video-studio survival/THREE_LICENSE survival/CANNON_LICENSE ./survival/
 COPY survival/fonts ./survival/fonts
 COPY studio/kits ./studio/kits

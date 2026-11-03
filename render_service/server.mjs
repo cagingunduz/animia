@@ -163,6 +163,8 @@ async function writeProject(body) {
   }
   // Block Horror compositions load three.js, the block kit and the caption font from block/.
   if (String(files['index.html']).includes('block/blockkit.js')) await cp(path.join(HERE, 'block'), path.join(dir, 'block'), { recursive: true });
+  // Recipe compositions load the recipe kit and its fonts from recipe/.
+  if (String(files['index.html']).includes('recipe/recipe.js')) await cp(path.join(HERE, 'recipe'), path.join(dir, 'recipe'), { recursive: true });
   // Survival Story compositions (three.js + cannon-es + the stage, one bundled script, and their fonts) load from survival/.
   if (String(files['index.html']).includes('survival/stage.three.js')) {
     await mkdir(path.join(dir, 'survival', 'fonts'), { recursive: true });

@@ -102,6 +102,31 @@ SFX_LIBRARY = {
     "studio_bed_flat": ("light curious documentary explainer music, pizzicato strings, soft marimba and glockenspiel, "
                         "gentle shaker, playful and inquisitive, 100 bpm, loopable, no vocals", 22.0, -20, 99999),
     "roomtone": ("dark quiet apartment room tone at night, faint hum and distant city, seamless, no events", 20.0, -24, 99999),
+    # Recipe kit (drinks made in a glass); bar_ keeps them apart from the yard's garden pour and splash
+    "bar_pour": ("liquid poured from a bottle into a glass, steady clean glug and trickle, close, no music", 2.2, -21, 1200),
+    "bar_ice": ("a few ice cubes dropped into an empty glass, bright clinks and a rattle, close", 1.2, -16, 500),
+    "bar_crushed": ("a scoop of crushed ice poured into a tall glass, crunchy icy rattle, close", 1.6, -17, 800),
+    "bar_fizz": ("soda water fizzing in a glass, carbonation bubbles crackling and popping, close", 3.0, -21, 1500),
+    "bar_muddle": ("muddling fresh mint and lime in a glass with a wooden muddler, soft wet crushing presses", 2.0, -16, 1000),
+    "bar_stir": ("a metal bar spoon stirring ice in a tall glass, gentle rhythmic clinking, close", 2.0, -17, 1000),
+    "bar_shake": ("a metal cocktail shaker shaken hard with ice, fast rhythmic rattling, close", 2.5, -16, 1200),
+    "bar_leaves": ("fresh herb leaves and a lime wedge dropped into a glass, soft light rustle and plop", 0.8, -17, 300),
+    "bar_set": ("a glass set down on a wooden bar counter, one solid clean clink", 0.6, -16, 300),
+    "bar_cheers": ("two cocktail glasses clinking together for a toast, bright ring", 1.2, -14, 600),
+    # Recipe kit, dishes (pan, pot or bowl)
+    "food_sizzle": ("chopped vegetables dropped into hot oil in a frying pan, loud lively sizzle, close", 2.5, -20, 1200),
+    "food_simmer": ("thick tomato sauce simmering in a pan, gentle bubbling and soft popping, close", 4.0, -21, 2000),
+    "food_crack": ("an egg cracked on the edge of a pan and dropped in, sharp crack then a soft sizzle", 1.2, -19, 400),
+    "food_sprinkle": ("a spoonful of dry ground spice sprinkled into a pan, soft light patter", 1.0, -21, 600),
+    "food_stir": ("a wooden spoon stirring vegetables in a frying pan, soft scraping, close", 2.0, -19, 1000),
+    "food_whisk": ("whisking batter in a ceramic bowl with a metal whisk, fast rhythmic, close", 2.0, -19, 1000),
+    "food_glop": ("thick sauce poured from a bowl into a pan, wet glop and a small splash, close", 1.6, -18, 800),
+    "food_drop": ("chopped vegetables tipped into a mixing bowl, a few soft light thuds", 1.0, -20, 500),
+    "food_lid": ("a metal lid placed on a pan, one light clank", 0.8, -19, 400),
+    "food_bed": ("warm cheerful acoustic background music for a cooking video, light guitar, ukulele and soft "
+                 "percussion, steady, loopable, no vocals", 22.0, -20, 99999),
+    "bar_bed": ("light upbeat lounge background music for a cocktail recipe video, brushed drums, warm upright bass "
+                "and rhodes, smooth, steady, loopable, no vocals", 22.0, -20, 99999),
 }
 SFX_TARGET_DB = -16.0     # mean level every effect is normalised to before its gain
 VOICE_TARGET_LUFS = -18.0  # integrated loudness of every narration line
