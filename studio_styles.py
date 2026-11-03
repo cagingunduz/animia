@@ -122,10 +122,11 @@ STYLES: dict[str, dict] = {
                   {"family": "Cormorant", "file": "Cormorant-500i.woff2", "weight": 500, "style": "italic"},
                   {"family": "Cormorant", "file": "Cormorant-600.woff2", "weight": 600}],
         "background": "#e9e4d8",
-        "voice": "am_michael", "speed": 1.1,
-        "voices": ["am_michael", "am_fenrir", "af_heart", "af_bella", "bf_emma", "bm_george"],
-        "mood_pace": 0.4,                   # moods change the pace only a little (a documentary keeps moving)
-        "seconds": (20, 45),
+        "voice": "pt_michael", "speed": 1.1,    # Kyutai Pocket TTS (pocket_voice), sped up 10% (pitch kept)
+        "voices": ["pt_michael", "pt_george", "pt_charles", "pt_paul", "pt_alba", "am_michael", "af_heart"],
+        "mood_pace": 0.4,
+        "wps": 2.7,                         # words per second at this narrator's pace (sizes the script to the length)                   # moods change the pace only a little (a documentary keeps moving)
+        "seconds": (25, 60),
         "tail": 1.8,
         "bed": "studio_bed_doc", "bed_db": -15.0,
         "foley": "collage",

@@ -34,7 +34,7 @@ import studio_media
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 IMAGE_MODEL = os.environ.get("STUDIO_IMAGE_MODEL", "gemini-3.1-flash-image")
 IMAGE_FALLBACK = os.environ.get("STUDIO_IMAGE_FALLBACK", "gemini-2.5-flash-image")
-MAX_PICTURES = 14
+MAX_PICTURES = 16
 # archive photos by default; STUDIO_COLLAGE_SOURCE=generate (with GEMINI_API_KEY) makes them with Gemini instead
 SOURCE = "generate" if GEMINI_KEY and os.environ.get("STUDIO_COLLAGE_SOURCE", "archive") == "generate" else "archive"
 MODEL_DIR = os.environ.get("STUDIO_MODEL_DIR") or os.environ.get("KOKORO_DIR") or "/tmp/models"
