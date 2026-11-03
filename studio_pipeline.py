@@ -24,7 +24,6 @@ import traceback
 import anthropic
 
 import motion_sound
-import studio_collage
 import studio_footage
 import studio_plate
 import studio_sound
@@ -448,6 +447,7 @@ async def run_studio_pipeline(job_id: str, p: dict):
 
         art = None
         if st.get("art"):              # the pictures are cast and made while the narrator records
+            import studio_collage      # here, not at the top: a missing image library must never stop the server
             pics_state = {"n": 0, "of": 0}
             def pic_progress(n, of):
                 pics_state.update(n=n, of=of)
@@ -476,6 +476,7 @@ async def run_studio_pipeline(job_id: str, p: dict):
 
         bins = sheets = None
         if art is not None:
+            import studio_collage
             _stage(job_id, "pictures", 2, f"Making the pictures ({pics_state['n']}/{pics_state['of'] or '…'})")
             got = await art
             timing["images"] = studio_collage.public(got["pictures"])
