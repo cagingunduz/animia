@@ -34,8 +34,19 @@ REF = ("Use the reference picture ONLY for its art style (flat shapes, palette, 
        "layout, furniture, objects or composition: draw something completely different, exactly as described: ")
 
 
+ORDER = [x.strip() for x in os.environ.get("LONG_IMAGE_PROVIDERS", "replicate,fal,gemini").split(",") if x.strip()]
+_dead: dict[str, float] = {}          # provider -> time it last failed hard (no credit, bad key): skipped for 10 minutes
+
+
+def providers() -> list[str]:
+    have = {"replicate": bool(REPLICATE_TOKEN), "fal": bool(FAL_KEY), "gemini": bool(GEMINI_KEY)}
+    import time
+    return [p for p in ORDER if have.get(p) and time.time() - _dead.get(p, 0) > 600]
+
+
 def provider() -> str:
-    return "gemini" if GEMINI_KEY else "fal" if FAL_KEY else "replicate" if REPLICATE_TOKEN else ""
+    ps = providers()
+    return ps[0] if ps else ""
 
 
 async def _gemini(prompt: str, aspect: str, ref: bytes | None) -> bytes:
@@ -82,23 +93,29 @@ async def _replicate(prompt: str, aspect: str, ref_url: str | None) -> bytes:
 
 
 async def make(prompt: str, aspect: str, ref: bytes | None = None, ref_url: str | None = None) -> bytes:
-    """One picture through the configured provider (3 tries)."""
-    p = provider()
-    if not p:
-        raise RuntimeError("No image model is configured (GEMINI_API_KEY, FAL_KEY or REPLICATE_API_TOKEN)")
+    """One picture: Replicate first, then fal, then Gemini (LONG_IMAGE_PROVIDERS), whichever works right now. A provider
+    that fails hard (no credit, bad key) is skipped for 10 minutes; transient errors are retried."""
+    import time
+    ps = providers()
+    if not ps:
+        raise RuntimeError("No image model is configured (REPLICATE_API_TOKEN, FAL_KEY or GEMINI_API_KEY)")
     last = None
     async with _sem:
-        for attempt in range(3):
-            try:
-                if p == "gemini":
-                    return await _gemini(prompt, aspect, ref)
-                if p == "fal":
-                    return await _fal(prompt, aspect, ref_url)
-                return await _replicate(prompt, aspect, ref_url)
-            except Exception as e:
-                last = e
-                await asyncio.sleep(3 * (attempt + 1))
-    raise RuntimeError(f"image generation failed: {last!r}")
+        for p in ps:
+            for attempt in range(2):
+                try:
+                    if p == "gemini":
+                        return await _gemini(prompt, aspect, ref)
+                    if p == "fal":
+                        return await _fal(prompt, aspect, ref_url)
+                    return await _replicate(prompt, aspect, ref_url)
+                except Exception as e:
+                    last = e
+                    msg = str(e).lower()
+                    if any(k in msg for k in ("credit", "balance", "billing", "payment", "insufficient", "unauthor", "401", "402", "403", "invalid api", "exhausted")):
+                        _dead[p] = time.time(); print(f"[long_art] {p} unavailable ({e!r}), trying the next provider"); break
+                    await asyncio.sleep(3 * (attempt + 1))
+    raise RuntimeError(f"image generation failed on {', '.join(ps)}: {last!r}")
 
 
 def plate_prompt(desc: str) -> str:

@@ -25,8 +25,8 @@ const boil = (t, seed, amp = 1) => { const k = Math.floor(t * FPS_STEP); return 
 // —— paper ground (built once): warm off-white or dark board, fibres, blotches, edge darkening ——
 let _paper = {};
 function paperTex(tone) {
-  if (_paper[tone]) return _paper[tone];
-  const W = 1080, H = 1920, p = cv(W, H), g = p.getContext('2d'), R = mulberry(tone === 'dark' ? 41 : 23);
+  const key = tone + SW + 'x' + SH; if (_paper[key]) return _paper[key];
+  const W = SW, H = SH, p = cv(W, H), g = p.getContext('2d'), R = mulberry(tone === 'dark' ? 41 : 23);
   g.fillStyle = tone === 'dark' ? C.paperDark : C.paper; g.fillRect(0, 0, W, H);
   for (let i = 0; i < 70; i++) {          // blotches
     const x = R() * W, y = R() * H, r = 60 + R() * 260, gr = g.createRadialGradient(x, y, 0, x, y, r);
@@ -46,7 +46,7 @@ function paperTex(tone) {
   const v = g.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, H * .78);
   v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, tone === 'dark' ? 'rgba(0,0,0,.45)' : 'rgba(60,45,25,.22)');
   g.fillStyle = v; g.fillRect(0, 0, W, H);
-  return (_paper[tone] = p);
+  return (_paper[key] = p);
 }
 // the paper ground: tone 'light' (default) or 'dark'
 export function paper(ctx, t, { tone = 'light' } = {}) {
@@ -303,7 +303,7 @@ export function credits(ctx, t, images, at, o = {}) {
   ctx.save(); ctx.font = FONT.light(size); let cur = 'Pictures: ';
   for (const c of list) { const s = (cur.endsWith(': ') ? '' : ' · ') + c; if (ctx.measureText(cur + s).width > 960 && cur !== 'Pictures: ') { lines.push(cur); cur = c; } else cur += s; }
   lines.push(cur); ctx.globalAlpha *= a * .85; ctx.textAlign = 'center'; ctx.fillStyle = o.color || C.white; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 6;
-  let y = (o.y ?? 1760) - (lines.length - 1) * size * 1.3; for (const l of lines.slice(-4)) { ctx.fillText(l, SW / 2, y); y += size * 1.3; }
+  let y = (o.y ?? SH - 160) - (lines.length - 1) * size * 1.3; for (const l of lines.slice(-4)) { ctx.fillText(l, SW / 2, y); y += size * 1.3; }
   ctx.restore();
 }
 
