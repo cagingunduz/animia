@@ -236,12 +236,13 @@ def _plan(r: dict, spans: list[dict], words: list[dict], spoken_end: float) -> d
 
 def compose(plan: dict) -> str:
     d = plan["duration"]
+    data = json.dumps(plan, ensure_ascii=False).replace("</", "<\\/")   # outside the f-string: Python 3.11
     return f"""<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="lib/kit.css">
 <style>#root{{width:1080px;height:1920px;position:relative;overflow:hidden}}</style></head><body>
 <div id="root" data-composition-id="recipe" data-no-timeline data-start="0" data-duration="{d}" data-width="1080" data-height="1920"></div>
 <script src="lib/anime.umd.min.js"></script><script src="lib/kit.js"></script><script src="recipe/recipe.js"></script>
 <script>
-const PLAN = {json.dumps(plan, ensure_ascii=False).replace("</", "<\\/")};
+const PLAN = {data};
 const tl = K.timeline();
 const draw = RC.run(document.getElementById('root'), PLAN);
 tl._kHooks.push(ms => draw(ms / 1000));
