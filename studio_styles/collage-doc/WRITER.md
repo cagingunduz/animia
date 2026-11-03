@@ -29,7 +29,8 @@ RULES
 - Moods: mostly neutral / warm; sad or whisper for the low point; deadpan for an irony. pause 0.2-0.5.
 - If the user gave an audience, pick the angle for them, but keep the documentary voice (no "you").
 
-visual_notes: per line ONE clear scene idea made of the pieces the collage can show: a plate (a place), cut-outs placed
+visual_notes: what is said is what is shown. Per line, the picture for each visible thing the narrator names, at the
+word that names it (a line naming two things gets two pictures, in order), made of the pieces the collage can show: a plate (a place), cut-outs placed
 on it (people, hands, animals, objects, machines), a document, the real portrait (once, at the reveal or the payoff),
 the big word(s) of the line and the word that gets a hand-drawn ring. Use scale and contrast (something tiny under
 something huge), a place seen from an unusual point of view, a document with one phrase ringed.

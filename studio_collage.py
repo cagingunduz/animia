@@ -66,9 +66,10 @@ ART_TOOL = {
                 "lines": {"type": "array", "items": {"type": "integer"}, "description": "the 0-based voice lines it is used in"},
                 "use": {"type": "string", "description": "how the animator should use it (one short sentence)"},
             }, "required": ["id", "kind", "aspect"]}},
-            "scenes": {"type": "array", "description": "ONE entry per voice line, in order: what is on screen while that line is spoken",
+            "scenes": {"type": "array", "description": "the picture track, in order: one entry per thing the narrator names, starting on the word that names it (every line has at least one entry)",
                        "items": {"type": "object", "properties": {
                            "line": {"type": "integer"},
+                           "at": {"type": "string", "description": "the word in that line that names what is shown (the picture appears when it is spoken); empty = the line's start"},
                            "show": {"type": "array", "items": {"type": "string"}, "description": "picture ids on screen (1-3), each one showing what THIS line says"},
                            "words": {"type": "string", "description": "the big word(s) set on screen (1-4 words from the line)"},
                            "ring": {"type": "string", "description": "the ONE word from `words` (or a picture id) that gets a hand-drawn ring, or empty for no ring"},
@@ -98,10 +99,15 @@ animals, the person's own photos and paintings); avoid scenes nobody photographe
 """ + "{SCENE_RULES}"
 
 
-SCENE_RULES = """THE SCENE PLAN (`scenes`, one entry per line, binding for the animator):
-- Every picture on screen must show what THAT line is about, literally: the line names a lab -> a lab; a ship -> the
-  ship; a letter -> the letter; the person -> their portrait or them from behind. Never a loosely related or generic
-  picture. A picture may come back in a later line only if that line is about the same thing.
+SCENE_RULES = """THE PICTURE TRACK (`scenes`, binding for the animator): the pictures follow the voice word by word.
+- WHAT IS SAID IS WHAT IS SHOWN. Go through the script word by word: every time the narrator names something a viewer
+  can see (a place, a person, an object, an event, a document, a number on a document), that thing comes on screen at
+  that word (`at`). A line that names two things gets two entries: "He took Toulon, and Paris made him a general" ->
+  {at: "Toulon", show: the port of Toulon} then {at: "general", show: him in a general's uniform}.
+- Literally that thing: the line names a lab -> that lab; a ship -> the ship; a letter -> the letter; the person -> their
+  portrait or them from behind. Never a loosely related, generic or decorative picture. A picture comes back later only
+  when the narrator talks about that thing again.
+- Every line has at least one entry; a picture stays until the next entry.
 - words: 1-4 words from the line that carry it (a name, a number, a date, the key noun).
 - ring: at most one ring every two or three lines, only around a word or an object the line points at (a number, a
   date, a name, a phrase on a document). Leave it empty otherwise. Never ring decoration."""
@@ -175,10 +181,11 @@ def _scenes(res: dict, n_lines: int) -> list[dict]:
             i = int(sc.get("line"))
         except (TypeError, ValueError):
             continue
-        if 0 <= i < n_lines and i not in out:
-            out[i] = {"line": i, "show": [re.sub(r"[^a-z0-9_]", "_", str(x).lower()).strip("_") for x in (sc.get("show") or [])][:3],
-                      "words": str(sc.get("words") or "").strip()[:60], "ring": str(sc.get("ring") or "").strip()[:40]}
-    return [out[i] for i in sorted(out)]
+        if 0 <= i < n_lines:
+            out.setdefault(i, []).append({"line": i, "at": str(sc.get("at") or "").strip()[:40],
+                      "show": [re.sub(r"[^a-z0-9_]", "_", str(x).lower()).strip("_") for x in (sc.get("show") or [])][:3],
+                      "words": str(sc.get("words") or "").strip()[:60], "ring": str(sc.get("ring") or "").strip()[:40]})
+    return [b for i in sorted(out) for b in out[i][:4]]
 
 
 # ─────────────────────────── making them ───────────────────────────
@@ -497,14 +504,21 @@ def scene_plan(scenes: list[dict], pics: list[dict], lines: list[dict]) -> str:
     """The binding plan for the animator: per line, the pictures that were really found (with what they show), the
     big words and the ring. A line whose pictures were not found gets paper + words, never a stand-in picture."""
     have = {p["id"]: p for p in pics}
-    by_line = {sc["line"]: sc for sc in scenes}
+    norm = lambda w: re.sub(r"[^a-z0-9]", "", str(w).lower())
     rows = []
     for i, ln in enumerate(lines):
-        sc = by_line.get(i, {"show": [], "words": "", "ring": ""})
-        show = [f'{x} ({have[x].get("shows") or have[x].get("use") or have[x]["kind"]})' for x in sc["show"] if x in have]
-        ring = sc.get("ring") or ""
-        rows.append(f'line {i} "{ln["text"]}": ' + (", ".join(show) if show else "NO PICTURE: paper (or the previous plate, dimmed) + the big words")
-                    + (f' | words: {sc["words"]}' if sc.get("words") else "") + f' | ring: {ring or "none"}')
+        beats = [b for b in scenes if b["line"] == i] or [{"at": "", "show": [], "words": "", "ring": ""}]
+        rows.append(f'line {i} ({ln.get("start", 0):.2f}-{ln.get("end", 0):.2f} s) "{ln["text"]}":')
+        for b in beats:
+            when, word = ln.get("start", 0), ""
+            if b.get("at"):           # the time the naming word is spoken
+                hit = next((w for w in ln.get("words") or [] if norm(w["w"]) == norm(b["at"].split()[0])), None)
+                if hit:
+                    when, word = hit["s"], hit["w"]
+            show = [f'{x} ({have[x].get("shows") or have[x].get("use") or have[x]["kind"]})' for x in b["show"] if x in have]
+            rows.append(f'   at {when:.2f} s' + (f' ("{word}")' if word else " (line start)") + ": "
+                        + (", ".join(show) if show else "NO PICTURE FOUND: keep the previous picture (dimmed) or paper, with the big words")
+                        + (f' | words: {b["words"]}' if b.get("words") else "") + f' | ring: {b.get("ring") or "none"}')
     return "\n".join(rows)
 
 
