@@ -1,6 +1,10 @@
 THE KIT (K = window.CD): a hand-made documentary collage. Screen pixels: the frame is 1080 x 1920, (0, 0) top left,
 y DOWN. Draw every frame from scratch, back to front.
 
+THE SCENE PLAN in the notes is binding: while line i is spoken, show exactly the pictures it lists for line i (each one
+matches what the line says), its words, and a ring only if it names one. NO PICTURE = paper (or the previous plate,
+dimmed) with the big words; never fill a scene with an unrelated picture.
+
 THE PICTURES: T.img[id] (already loaded; the list with sizes and a contact sheet comes with the script). Kinds:
 plate (a full-bleed photo of a place), cutout (transparent PNG: a person, an arm, an object), document (a flat
 letter / paper / map, rectangular), portrait (a real portrait, rectangular; frame it, caption it with the credit).
@@ -39,7 +43,12 @@ WORDS (Playfair Display italic; white with a soft shadow by default: pass color:
   (at = T.end - 2.5), after the scenes and before K.finish (archive photos must be credited on screen).
 
 HAND-DRAWN MARKS (white pen, drawn on over `dur`; color / width optional)
-- K.ring(ctx, t, { x, y (centre), w, h, at, dur: .5, rot: -6, out }) a loose ring around a word or an object.
+- K.ringWord(ctx, t, 'never sent', at, { x, y, size, font }) a ring fitted around a word set with K.word at the same
+  x, y, size (use this for words: it always sits on the word).
+- K.ring(ctx, t, { x, y (centre), w, h, at, dur: .5, rot: -6, out }) a loose ring around an object in a picture (its
+  box on screen).
+- RINGS ONLY WHERE THE SCENE PLAN SAYS "ring: <word>", at the moment that word is spoken, around that word or object.
+  "ring: none" = no ring in that scene. Never a ring around empty space or as decoration.
 - K.underline(ctx, t, { x0, x1, y, at, dur: .35 }), K.arrow(ctx, t, { from: [x, y], to: [x, y], bend: .2, at }),
   K.strike(ctx, t, { x, y, w, at }) (a cross-out).
 
@@ -87,7 +96,7 @@ function film(K, T, c) {
           K.photo(ctx, t, I.letter, { x: 540, y: 900, w: 820, rot: -3, at: cut[2] });
           K.scrim(ctx, { y: 1500, h: 380 });
           K.word(ctx, t, 'never sent', w(2, 'never'), { y: 1540, size: 150 });
-          K.ring(ctx, t, { x: 540, y: 1500, w: K.measure('never sent', 150) + 120, h: 230, at: w(2, 'sent') });
+          K.ringWord(ctx, t, 'never sent', w(2, 'sent'), { y: 1540, size: 150 });
         });
       } else {                              // 4: the payoff: the real face, framed
         K.paper(ctx, t, { tone: 'dark' });

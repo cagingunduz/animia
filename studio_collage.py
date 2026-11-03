@@ -62,11 +62,19 @@ ART_TOOL = {
                 "prompt": {"type": "string", "description": "plate / cutout / document: what to generate (the subject only; the look line and the background rules are added for you)"},
                 "search": {"type": "string", "description": "portrait only: a Wikimedia Commons search for a real historical portrait (name + 'portrait' + painter or year if known)"},
                 "aspect": {"type": "string", "enum": list(ASPECTS)},
+                "alts": {"type": "array", "items": {"type": "string"}, "description": "archive only: 1-2 other searches for the same subject, tried if the first finds nothing that fits"},
                 "lines": {"type": "array", "items": {"type": "integer"}, "description": "the 0-based voice lines it is used in"},
                 "use": {"type": "string", "description": "how the animator should use it (one short sentence)"},
             }, "required": ["id", "kind", "aspect"]}},
+            "scenes": {"type": "array", "description": "ONE entry per voice line, in order: what is on screen while that line is spoken",
+                       "items": {"type": "object", "properties": {
+                           "line": {"type": "integer"},
+                           "show": {"type": "array", "items": {"type": "string"}, "description": "picture ids on screen (1-3), each one showing what THIS line says"},
+                           "words": {"type": "string", "description": "the big word(s) set on screen (1-4 words from the line)"},
+                           "ring": {"type": "string", "description": "the ONE word from `words` (or a picture id) that gets a hand-drawn ring, or empty for no ring"},
+                       }, "required": ["line", "show"]}},
         },
-        "required": ["look", "pictures"],
+        "required": ["look", "pictures", "scenes"],
     },
 }
 
@@ -82,8 +90,19 @@ animals, the person's own photos and paintings); avoid scenes nobody photographe
 - document: a letter, a newspaper page, a patent drawing, a map, a ticket, a manuscript page.
 - portrait: the real person (a photograph or a painting of them).
 - Real photographs of real people are fine here (they are not invented). No modern stock-photo subjects.
+- Give each picture 1-2 `alts` (other ways the archive may title the same subject).
 - 6 to {MAX_PICTURES} pictures. One clear idea per scene: don't cast pictures nobody needs.
-- Leave `prompt` empty; set `aspect` to what you expect (it is only a hint)."""
+- Leave `prompt` empty; set `aspect` to what you expect (it is only a hint).
+""" + "{SCENE_RULES}"
+
+
+SCENE_RULES = """THE SCENE PLAN (`scenes`, one entry per line, binding for the animator):
+- Every picture on screen must show what THAT line is about, literally: the line names a lab -> a lab; a ship -> the
+  ship; a letter -> the letter; the person -> their portrait or them from behind. Never a loosely related or generic
+  picture. A picture may come back in a later line only if that line is about the same thing.
+- words: 1-4 words from the line that carry it (a name, a number, a date, the key noun).
+- ring: at most one ring every two or three lines, only around a word or an object the line points at (a number, a
+  date, a name, a phrase on a document). Leave it empty otherwise. Never ring decoration."""
 
 
 def art_system(st: dict) -> str:
@@ -93,7 +112,7 @@ EVERY picture the animator will need, then call the tool (`look` = one line desc
 archival photographs"). The animator places them like paper cut-outs on photo plates and paper, with big words and
 hand-drawn white rings; they can reuse a picture in several scenes, flip it, scale it.
 
-{ARCHIVE_RULES}
+{ARCHIVE_RULES.replace("{SCENE_RULES}", SCENE_RULES)}
 
 THE STYLE:
 {st['style_md']}"""
@@ -115,6 +134,7 @@ THE RULES (they save most of the time):
 - Documents: letters, tickets, newspapers, scores, maps, diaries, flat from above.
 - No text inside generated pictures except old handwriting / print on documents. No logos, no brands, no famous artworks.
 - 6 to {MAX_PICTURES} pictures. One clear idea per scene: don't cast pictures nobody needs.
+{SCENE_RULES}
 - Aspect: plates 9:16; standing people 3:4 or 2:3; hands / arms 3:4; wide objects 4:3 or 1:1; documents 3:4.
 
 THE STYLE:
@@ -141,8 +161,22 @@ def _clean(res: dict) -> tuple[str, list[dict]]:
         seen.add(pid)
         out.append({"id": pid, "kind": kind, "prompt": str(p.get("prompt") or "").strip()[:900], "search": str(p.get("search") or "").strip()[:160],
                     "aspect": p.get("aspect") if p.get("aspect") in ASPECTS else ("9:16" if kind == "plate" else "3:4"),
+                    "alts": [str(a).strip()[:160] for a in (p.get("alts") or []) if str(a).strip()][:2],
                     "lines": [int(x) for x in (p.get("lines") or []) if isinstance(x, (int, float))][:12], "use": str(p.get("use") or "")[:200]})
     return look, out[:MAX_PICTURES]
+
+
+def _scenes(res: dict, n_lines: int) -> list[dict]:
+    out = {}
+    for sc in res.get("scenes") or []:
+        try:
+            i = int(sc.get("line"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n_lines and i not in out:
+            out[i] = {"line": i, "show": [re.sub(r"[^a-z0-9_]", "_", str(x).lower()).strip("_") for x in (sc.get("show") or [])][:3],
+                      "words": str(sc.get("words") or "").strip()[:60], "ring": str(sc.get("ring") or "").strip()[:40]}
+    return [out[i] for i in sorted(out)]
 
 
 # ─────────────────────────── making them ───────────────────────────
@@ -317,28 +351,43 @@ def _big(c: dict, w: int = 1280) -> str:
     return c.get("url") or t
 
 
-async def _archive(p: dict, claude) -> dict | None:
+async def _archive(p: dict, claude, said: str = "") -> dict | None:
+    """Try the search and its alternatives in turn; the first candidate that really shows the subject wins."""
+    for q in [p["search"], *p.get("alts", [])]:
+        got = await _archive_one(p, q, claude, said)
+        if got:
+            return got
+    return None
+
+
+async def _archive_one(p: dict, q: str, claude, said: str) -> dict | None:
     async with _archive_sem:
-        cands = await studio_media.search(p["search"], kind="image", n=6)
+        cands = await studio_media.search(q, kind="image", n=8)
     cands = [c for c in cands if (c.get("w") or 1000) >= 500]
     if not cands:
         return None
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
         thumbs = await asyncio.gather(*[studio_media.thumb(c, x) for x in cands])
     pairs = [(x, th) for x, th in zip(cands, thumbs) if th] or [(x, None) for x in cands[:1]]   # no thumbnails: take the top hit
-    pick = 0
-    if claude and len(pairs) > 1:
+    pick, shows = 0, ""
+    if claude and pairs[0][1] is not None:
         want = {"plate": "a full-frame background (a place, no big text, no modern things, sharp)",
                 "cutout": "ONE clear subject, big and whole in the frame, easy to cut out of its background",
                 "document": "a flat document filling the frame", "portrait": "the person's face clearly visible"}[p["kind"]]
-        content = [{"type": "text", "text": f"Pick the best archive picture for: {p['search']} — {p.get('use') or ''}. It must be {want}; "
-                                            "no watermark, no collage, no screenshot. Answer with the number only, or -1 if none fits."}]
+        content = [{"type": "text", "text": f"A documentary reel needs a picture of: {p['search']} ({p.get('use') or p['kind']}).\n"
+                                            + (f"While it is on screen the narrator says: {said}\n" if said else "")
+                                            + f"It must be {want}; no watermark, no collage, no screenshot, no modern look for a historical story.\n"
+                                            "Pick the candidate that CLEARLY shows exactly that subject, so a viewer sees what the narrator says. "
+                                            "If none does, answer -1 (better no picture than a wrong one).\n"
+                                            "Answer on one line: the number | what that picture actually shows (under 15 words)."}]
         for i, (x, th) in enumerate(pairs):
             content += [{"type": "text", "text": f"{i}: {x['title'][:80]}"},
                         {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(_jpeg(th, 320)).decode()}}]
         try:
-            m = re.search(r"-?\d+", await claude(content))
-            pick = int(m.group()) if m else 0
+            ans = await claude(content)
+            m = re.search(r"-?\d+", ans)
+            pick = int(m.group()) if m else -1
+            shows = ans.split("|", 1)[1].strip()[:120] if "|" in ans else ""
         except Exception as e:
             print(f"[collage] archive pick failed: {e!r}")
         if pick < 0 or pick >= len(pairs):
@@ -350,14 +399,15 @@ async def _archive(p: dict, claude) -> dict | None:
             r = await studio_media._get(c, src["url"])
         r.raise_for_status()
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(r.content))).convert("RGB")
-    return {"img": img, "credit": src.get("credit"), "page": src.get("page"), "title": src.get("title"), "licence": src.get("licence")}
+    return {"img": img, "credit": src.get("credit"), "page": src.get("page"), "title": src.get("title"), "licence": src.get("licence"),
+            "shows": shows or src.get("title", "")[:120]}
 
 
-async def _one(p: dict, look: str, tmp: str, claude) -> dict | None:
+async def _one(p: dict, look: str, tmp: str, claude, said: str = "") -> dict | None:
     async with _sem:
         try:
             if SOURCE == "archive":
-                got = await _archive(p, claude)
+                got = await _archive(p, claude, said)
                 if not got:
                     print(f"[collage] nothing in the archives for {p['search']!r}")
                     return None
@@ -365,7 +415,7 @@ async def _one(p: dict, look: str, tmp: str, claude) -> dict | None:
                 if p["kind"] == "cutout":
                     img = await asyncio.to_thread(cut_out, img)
                 img = grade(img, .55 if p["kind"] == "portrait" else 0)
-                meta = {"credit": got["credit"], "page": got["page"], "source_title": got["title"], "licence": got["licence"]}
+                meta = {"credit": got["credit"], "page": got["page"], "source_title": got["title"], "licence": got["licence"], "shows": got["shows"]}
             elif p["kind"] == "portrait":
                 got = await _portrait(p, claude)
                 if not got:
@@ -395,10 +445,15 @@ async def make(job_id: str, claude_tool, claude_text, st: dict, s: dict, tmp: st
     look, plan = _clean(res)
     if not plan:
         raise ValueError("the art director cast no pictures")
+    scenes = _scenes(res, len(s["lines"]))
     done = {"n": 0}
 
+    def said(p):       # what the narrator says while this picture is on screen (the picker checks it shows that)
+        idx = sorted({sc["line"] for sc in scenes if p["id"] in sc["show"]} | set(p.get("lines") or []))
+        return " / ".join(s["lines"][i]["text"] for i in idx if 0 <= i < len(s["lines"]))[:400]
+
     async def run(p):
-        r = await _one(p, look, tmp, claude_text)
+        r = await _one(p, look, tmp, claude_text, said(p))
         done["n"] += 1
         if progress:
             progress(done["n"], len(plan))
@@ -406,13 +461,28 @@ async def make(job_id: str, claude_tool, claude_text, st: dict, s: dict, tmp: st
     pics = [p for p in await asyncio.gather(*[run(p) for p in plan]) if p]
     if len(pics) < max(3, len(plan) // 3):
         raise RuntimeError("most of the pictures could not be found or made")
-    return {"look": look, "pictures": pics, "source": SOURCE}
+    return {"look": look, "pictures": pics, "source": SOURCE, "scenes": scenes}
+
+
+def scene_plan(scenes: list[dict], pics: list[dict], lines: list[dict]) -> str:
+    """The binding plan for the animator: per line, the pictures that were really found (with what they show), the
+    big words and the ring. A line whose pictures were not found gets paper + words, never a stand-in picture."""
+    have = {p["id"]: p for p in pics}
+    by_line = {sc["line"]: sc for sc in scenes}
+    rows = []
+    for i, ln in enumerate(lines):
+        sc = by_line.get(i, {"show": [], "words": "", "ring": ""})
+        show = [f'{x} ({have[x].get("shows") or have[x].get("use") or have[x]["kind"]})' for x in sc["show"] if x in have]
+        ring = sc.get("ring") or ""
+        rows.append(f'line {i} "{ln["text"]}": ' + (", ".join(show) if show else "NO PICTURE: paper (or the previous plate, dimmed) + the big words")
+                    + (f' | words: {sc["words"]}' if sc.get("words") else "") + f' | ring: {ring or "none"}')
+    return "\n".join(rows)
 
 
 def public(pics: list[dict]) -> list[dict]:
-    """What goes into T.images (the page): id, file, size, kind, use."""
+    """What goes into T.images (the page): id, file, size, kind, use, what it shows."""
     return [{"id": p["id"], "file": p["file"], "w": p["w"], "h": p["h"], "kind": p["kind"], "use": p.get("use", ""),
-             **({"credit": p["credit"]} if p.get("credit") else {})} for p in pics]
+             **({"shows": p["shows"]} if p.get("shows") else {}), **({"credit": p["credit"]} if p.get("credit") else {})} for p in pics]
 
 
 def binaries(pics: list[dict]) -> dict:

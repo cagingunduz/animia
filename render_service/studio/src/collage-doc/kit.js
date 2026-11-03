@@ -257,6 +257,12 @@ export function ring(ctx, t, o) {
   ctx.save(); ctx.globalAlpha *= a; pen(ctx, P, eio(seg(t, o.at, o.at + (o.dur ?? .5))), o); ctx.restore();
 }
 const vn = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return lerp(hash(i), hash(i + 1), u); };
+// a ring fitted around a word you set with K.word (same text, x, y, size, font): K.ringWord(ctx, t, 'composing', at,
+//   { x, y, size: 150, font: 'display', dur: .5, rot: -5, out })
+export function ringWord(ctx, t, text, at, o = {}) {
+  const size = o.size ?? 150, w = measure(text, size, o.font || 'display');
+  ring(ctx, t, { x: o.x ?? SW / 2, y: (o.y ?? SH * .3) - size * .3, w: w + size * .9, h: size * 1.45, at, dur: o.dur, rot: o.rot ?? -5, out: o.out, color: o.color, width: o.width });
+}
 // a hand-drawn underline under a word: K.underline(ctx, t, { x0, x1, y, at, dur: .35, color, width, out })
 export function underline(ctx, t, o) {
   if (t < o.at) return; const a = outOf(t, o.out, .25); if (a <= 0) return;
