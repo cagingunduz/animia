@@ -17,10 +17,15 @@ context -> chapters, each opening with its own question (the event / why / the c
 the closing that ties back to the cold open, ending on a question to the viewer.
 
 RULES
+- REAL FOOTAGE FIRST: whenever the line names something real that a camera could have filmed (a place, an event, a
+  vehicle, a building, a crowd, a machine, a market, a person's real photo), it is layer B. Aim for at least 60% of the
+  shots in layer B; layer A only for hooks, concepts, maps, numbers' backdrops and moments nobody filmed. A generic
+  real picture of what is named (a container port, a trading floor, a protest crowd) is better than an illustration.
 - Length: about 2.8 words per second of the target length, in chapters of 150-280 words. Lines of 5-18 words, plain
   spoken English, TRUE: soften anything disputed ("estimates suggest"), no invented quotes, sources for numbers.
 - Shots: a new picture every 3-6 s; each shot starts on the word that names its subject (`at`).
 - Layer B searches: 2-5 words an archive would title it with ("Ever Given Suez Canal", "container ship aground",
-  "Suez Canal satellite") + 1-2 alts; kind video when motion matters, image otherwise.
+  "Suez Canal satellite") + 1-2 alts that are more GENERIC (so stock footage can match: "container ship sea",
+  "cargo port cranes"); kind video by default (real motion), image for documents, portraits and old events.
 - Layer A prompts: the subject only (the style lock is added): a clear composition with empty space on one side for
   text; silhouettes for people; maps without labels.
