@@ -305,15 +305,88 @@ def _clean_archive_plan(res: dict) -> dict:
             "pictures": pics[:90], "places": [], "cast": [], "props": [], "sections": sections}
 
 
+def _split_tools(tool: dict) -> tuple[dict, dict]:
+    """From a template's full plan tool: (1) the script tool (title, description, sections with lines) and (2) the
+    per-part shot tool (the template's shot list, plus the art lists it may add to: places / cast / props / pictures)."""
+    props = tool["input_schema"]["properties"]
+    sec_items = props["sections"]["items"]["properties"]
+    script = {"name": "submit_script", "description": "Submit the script.", "input_schema": {"type": "object", "properties": {
+        "title": props["title"], **({"description": props["description"]} if "description" in props else {}),
+        "sections": {"type": "array", "items": {"type": "object", "properties": {"title": sec_items["title"], "lines": sec_items["lines"]},
+                                                 "required": ["title", "lines"]}}}, "required": ["title", "sections"]}}
+    extra = {k: v for k, v in props.items() if k in ("places", "cast", "props", "pictures")}
+    shots = {"name": "submit_shots", "description": "Submit this part's shots.", "input_schema": {"type": "object", "properties": {
+        **extra, "shots": sec_items["shots"]}, "required": ["shots"]}}
+    return script, shots
+
+
+async def _save_debug(s: dict, name: str, data):
+    try:
+        await asyncio.to_thread(_put, s["id"], f"debug/{name}.json", json.dumps(data, ensure_ascii=False, default=str)[:2_000_000].encode(), "application/json")
+    except Exception as e:
+        print(f"[long] debug save failed: {e!r}")
+
+
 async def _plan(st_: dict, s: dict):
-    _step(s, "plan", "Writing the script and the shot plan", 0.02)
+    """Two steps, so no answer is ever too long to arrive whole: the script (title, parts, lines), then each part's
+    shots in parallel (with the places / cast / props / pictures they need, merged across parts)."""
+    _step(s, "plan", "Writing the script", 0.02)
     words = round(s["minutes"] * 60 * st_.get("wps", 3.1))
-    ask = (f"The topic: {s['topic'] or 'pick the best one yourself'}\nThe length: {s['minutes']} minutes (about {words} words), "
-           f"in parts of 150-280 words.\n" + (f"Notes from the creator: {s['notes']}\n" if s.get("notes") else "") + "Write the plan.")
     src = st_.get("art_source")
     tool = ARCHIVE_PLAN_TOOL if src == "archive" else MIXED_PLAN_TOOL if src == "mixed" else PLAN_TOOL
-    res = _tidy(await _claude(s["id"], plan_system(st_), ask, 32000, "plan", tool))
-    s["plan"] = _clean_archive_plan(res) if src == "archive" else _clean_mixed_plan(res) if src == "mixed" else _clean_plan(res, st_)
+    script_tool, shot_tool = _split_tools(tool)
+    system = plan_system(st_)
+    ask = (f"The topic: {s['topic'] or 'pick the best one yourself'}\nThe length: {s['minutes']} minutes (about {words} words), "
+           f"in parts of 150-280 words.\n" + (f"Notes from the creator: {s['notes']}\n" if s.get("notes") else "")
+           + "STEP 1 of 2: write the SCRIPT only (title, description, the parts with their lines). The shots come next, part by part.")
+    raw = await _claude(s["id"], system, ask, 16000, "plan", script_tool)
+    res = _tidy(raw)
+    sections = [{"title": str(x.get("title") or f"Part {i + 1}")[:80], "lines": _dl(x.get("lines"), "text")}
+                for i, x in enumerate(_dl(res.get("sections"), "title"))]
+    sections = [x for x in sections if x["lines"]]
+    if not sections:
+        await _save_debug(s, "plan_script", raw)
+        raise ValueError("the script came back empty (saved for inspection): resume to write it again")
+    s["message"] = f"Writing the shot plan (0/{len(sections)})"
+    script_text = "\n\n".join(f"PART {i + 1}: {x['title']}\n" + "\n".join(f"  {j}: {l.get('text', '')}" for j, l in enumerate(x["lines"])) for i, x in enumerate(sections))
+    sem, done = asyncio.Semaphore(3), {"n": 0}
+
+    async def shots_for(i: int):
+        async with sem:
+            sec = sections[i]
+            ask2 = (f"THE WHOLE SCRIPT (for context):\n{script_text}\n\nSTEP 2 of 2: write the shots for PART {i + 1} ONLY "
+                    f"(\"{sec['title']}\", lines 0-{len(sec['lines']) - 1}; `line` is the index inside this part). "
+                    "List the places / cast / props / pictures these shots use, with stable ids (the same id for the same thing "
+                    "in every part, e.g. 'viewer', 'lab', 'hotel_new_yorker').")
+            for attempt in range(2):
+                try:
+                    r = _tidy(await _claude(s["id"], system, ask2, 12000, f"plan_shots_{i + 1}", shot_tool))
+                    if _dl(r.get("shots"), "action"):
+                        done["n"] += 1; s["message"] = f"Writing the shot plan ({done['n']}/{len(sections)})"
+                        return r
+                    await _save_debug(s, f"plan_shots_{i + 1}_{attempt}", r)
+                except BillingError:
+                    raise
+                except Exception as e:
+                    print(f"[long] shots for part {i + 1} failed: {e!r}")
+            return {"shots": []}
+    parts = await asyncio.gather(*[shots_for(i) for i in range(len(sections))])
+    merged = {"title": res.get("title"), "description": res.get("description"), "sections": []}
+    for k in ("places", "cast", "props", "pictures"):
+        seen, out = set(), []
+        for pr in parts:
+            for it in _dl(pr.get(k), "id"):
+                key = long_art.slug(str(it.get("id") or it.get("search") or it.get("desc") or ""))
+                if key and key not in seen:
+                    seen.add(key); out.append(it)
+        merged[k] = out
+    for sec, pr in zip(sections, parts):
+        merged["sections"].append({**sec, "shots": _dl(pr.get("shots"), "action")})
+    try:
+        s["plan"] = _clean_archive_plan(merged) if src == "archive" else _clean_mixed_plan(merged) if src == "mixed" else _clean_plan(merged, st_)
+    except ValueError:
+        await _save_debug(s, "plan_merged", merged)
+        raise
     s["title"] = s["plan"]["title"]
     s.update(status="awaiting_approval", stage="review", message="Read the script and the shot plan, then approve", progress=0.08)
 
