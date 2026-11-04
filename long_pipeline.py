@@ -246,21 +246,31 @@ def _tidy(x, key: str | None = None):
     return x
 
 
+def _dl(x, key: str = "text") -> list[dict]:
+    """A list of dicts, whatever arrived (JSON text, one dict, bare strings -> {key: text}, junk dropped)."""
+    x = _tidy(x)
+    if isinstance(x, dict):
+        x = [x]
+    if not isinstance(x, list):
+        return []
+    return [i if isinstance(i, dict) else {key: i.strip()} for i in x if isinstance(i, dict) or (isinstance(i, str) and i.strip())]
+
+
 def _clean_plan(res: dict, st: dict) -> dict:
     slug = long_art.slug
-    places = [{"id": slug(p["id"]), "desc": str(p.get("desc") or "")[:500]} for p in res.get("places") or [] if p.get("id")][:24]
-    cast = [{"id": slug(c["id"]), "desc": str(c.get("desc") or "")[:400], "poses": [str(x)[:120] for x in (c.get("poses") or ["standing, facing the viewer"])][:3]}
-            for c in res.get("cast") or [] if c.get("id")][:12]
-    props = [{"id": slug(p["id"]), "desc": str(p.get("desc") or "")[:300]} for p in res.get("props") or [] if p.get("id")][:16]
+    places = [{"id": slug(p["id"]), "desc": str(p.get("desc") or p["id"])[:500]} for p in _dl(res.get("places"), "id") if p.get("id")][:24]
+    cast = [{"id": slug(c["id"]), "desc": str(c.get("desc") or c["id"])[:400], "poses": [str(x)[:120] for x in (c.get("poses") or ["standing, facing the viewer"])][:3]}
+            for c in _dl(res.get("cast"), "id") if c.get("id")][:12]
+    props = [{"id": slug(p["id"]), "desc": str(p.get("desc") or p["id"])[:300]} for p in _dl(res.get("props"), "id") if p.get("id")][:16]
     sections = []
-    for k, sec in enumerate(res.get("sections") or []):
+    for k, sec in enumerate(_dl(res.get("sections"), "title")):
         lines = [{"text": str(l.get("text") or "").strip()[:300], **({"say": str(l["say"])[:300]} if l.get("say") else {}),
-                  "pause": float(l.get("pause") or .25), "mood": l.get("mood") or "neutral"} for l in sec.get("lines") or [] if str(l.get("text") or "").strip()]
+                  "pause": float(l.get("pause") or .25), "mood": l.get("mood") or "neutral"} for l in _dl(sec.get("lines"), "text") if str(l.get("text") or "").strip()]
         if not lines:
             continue
         sections.append({"id": f"p{k + 1}", "title": str(sec.get("title") or f"Part {k + 1}")[:80], "lines": lines,
                          "shots": [{**{kk: v for kk, v in sh.items() if kk in ("at", "place", "cast", "props", "action", "text", "marks")},
-                                    "line": int(sh.get("line") or 0)} for sh in sec.get("shots") or []][:80]})
+                                    "line": int(sh.get("line") or 0)} for sh in _dl(sec.get("shots"), "action")][:80]})
     if not sections or not places:
         raise ValueError("the plan came back empty")
     return {"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
@@ -270,7 +280,9 @@ def _clean_plan(res: dict, st: dict) -> dict:
 def _clean_archive_plan(res: dict) -> dict:
     slug = long_art.slug
     pics, seen = [], set()
-    for p in res.get("pictures") or []:
+    for p in _dl(res.get("pictures"), "id"):
+        if not p.get("search") and p.get("id"):
+            p = {**p, "search": str(p["id"]).replace("_", " ")}      # a bare name: search for it
         pid = slug(p.get("id") or "")
         if not pid or pid in seen or not str(p.get("search") or "").strip():
             continue
@@ -278,14 +290,14 @@ def _clean_archive_plan(res: dict) -> dict:
         pics.append({"id": pid, "kind": p.get("kind") if p.get("kind") in ("plate", "cutout", "document", "portrait") else "document",
                      "search": str(p["search"]).strip()[:160], "alts": [str(a)[:160] for a in (p.get("alts") or [])][:2], "use": str(p.get("use") or "")[:200]})
     sections = []
-    for k, sec in enumerate(res.get("sections") or []):
+    for k, sec in enumerate(_dl(res.get("sections"), "title")):
         lines = [{"text": str(l.get("text") or "").strip()[:300], **({"say": str(l["say"])[:300]} if l.get("say") else {}),
-                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in sec.get("lines") or [] if str(l.get("text") or "").strip()]
+                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in _dl(sec.get("lines"), "text") if str(l.get("text") or "").strip()]
         if not lines:
             continue
         shots = [{"line": int(sh.get("line") or 0), "at": str(sh.get("at") or "")[:40], "show": [slug(x) for x in sh.get("show") or []][:3],
                   "words": str(sh.get("words") or "")[:60], "ring": str(sh.get("ring") or "")[:40], "action": str(sh.get("action") or "")[:200],
-                  "place": slug((sh.get("show") or ["paper"])[0])} for sh in sec.get("shots") or []][:90]
+                  "place": slug((sh.get("show") or ["paper"])[0])} for sh in _dl(sec.get("shots"), "action")][:90]
         sections.append({"id": f"p{k + 1}", "title": str(sec.get("title") or f"Chapter {k + 1}")[:80], "lines": lines, "shots": shots})
     if not sections or not pics:
         raise ValueError("the plan came back empty")
@@ -688,13 +700,13 @@ MIXED_PLAN_TOOL = {
 
 def _clean_mixed_plan(res: dict) -> dict:
     sections = []
-    for k, sec in enumerate(res.get("sections") or []):
+    for k, sec in enumerate(_dl(res.get("sections"), "title")):
         lines = [{"text": str(l.get("text") or "").strip()[:320], **({"say": str(l["say"])[:320]} if l.get("say") else {}),
-                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in sec.get("lines") or [] if str(l.get("text") or "").strip()]
+                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in _dl(sec.get("lines"), "text") if str(l.get("text") or "").strip()]
         if not lines:
             continue
         sid = f"p{k + 1}"; shots = []
-        for j, sh in enumerate(sec.get("shots") or []):
+        for j, sh in enumerate(_dl(sec.get("shots"), "action")):
             layer = "B" if sh.get("layer") == "B" and str(sh.get("search") or "").strip() else "A"
             prompt = str(sh.get("prompt") or sh.get("search") or "").strip()[:600]
             if not prompt:
