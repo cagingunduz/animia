@@ -9,7 +9,7 @@ export { clamp, lerp, seg, ss, eo, ei, eio, back, spring, hash, mulberry, TAU, e
 export let SW = 1920, SH = 1080;
 export function setScreen(w, h) { SW = w; SH = h; }
 export const C = { ink: '#0f1013', paper: '#f2f0ea', white: '#ffffff', grey: '#9a9ca6', hi: '#e8c547', red: '#e04848', card: '#121317', card2: '#1c1e24' };
-const H = (w, px) => `${w} ${px}px Inter`, Q = px => `italic 600 ${px}px PlayfairDisplay`, M = px => `500 ${px}px IBMPlexMono`;
+const H = (w, px) => `${w} ${px}px Inter`, H_ = H, Q = px => `italic 600 ${px}px PlayfairDisplay`, M = px => `500 ${px}px IBMPlexMono`;
 const cv = (w, h) => new OffscreenCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h)));
 
 // start of every frame: transparent, so the plate (footage) shows
@@ -106,6 +106,29 @@ export function compare(ctx, t, o) {
     if (s.sub) { ctx.fillStyle = '#9fa1aa'; ctx.font = H(500, 28); ctx.fillText(s.sub, x + SW / 4, SH * .64); }
     ctx.restore();
   });
+  ctx.restore();
+}
+// an official-data table card: K.table(ctx, t, { title, cols, rows, hi, at, out, source })
+export function table(ctx, t, o) {
+  if (t < o.at || (o.out != null && t > o.out + .25)) return;
+  const a = eo(seg(t, o.at, o.at + .3)) * (o.out == null ? 1 : 1 - seg(t, o.out, o.out + .25));
+  const cols = o.cols || [], rows = o.rows || [], W = Math.min(1500, 260 + cols.length * 300), rh = 86, H = 150 + rows.length * rh + (o.source ? 50 : 0);
+  const x = (SW - W) / 2, y = (SH - H) / 2;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(8,9,12,.6)'; ctx.fillRect(0, 0, SW, SH);
+  ctx.fillStyle = C.paper; ctx.fillRect(x, y, W, H); ctx.fillStyle = C.ink; ctx.fillRect(x, y, W, 8);
+  ctx.textBaseline = 'middle'; ctx.font = H_(800, 40); ctx.fillText(String(o.title || '').toUpperCase(), x + 40, y + 52);
+  const cw = (W - 80) / Math.max(1, cols.length);
+  ctx.font = H_(700, 24); ctx.fillStyle = '#6b6e78'; cols.forEach((c, i) => ctx.fillText(String(c).toUpperCase(), x + 40 + i * cw, y + 112));
+  rows.forEach((r, ri) => {
+    const at = o.at + .35 + ri * .18; if (t < at) return; const u = eo(seg(t, at, at + .25)), ry = y + 140 + ri * rh;
+    ctx.save(); ctx.globalAlpha *= u; ctx.translate((1 - u) * 30, 0);
+    if (ri === o.hi) { ctx.fillStyle = C.hi; ctx.fillRect(x + 24, ry, W - 48, rh - 10); }
+    ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.fillRect(x + 24, ry + rh - 6, W - 48, 2);
+    ctx.fillStyle = C.ink; ctx.font = H_(ri === o.hi ? 800 : 600, 36); r.forEach((v, ci) => ctx.fillText(String(v), x + 40 + ci * cw, ry + rh / 2 - 4));
+    ctx.restore();
+  });
+  if (o.source) { ctx.font = H_(500, 20); ctx.fillStyle = '#6b6e78'; ctx.fillText('Source: ' + o.source, x + 40, y + H - 30); }
   ctx.restore();
 }
 // a timeline strip of dates: K.timeline(ctx, t, [{ label: '23 Mart', at }, ...], { y: 860, active: index, out })

@@ -366,7 +366,8 @@ def _split_tools(tool: dict) -> tuple[dict, dict]:
     shared = {k: v for k, v in props.items() if k in ("places", "cast", "props")}
     script = {"name": "submit_script", "description": "Submit the script.", "input_schema": {"type": "object", "properties": {
         "title": props["title"], **({"description": props["description"]} if "description" in props else {}), **shared,
-        "sections": {"type": "array", "items": {"type": "object", "properties": {"title": sec_items["title"], "lines": sec_items["lines"]},
+        "sections": {"type": "array", "items": {"type": "object", "properties": {"title": sec_items["title"], "lines": sec_items["lines"],
+                                                                               **({"mode": sec_items["mode"]} if "mode" in sec_items else {})},
                                                  "required": ["title", "lines"]}}}, "required": ["title", "sections"]}}
     extra = {k: v for k, v in props.items() if k in ("places", "cast", "props", "pictures")}
     shots = {"name": "submit_shots", "description": "Submit this part's shots.", "input_schema": {"type": "object", "properties": {
@@ -395,9 +396,25 @@ async def _plan(st_: dict, s: dict):
            + "STEP 1 of 2: write the SCRIPT (title, description, the parts with their lines)"
            + (" and the CAST, PLACES and PROPS the whole video uses (ids, looks, and every pose any shot will need)" if "cast" in script_tool["input_schema"]["properties"] else "")
            + ". The shots come next, part by part.")
-    raw = await _claude(s["id"], system, ask, 16000, "plan", script_tool)
+    ups_blocks = []
+    if s.get("uploads") and src == "mixed":
+        import studio_footage
+        utmp = tempfile.mkdtemp(prefix="long-up-")
+        try:
+            recs = await studio_footage.uploads(s["uploads"], utmp)
+        finally:
+            subprocess.run(["rm", "-rf", utmp])
+        s["upload_info"] = [{"i": r["i"], "kind": r["kind"], "duration": round(r.get("duration") or 0, 1)} for r in recs]
+        if recs:
+            ups_blocks.append({"type": "text", "text": f"THE CREATOR'S UPLOADS ({len(recs)}): real footage / photos they provided. Use them first for "
+                                                       "layer B wherever they fit (shot.upload = the number, shot.upload_at = the second to start from)."})
+            for r in recs:
+                ups_blocks.append({"type": "text", "text": f"upload {r['i']}: {r['kind']}" + (f", {r['duration']:.1f} s (one frame per {r['every']:g} s, time in the corner)" if r["kind"] == "video" else "")})
+                ups_blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": r["sheet"]}})
+    raw = await _claude(s["id"], system, ([{"type": "text", "text": ask}] + ups_blocks) if ups_blocks else ask, 16000, "plan", script_tool)
     res = _tidy(raw)
-    sections = [{"title": str(x.get("title") or f"Part {i + 1}")[:80], "lines": _dl(x.get("lines"), "text")}
+    sections = [{"title": str(x.get("title") or f"Part {i + 1}")[:80], "lines": _dl(x.get("lines"), "text"),
+                 **({"mode": x["mode"]} if x.get("mode") in ("real", "mixed", "animation") else {})}
                 for i, x in enumerate(_dl(res.get("sections"), "title"))]
     sections = [x for x in sections if x["lines"]]
     if not sections:
@@ -411,7 +428,7 @@ async def _plan(st_: dict, s: dict):
             [f"- cast {c.get('id')}: " + "; ".join(f"{n + 1}) {p}" for n, p in enumerate(_strs(c.get('poses')) or ['standing'])) for c in shared.get("cast", [])]
             + [f"- place {p.get('id')}: {str(p.get('desc') or '')[:120]}" for p in shared.get("places", [])]
             + [f"- prop {p.get('id')}: {str(p.get('desc') or '')[:80]}" for p in shared.get("props", [])])
-    script_text = "\n\n".join(f"PART {i + 1}: {x['title']}\n" + "\n".join(f"  {j}: {l.get('text', '')}" for j, l in enumerate(x["lines"])) for i, x in enumerate(sections))
+    script_text = "\n\n".join(f"PART {i + 1}: {x['title']}" + (f" (mode: {x['mode']})" if x.get("mode") else "") + "\n" + "\n".join(f"  {j}: {l.get('text', '')}" for j, l in enumerate(x["lines"])) for i, x in enumerate(sections))
     sem, done = asyncio.Semaphore(3), {"n": 0}
 
     async def shots_for(i: int):
@@ -423,7 +440,8 @@ async def _plan(st_: dict, s: dict):
                     "in every part, e.g. 'viewer', 'lab', 'hotel_new_yorker').")
             for attempt in range(2):
                 try:
-                    r = _tidy(await _claude(s["id"], system, ask2, 12000, f"plan_shots_{i + 1}", shot_tool))
+                    content2 = ([{"type": "text", "text": ask2}] + ups_blocks) if ups_blocks else ask2
+                    r = _tidy(await _claude(s["id"], system, content2, 12000, f"plan_shots_{i + 1}", shot_tool))
                     if _dl(r.get("shots"), "action"):
                         done["n"] += 1; s["message"] = f"Writing the shot plan ({done['n']}/{len(sections)})"
                         return r
@@ -785,13 +803,14 @@ async def run(pid: str):
             subprocess.run(["rm", "-rf", tmp])
 
 
-def create(template: str, topic: str, minutes: int, voice: str | None, notes: str | None) -> dict:
+def create(template: str, topic: str, minutes: int, voice: str | None, notes: str | None, uploads: list | None = None) -> dict:
     st_ = studio_styles.style(template)
     lo, hi = st_.get("minutes", (2, 12))
     s = {"id": str(uuid.uuid4()), "template": template, "template_name": st_["name"], "created": time.time(),
          "topic": (topic or "").strip()[:300], "notes": (notes or "").strip()[:600], "minutes": max(lo, min(hi, int(minutes or 5))),
          "voice": voice if voice in (st_.get("voices") or []) else st_["voice"], "status": "planning", "stage": "plan",
-         "message": "Queued", "progress": 0.0, "title": None, "plan": None, "assets": {}, "parts": [], "error": None}
+         "message": "Queued", "progress": 0.0, "title": None, "plan": None, "assets": {}, "parts": [], "error": None,
+         "uploads": [str(u) for u in (uploads or [])][:20]}
     save(s)
     return s
 
@@ -833,8 +852,12 @@ MIXED_PLAN_TOOL = {
             "description": {"type": "string", "description": "a 2-3 sentence YouTube description"},
             "sections": {"type": "array", "items": {"type": "object", "properties": {
                 "title": {"type": "string", "description": "the chapter title"},
+                "mode": {"type": "string", "enum": ["real", "mixed", "animation"],
+                         "description": "real = only real footage (events, speeches, ceremonies, documents); mixed = real footage + data graphics; animation = illustrated analysis (concepts, maps, analogies)"},
                 "lines": _LINES,
                 "shots": {"type": "array", "description": "a new picture every 3-6 s, in order", "items": {"type": "object", "properties": {
+                    "upload": {"type": "integer", "description": "layer B from the user's upload with this number (preferred whenever one fits)"},
+                    "upload_at": {"type": "number", "description": "where to start inside that upload (seconds; see its contact sheet)"},
                     "line": {"type": "integer"}, "at": {"type": "string", "description": "the word the shot starts on"},
                     "layer": {"type": "string", "enum": ["A", "B"]},
                     "prompt": {"type": "string", "description": "layer A: the illustration's subject and composition (the style lock is added)"},
@@ -859,20 +882,27 @@ def _clean_mixed_plan(res: dict) -> dict:
         if not lines:
             continue
         sid = f"p{k + 1}"; shots = []
+        mode = sec.get("mode") if sec.get("mode") in ("real", "mixed", "animation") else "mixed"
         for j, sh in enumerate(_dl(sec.get("shots"), "action")):
-            layer = "B" if sh.get("layer") == "B" and str(sh.get("search") or "").strip() else "A"
-            prompt = str(sh.get("prompt") or sh.get("search") or "").strip()[:600]
+            up = sh.get("upload")
+            try:
+                up = int(up) if up is not None and str(up).strip() != "" else None
+            except (TypeError, ValueError):
+                up = None
+            layer = "B" if up is not None or (sh.get("layer") == "B" and str(sh.get("search") or "").strip()) else "A"
+            prompt = str(sh.get("prompt") or sh.get("search") or ("your upload " + str(up) if up is not None else "")).strip()[:600]
             if not prompt:
                 continue
             shots.append({"id": f"{sid}_s{j + 1}", "line": max(0, min(len(lines) - 1, int(sh.get("line") or 0))), "at": str(sh.get("at") or "")[:40],
                           "layer": layer, "prompt": prompt, "search": str(sh.get("search") or "")[:160], "alts": [str(a)[:160] for a in (sh.get("alts") or [])][:2],
                           "kind": sh.get("kind") if sh.get("kind") in ("video", "image") else "image",
                           "lower": {kk: str(v)[:80] for kk, v in (sh["lower"] if isinstance(sh.get("lower"), dict) else {"title": sh["lower"]} if sh.get("lower") else {}).items() if kk in ("title", "sub") and v} or None,
-                          "overlay": str(sh.get("overlay") or "")[:300], "place": f"{sid}_s{j + 1}", "action": str(sh.get("overlay") or "")[:200]})
+                          "overlay": str(sh.get("overlay") or "")[:300], "place": f"{sid}_s{j + 1}", "action": str(sh.get("overlay") or "")[:200],
+                          **({"upload": up, "upload_at": float(sh.get("upload_at") or 0)} if up is not None else {})})
         if not shots:
             shots = [{"id": f"{sid}_s1", "line": 0, "at": "", "layer": "A", "prompt": sec.get("title") or "an abstract establishing image",
                       "search": "", "alts": [], "kind": "image", "lower": None, "overlay": "", "place": f"{sid}_s1", "action": ""}]
-        sections.append({"id": sid, "title": str(sec.get("title") or f"Chapter {k + 1}")[:80], "lines": lines, "shots": shots[:90]})
+        sections.append({"id": sid, "title": str(sec.get("title") or f"Chapter {k + 1}")[:80], "mode": mode, "lines": lines, "shots": shots[:90]})
     if not sections:
         raise ValueError("the plan came back empty")
     return {"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
@@ -949,6 +979,35 @@ async def _footage(s: dict, sh: dict, said: str, tmp: str) -> dict | None:
     return None
 
 
+async def _from_upload(s: dict, sh: dict, tmp: str) -> dict | None:
+    """Layer B from the creator's own upload: a 10 s cut from upload_at (video), or the photo."""
+    import studio_media
+    ups = s.get("uploads") or []
+    i = sh.get("upload")
+    if not isinstance(i, int) or not 0 <= i < len(ups):
+        return None
+    try:
+        src = os.path.join(tmp, f"upload{i}" + (os.path.splitext(ups[i].split("?")[0])[1].lower()[:6] or ".bin"))
+        if not os.path.exists(src):
+            await studio_media.fetch(ups[i], src, max_mb=400)
+        kind = studio_media.kind_of(src)
+        if kind == "video":
+            out = os.path.join(tmp, f"{sh['id']}.mp4")
+            r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{max(0.0, float(sh.get('upload_at') or 0)):.2f}", "-i", src, "-t", "10", "-an",
+                                "-vf", "scale=1280:-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", out], capture_output=True, text=True)
+            if r.returncode != 0:
+                return None
+            url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.mp4", open(out, "rb").read(), "video/mp4")
+        else:
+            from PIL import Image, ImageOps
+            im = ImageOps.exif_transpose(Image.open(src)).convert("RGB"); im.thumbnail((2200, 2200)); b = io.BytesIO(); im.save(b, "JPEG", quality=88)
+            url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.jpg", b.getvalue(), "image/jpeg")
+        return {"url": url, "kind": kind if kind == "video" else "image", "layer": "B", "shows": f"your upload {i}", "upload": i}
+    except Exception as e:
+        print(f"[long] upload {i} for {sh['id']} failed: {e!r}")
+        return None
+
+
 async def _art_mixed(s: dict, tmp: str):
     """Every shot's picture: layer B from the open archives (falls back to a layer-A illustration of the same subject,
     never a wrong real picture), layer A generated with the style lock."""
@@ -962,7 +1021,9 @@ async def _art_mixed(s: dict, tmp: str):
         async with sem:
             said = sec["lines"][sh["line"]]["text"]
             got = None
-            if sh["layer"] == "B":
+            if sh.get("upload") is not None:
+                got = await _from_upload(s, sh, tmp)
+            if sh["layer"] == "B" and not got:
                 got = await _footage(s, sh, said, tmp)
             if not got:
                 try:

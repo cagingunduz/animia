@@ -13,6 +13,9 @@ OVERLAYS (all times in seconds; `out` = when it leaves):
 - K.counter(ctx, t, { to, from: 0, at, dur: 1.5, prefix, suffix, label, x, y, size, dec, out }) every big number.
 - K.quote(ctx, t, '“…”', at, { who, out }) real, sourced quotes only.
 - K.compare(ctx, t, { left: { title, value, sub }, right: { … }, at, win: 'left' | 'right', out }).
+- K.table(ctx, t, { title, cols: ['Year', 'Exports'], rows: [['2020', '$2.3B'], …], hi: rowIndex, at, out, source })
+  an official-data table card (rows land one by one, the highlighted row in yellow); keep it to 2-4 columns, 3-7 rows.
+- People on real footage: a lower third with their name and role (K.lower { title: 'Mark Carney', sub: 'Prime Minister of Canada' }).
 - K.timeline(ctx, t, [{ label, at }, …], { y, out }) dates in order, each landing on its word.
 - K.dim(ctx, t, { at, out, amount }) / K.focus(ctx, t, { x, y, w, h, at, out }) darken the picture / spotlight a box.
 - Marks on the picture: K.ring(ctx, t, { x, y, w, h, at }), K.arrow(ctx, t, { from, to, at }), K.box(ctx, t, { x, y, w, h, at }),
