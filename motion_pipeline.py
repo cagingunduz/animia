@@ -398,8 +398,22 @@ def _data_url_bytes(data_url: str) -> tuple[bytes, str]:
 
 def _apply_edits(html: str, edits: list) -> tuple[str, int]:
     applied = 0
+    if isinstance(edits, str):              # the model sometimes sends the array as JSON text
+        try:
+            edits = json.loads(edits)
+        except ValueError:
+            edits = []
+    if isinstance(edits, dict):
+        edits = [edits]
     for e in edits or []:
-        f, r = e.get("find", ""), e.get("replace", "")
+        if isinstance(e, str):
+            try:
+                e = json.loads(e)
+            except ValueError:
+                continue
+        if not isinstance(e, dict):
+            continue
+        f, r = str(e.get("find") or ""), str(e.get("replace") or "")
         if f and f in html:
             html = html.replace(f, r, 1)
             applied += 1

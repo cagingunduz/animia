@@ -702,7 +702,7 @@ def _clean_mixed_plan(res: dict) -> dict:
             shots.append({"id": f"{sid}_s{j + 1}", "line": max(0, min(len(lines) - 1, int(sh.get("line") or 0))), "at": str(sh.get("at") or "")[:40],
                           "layer": layer, "prompt": prompt, "search": str(sh.get("search") or "")[:160], "alts": [str(a)[:160] for a in (sh.get("alts") or [])][:2],
                           "kind": sh.get("kind") if sh.get("kind") in ("video", "image") else "image",
-                          "lower": {kk: str(v)[:80] for kk, v in (sh.get("lower") or {}).items() if kk in ("title", "sub") and v} or None,
+                          "lower": {kk: str(v)[:80] for kk, v in (sh["lower"] if isinstance(sh.get("lower"), dict) else {"title": sh["lower"]} if sh.get("lower") else {}).items() if kk in ("title", "sub") and v} or None,
                           "overlay": str(sh.get("overlay") or "")[:300], "place": f"{sid}_s{j + 1}", "action": str(sh.get("overlay") or "")[:200]})
         if not shots:
             shots = [{"id": f"{sid}_s1", "line": 0, "at": "", "layer": "A", "prompt": sec.get("title") or "an abstract establishing image",

@@ -385,7 +385,7 @@ def mix(voice_wav: str, timing: dict, total: float, out_wav: str, *, foley_kind:
         music *= vr * 10 ** (bed_db / 20) / mr
     # extra effects from the film (the generated library)
     fx = np.zeros(N)
-    for c in (spec.get("sfx") or [])[:40]:
+    for c in [x for x in (spec.get("sfx") or []) if isinstance(x, dict)][:40]:
         kind = str(c.get("type", ""))
         if kind not in lib:
             skipped.append(f"no sound {kind}"); continue
