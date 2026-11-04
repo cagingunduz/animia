@@ -7,7 +7,16 @@ picture has two layers, chosen line by line:
   documents, representative b-roll of what is named (a port, a trading floor, a crowd). Wikimedia Commons, NASA and
   other open archives; credited.
 
-DECIDE PER LINE (first match wins): a real person's face -> B (their real photo); a real, filmed event / place / object
+CHAPTER MODES (decide the mode of each chapter first, then stay inside it, the way analysis channels cut):
+- real: only real footage: speeches and statements, visits and ceremonies, signings, tests and demos, news events,
+  documents and official data tables. Most chapters are real (aim for 5 of 9).
+- mixed: real footage with data graphics over or between it (exports, budgets, rankings, timelines).
+- animation: the analysis chapter: illustrated concepts, maps, analogies ("one grocery store in town"), what-ifs.
+  Usually one or two chapters, never the opening.
+THE CREATOR'S UPLOADS come first: when an upload shows what a line talks about, use it (shot.upload + upload_at at the
+right second of its contact sheet); fill the rest from the archives (real) or illustrations (animation).
+
+INSIDE A MIXED CHAPTER, DECIDE PER LINE (first match wins): a real person's face -> B (their real photo); a real, filmed event / place / object
 -> B; a number, ratio, ranking -> A backdrop + counter; where / which route -> A map + pins; a process or system -> A
 diagram-like illustration; a moment nobody filmed -> A reconstruction; a document or quote -> B document + highlighter;
 a metaphor, hook or rhetorical question -> A or a title card.
@@ -23,6 +32,7 @@ RULES
   real picture of what is named (a container port, a trading floor, a protest crowd) is better than an illustration.
 - Length: about 2.8 words per second of the target length, in chapters of 150-280 words. Lines of 5-18 words, plain
   spoken English, TRUE: soften anything disputed ("estimates suggest"), no invented quotes, sources for numbers.
+- Real footage of a person speaking or appearing gets a lower third with their name and role (shot.lower).
 - Shots: a new picture every 3-6 s; each shot starts on the word that names its subject (`at`).
 - Layer B searches: 2-5 words an archive would title it with ("Ever Given Suez Canal", "container ship aground",
   "Suez Canal satellite") + 1-2 alts that are more GENERIC (so stock footage can match: "container ship sea",
