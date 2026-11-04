@@ -8,6 +8,10 @@ THE PICTURES: T.img[id] (already loaded). T.images = [{ id, kind: 'place' | 'cha
 - character: a cut-out in one pose (feet at the bottom of the picture). prop: an object cut-out.
 Use only ids from the list; every K function skips a missing picture.
 
+TEXT LENGTHS (the kit shrinks text to fit and reports anything still too long): a board / sign 1-5 words, a headline
+2-7 words, a date card a year or a short date. Characters: only ids that exist in T.img (the list and the contact sheet);
+every shot that names a character shows it, standing on the floor, never cropped by the frame edge.
+
 THE SHOT PLAN in the notes is binding: what is said is what is shown, each shot starting on its word (T.w(i, 'word',
 nth)); the place, who acts, the text and its surface, the marks.
 
@@ -20,7 +24,6 @@ A SCENE (the plate and everything on it, through one drifting camera):
       K.prop(g, t, T.img.coin, { x, y (centre), h, at, arrive, rot, float, out })
       K.sign(g, t, { kind: 'post' | 'hanging' | 'board' | 'chalk' | 'screen', x, y (face centre), w, h, text, at, out })
       K.redX(g, t, { x, y, size: 260, at }); K.tick(g, t, { x, y, size, at }); K.bang(g, t, { x, y, at, ch: '!' })
-      K.icon(g, t, 'skull', { x, y, size: 140, at })   // skull heart coin money clock globe bolt warning person house fire drop star question check cross
       K.counter(g, t, { x, y, from: 0, to, at, dur: 1.6, size: 90, prefix, suffix, color })
       K.puff(g, t, { x, y, at, size })
     })

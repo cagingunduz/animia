@@ -4,7 +4,7 @@ characters acting the line out; text only on signs, boards and screens in the wo
 
 THE STRUCTURE (the 60-second arc, stretched over the whole video and repeated in each part):
 - Part 1 (the opening, ~60 s): 0 s a second-person hook that flips what the viewer assumes, acted out literally, then a
-  red X on the denial line -> the stakes in one shocking true line (icons popping, one per word) -> the subject
+  red X on the denial line -> the stakes in one shocking true line (props popping in, one per word) -> the subject
   revealed under a spotlight, its name typed on a sign.
 - Middle parts (each 50-90 s, one per big question): the origin (the real place on its own sign, a date card, people
   walking in or out), the types or parts (landing one by one on their names), "so how does it work?" as a headline,

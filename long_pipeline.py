@@ -121,7 +121,7 @@ PLAN_TOOL = {
                     "props": {"type": "array", "items": {"type": "string"}},
                     "action": {"type": "string", "description": "what happens: who does what, the camera"},
                     "text": {"type": "string", "description": "the words on a surface (and which surface)"},
-                    "marks": {"type": "string", "description": "red X / tick / date card / spotlight / counter / icons / headline / splat, with their words"}},
+                    "marks": {"type": "string", "description": "red X / tick / date card / spotlight / counter / headline / splat, with their words"}},
                     "required": ["line", "place", "action"]}}},
                 "required": ["title", "lines", "shots"]}},
         },
@@ -256,10 +256,63 @@ def _dl(x, key: str = "text") -> list[dict]:
     return [i if isinstance(i, dict) else {key: i.strip()} for i in x if isinstance(i, dict) or (isinstance(i, str) and i.strip())]
 
 
+def _strs(v) -> list[str]:
+    """A list of plain strings (references, poses): items that _tidy turned into {id: ...} dicts are read back."""
+    v = _tidy(v)
+    if isinstance(v, str):
+        return [x.strip() for x in v.split(",") if x.strip()]
+    if not isinstance(v, list):
+        return []
+    out = []
+    for x in v:
+        if isinstance(x, dict):
+            x = x.get("id") or x.get("name") or next((y for y in x.values() if isinstance(y, str)), "")
+        if str(x).strip():
+            out.append(str(x).strip())
+    return out
+
+
+def _match(ref: str, ids: list[str]) -> str | None:
+    """A reference the model wrote ('Viewer', 'the_viewer', 'young man') -> the closest known id."""
+    r = long_art.slug(ref)
+    if not r or not ids:
+        return None
+    if r in ids:
+        return r
+    for i in ids:
+        if r in i or i in r:
+            return i
+    rw = set(r.split("_"))
+    best = max(ids, key=lambda i: len(rw & set(i.split("_"))))
+    return best if rw & set(best.split("_")) else None
+
+
+def _resolve_refs(plan: dict) -> dict:
+    cast = {c["id"]: len(c["poses"]) for c in plan["cast"]}
+    places = [p["id"] for p in plan["places"]]
+    props = [p["id"] for p in plan["props"]]
+    for sec in plan["sections"]:
+        for sh in sec["shots"]:
+            out = []
+            for ref in _strs(sh.get("cast")):
+                m = re.match(r"^(.*?)[:_ ]+(\d+)$", str(ref).strip())
+                base, n = (m.group(1), m.group(2)) if m else (str(ref), "1")
+                cid = _match(base or ref, list(cast))
+                if cid:
+                    k = max(1, min(cast[cid], int(n) if str(n).isdigit() else 1))
+                    if f"{cid}:{k}" not in out:
+                        out.append(f"{cid}:{k}")
+            sh["cast"] = out
+            if sh.get("place") != "headline" and sh.get("place") not in places:
+                sh["place"] = _match(str(sh.get("place") or ""), places) or (places[0] if places else "headline")
+            sh["props"] = [m for m in (_match(x, props) for x in _strs(sh.get("props"))) if m]
+    return plan
+
+
 def _clean_plan(res: dict, st: dict) -> dict:
     slug = long_art.slug
     places = [{"id": slug(p["id"]), "desc": str(p.get("desc") or p["id"])[:500]} for p in _dl(res.get("places"), "id") if p.get("id")][:24]
-    cast = [{"id": slug(c["id"]), "desc": str(c.get("desc") or c["id"])[:400], "poses": [str(x)[:120] for x in (c.get("poses") or ["standing, facing the viewer"])][:3]}
+    cast = [{"id": slug(c["id"]), "desc": str(c.get("desc") or c["id"])[:400], "poses": [x[:120] for x in (_strs(c.get("poses")) or ["standing, facing the viewer"])][:3]}
             for c in _dl(res.get("cast"), "id") if c.get("id")][:12]
     props = [{"id": slug(p["id"]), "desc": str(p.get("desc") or p["id"])[:300]} for p in _dl(res.get("props"), "id") if p.get("id")][:16]
     sections = []
@@ -273,8 +326,8 @@ def _clean_plan(res: dict, st: dict) -> dict:
                                     "line": int(sh.get("line") or 0)} for sh in _dl(sec.get("shots"), "action")][:80]})
     if not sections or not places:
         raise ValueError("the plan came back empty")
-    return {"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
-            "places": places, "cast": cast, "props": props, "sections": sections}
+    return _resolve_refs({"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
+                          "places": places, "cast": cast, "props": props, "sections": sections})
 
 
 def _clean_archive_plan(res: dict) -> dict:
@@ -310,8 +363,9 @@ def _split_tools(tool: dict) -> tuple[dict, dict]:
     per-part shot tool (the template's shot list, plus the art lists it may add to: places / cast / props / pictures)."""
     props = tool["input_schema"]["properties"]
     sec_items = props["sections"]["items"]["properties"]
+    shared = {k: v for k, v in props.items() if k in ("places", "cast", "props")}
     script = {"name": "submit_script", "description": "Submit the script.", "input_schema": {"type": "object", "properties": {
-        "title": props["title"], **({"description": props["description"]} if "description" in props else {}),
+        "title": props["title"], **({"description": props["description"]} if "description" in props else {}), **shared,
         "sections": {"type": "array", "items": {"type": "object", "properties": {"title": sec_items["title"], "lines": sec_items["lines"]},
                                                  "required": ["title", "lines"]}}}, "required": ["title", "sections"]}}
     extra = {k: v for k, v in props.items() if k in ("places", "cast", "props", "pictures")}
@@ -338,7 +392,9 @@ async def _plan(st_: dict, s: dict):
     system = plan_system(st_)
     ask = (f"The topic: {s['topic'] or 'pick the best one yourself'}\nThe length: {s['minutes']} minutes (about {words} words), "
            f"in parts of 150-280 words.\n" + (f"Notes from the creator: {s['notes']}\n" if s.get("notes") else "")
-           + "STEP 1 of 2: write the SCRIPT only (title, description, the parts with their lines). The shots come next, part by part.")
+           + "STEP 1 of 2: write the SCRIPT (title, description, the parts with their lines)"
+           + (" and the CAST, PLACES and PROPS the whole video uses (ids, looks, and every pose any shot will need)" if "cast" in script_tool["input_schema"]["properties"] else "")
+           + ". The shots come next, part by part.")
     raw = await _claude(s["id"], system, ask, 16000, "plan", script_tool)
     res = _tidy(raw)
     sections = [{"title": str(x.get("title") or f"Part {i + 1}")[:80], "lines": _dl(x.get("lines"), "text")}
@@ -348,13 +404,20 @@ async def _plan(st_: dict, s: dict):
         await _save_debug(s, "plan_script", raw)
         raise ValueError("the script came back empty (saved for inspection): resume to write it again")
     s["message"] = f"Writing the shot plan (0/{len(sections)})"
+    shared = {k: _dl(res.get(k), "id") for k in ("places", "cast", "props") if k in script_tool["input_schema"]["properties"]}
+    roster = ""
+    if shared:
+        roster = "\n\nTHE CAST, PLACES AND PROPS (use exactly these ids; cast as 'id:pose number'):\n" + "\n".join(
+            [f"- cast {c.get('id')}: " + "; ".join(f"{n + 1}) {p}" for n, p in enumerate(_strs(c.get('poses')) or ['standing'])) for c in shared.get("cast", [])]
+            + [f"- place {p.get('id')}: {str(p.get('desc') or '')[:120]}" for p in shared.get("places", [])]
+            + [f"- prop {p.get('id')}: {str(p.get('desc') or '')[:80]}" for p in shared.get("props", [])])
     script_text = "\n\n".join(f"PART {i + 1}: {x['title']}\n" + "\n".join(f"  {j}: {l.get('text', '')}" for j, l in enumerate(x["lines"])) for i, x in enumerate(sections))
     sem, done = asyncio.Semaphore(3), {"n": 0}
 
     async def shots_for(i: int):
         async with sem:
             sec = sections[i]
-            ask2 = (f"THE WHOLE SCRIPT (for context):\n{script_text}\n\nSTEP 2 of 2: write the shots for PART {i + 1} ONLY "
+            ask2 = (f"THE WHOLE SCRIPT (for context):\n{script_text}{roster}\n\nSTEP 2 of 2: write the shots for PART {i + 1} ONLY "
                     f"(\"{sec['title']}\", lines 0-{len(sec['lines']) - 1}; `line` is the index inside this part). "
                     "List the places / cast / props / pictures these shots use, with stable ids (the same id for the same thing "
                     "in every part, e.g. 'viewer', 'lab', 'hotel_new_yorker').")
@@ -374,7 +437,7 @@ async def _plan(st_: dict, s: dict):
     merged = {"title": res.get("title"), "description": res.get("description"), "sections": []}
     for k in ("places", "cast", "props", "pictures"):
         seen, out = set(), []
-        for pr in parts:
+        for pr in [shared] + list(parts):
             for it in _dl(pr.get(k), "id"):
                 key = long_art.slug(str(it.get("id") or it.get("search") or it.get("desc") or ""))
                 if key and key not in seen:
@@ -434,6 +497,23 @@ async def _art_archive(s: dict, tmp: str):
         raise RuntimeError("too few pictures were found in the archives: resume to search again")
 
 
+def _cutout(raw: bytes):
+    """A character / prop on a chroma green -> RGBA. When the model ignored the green (a scene behind the figure), the
+    green key keeps almost everything or nothing: fall back to background removal (IS-Net), so the figure is never lost."""
+    import numpy as np
+    from PIL import Image
+    try:
+        img = long_art.key(raw)
+        a = np.asarray(img.getchannel("A")) > 30
+        full = Image.open(io.BytesIO(raw))
+        if 0.04 < a.sum() / (full.width * full.height) < 0.85 and a.mean() < 0.97:
+            return img
+    except Exception as e:
+        print(f"[long] green key failed: {e!r}")
+    import studio_collage
+    return studio_collage.cut_out(Image.open(io.BytesIO(raw)).convert("RGB"))
+
+
 async def _art(s: dict):
     items = _art_list(s["plan"])
     assets = s.setdefault("assets", {})
@@ -463,7 +543,7 @@ async def _art(s: dict):
                 url = await asyncio.to_thread(_put, s["id"], f"art/{a['id']}.png", raw, "image/png")
                 assets[a["id"]] = {"url": url, "kind": "place", "boards": long_art.boards(raw)}
             else:
-                img = await asyncio.to_thread(long_art.key, raw)
+                img = await asyncio.to_thread(_cutout, raw)
                 b = io.BytesIO(); img.save(b, "PNG")
                 url = await asyncio.to_thread(_put, s["id"], f"art/{a['id']}.png", b.getvalue(), "image/png")
                 assets[a["id"]] = {"url": url, "kind": a["kind"], "use": a.get("use", "")}

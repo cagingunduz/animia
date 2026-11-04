@@ -16,7 +16,7 @@
   chalkboard / a screen (K.sign) that stands IN the scene. Typed in Montserrat 800 at 26-34 letters a second.
 - Ink #2b2d42 on white boards. A red X (K.redX) goes over every wrong idea. Every date gets the date card (K.dateCard).
 - Headlines: white caps on a flat colour card (K.headline: orange with puffs, or purple with gears), full frame, short.
-- Banned: outlines, motion-design UI floating over the art (code editors, glass cards, checklists), emoji, burned-in
+- Banned: code-drawn icons and clip-art (use a prop picture or a sign instead), outlines, motion-design UI floating over the art (code editors, glass cards, checklists), emoji, burned-in
   subtitles, any channel's logo, text floating over the art without a surface.
 
 ## 3. Motion
