@@ -12,6 +12,16 @@ export const C = { ink: '#2b2d42', white: '#ffffff', red: '#d62828', orange: '#f
   gear: '#6a4cb6', board: '#ffffff', post: '#5c6378', chalk: '#2f4a3f', screen: '#1f2433', blue: '#6c8ead', teal: '#4f7c82', beige: '#e8dcc5', navy: '#2e3a59' };
 const FONT = px => `800 ${px}px Montserrat`;
 const ok = img => !!(img && (img.naturalWidth || img.width));
+// layout problems found while the page is checked (window.__kCues 'warn'): the pipeline sends them back as fixes
+const _warned = new Set();
+export function warn(msg) { if (_warned.has(msg) || typeof window === 'undefined' || !window.__kCues) return; _warned.add(msg); window.__kCues.push({ t: 0, kind: 'warn', msg }); }
+// the largest size (<= size) at which the text fits in maxW x maxH (wrapped); { size, lines, fits }
+export function fit(text, size, maxW, maxH, lead = 1.12) {
+  const g = cv(8, 8).getContext('2d'); let s = size, lines = [];
+  for (let i = 0; i < 24; i++) { g.font = FONT(s); lines = wrapG(g, String(text), maxW); if (lines.length * s * lead <= maxH && lines.every(l => g.measureText(l).width <= maxW)) return { size: s, lines, fits: true }; s *= .9; if (s < 22) break; }
+  return { size: s, lines, fits: false };
+}
+function wrapG(g, text, maxW) { const out = []; for (const para of text.split('\n')) { let cur = ''; for (const w of para.split(' ')) { const tr = cur ? cur + ' ' + w : w; if (g.measureText(tr).width > maxW && cur) { out.push(cur); cur = w; } else cur = tr; } out.push(cur); } return out; }
 const IW = img => img.naturalWidth || img.width, IH = img => img.naturalHeight || img.height;
 const cv = (w, h) => new OffscreenCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h)));
 
@@ -61,7 +71,7 @@ export function puff(ctx, t, { x, y, at, size = 220, dur = .45 }) {
 //   jump: [t, ...] (little jumps), walk: [[t, x], ...] (walks along x, bobbing), turn: [t, ...] (flips at each t),
 //   lean: deg, talk: [t0, t1] (a speaking bounce) })
 export function char(ctx, t, img, o = {}) {
-  if (!ok(img)) return;
+  if (!ok(img)) { if (t >= (o.at ?? 0)) warn(`K.char at ${(o.at ?? 0).toFixed(1)} s: the picture is missing (not in T.img): use an id from the list`); return; }
   const at = o.at ?? 0, a = arrive(t, at, o.arrive || 'spring'); if (!a) return;
   if (o.out != null && t > o.out) return;
   const h = o.h ?? 520, w = h * IW(img) / IH(img); let x = o.x ?? SW / 2, y = o.y ?? SH * .9, flip = !!o.flip, walking = false;
@@ -82,7 +92,7 @@ export function char(ctx, t, img, o = {}) {
 }
 // any prop / object cut-out: K.prop(ctx, t, img, { x, y (centre), h, at, arrive, rot, out, float })
 export function prop(ctx, t, img, o = {}) {
-  if (!ok(img)) return;
+  if (!ok(img)) { if (t >= (o.at ?? 0)) warn(`K.prop at ${(o.at ?? 0).toFixed(1)} s: the picture is missing (not in T.img): use an id from the list`); return; }
   const at = o.at ?? 0, a = arrive(t, at, o.arrive || 'pop'); if (!a) return;
   if (o.out != null && t > o.out) return;
   const h = o.h ?? 260, w = h * IW(img) / IH(img), fl = o.float ? Math.sin(t * 2.2) * 8 : 0;
@@ -137,7 +147,11 @@ export function sign(ctx, t, o) {
   if (k === 'chalk' || k === 'screen' || k === 'panel') { ctx.fillStyle = k === 'screen' ? '#2b3042' : '#8a6a4a'; rr(ctx, -w / 2 - 22, -h / 2 - 22, w + 44, h + 44, 14); ctx.fill(); }
   ctx.fillStyle = shade; rr(ctx, -w / 2 + 8, -h / 2 + 10, w, h, 12); ctx.fill();
   ctx.fillStyle = face; rr(ctx, -w / 2, -h / 2, w, h, 12); ctx.fill();
-  if (o.text) typed(ctx, t, o.text, 0, 0, o.size ?? Math.min(h * .42, 64), at, { cps: o.cps ?? 30, color: o.color ?? (k === 'chalk' || k === 'screen' ? '#f1f1ea' : C.ink), maxW: w * .86 });
+  if (o.text) {
+    const f = fit(o.text, o.size ?? Math.min(h * .42, 64), w * .86, h * .8);
+    if (!f.fits) warn(`K.sign "${String(o.text).slice(0, 40)}" (${Math.round(w)}x${Math.round(h)}) at ${at.toFixed(1)} s: the text does not fit: shorten it or make the sign bigger`);
+    typed(ctx, t, o.text, 0, 0, f.size, at, { cps: o.cps ?? 30, color: o.color ?? (k === 'chalk' || k === 'screen' ? '#f1f1ea' : C.ink), maxW: w * .86 });
+  }
   ctx.restore();
 }
 function rr(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
@@ -151,6 +165,7 @@ export function write(ctx, t, box, text, at, o = {}) {
   ctx.save(); ctx.font = FONT(size);
   for (let i = 0; i < 12; i++) { const lines = wrap(ctx, String(text), maxW); if (lines.length * size * 1.12 <= maxH && lines.every(l => ctx.measureText(l).width <= maxW)) break; size *= .88; ctx.font = FONT(size); }
   ctx.restore();
+  if (size < 24) warn(`K.write "${String(text).slice(0, 40)}" at ${at.toFixed(1)} s: too long for that board (${Math.round(box.w)}x${Math.round(box.h)}): shorten it`);
   typed(ctx, t, text, box.x + box.w / 2, box.y + box.h / 2, size, at, { cps: o.cps ?? 30, color: o.color ?? (box.kind === 'screen' ? '#e9f0ff' : C.ink), maxW });
 }
 // a red X over a wrong idea: two round strokes of 0.11 s each. K.redX(ctx, t, { x, y, size: 260, at, out })
@@ -188,7 +203,9 @@ export function headline(ctx, t, text, at, o = {}) {
   if (purple) { for (let i = 0; i < 6; i++) gear(ctx, R() * SW, R() * SH, 90 + R() * 160, (R() < .5 ? 1 : -1) * t * (.15 + R() * .2), C.gear); }
   else { ctx.fillStyle = 'rgba(255,255,255,.12)'; for (let i = 0; i < 9; i++) { const x = (R() * SW + t * (20 + R() * 30)) % (SW + 300) - 150, y = R() * SH, r = 70 + R() * 130;
     for (let j = 0; j < 4; j++) { ctx.beginPath(); ctx.arc(x + (j - 1.5) * r * .55, y + (j % 2) * r * .2, r * .55, 0, TAU); ctx.fill(); } } }
-  typed(ctx, t, String(text).toUpperCase(), SW / 2, SH / 2, o.size ?? 94, at, { cps: o.cps ?? 30, color: '#fff', maxW: SW * .8 });
+  const hf = fit(String(text).toUpperCase(), o.size ?? 94, SW * .8, SH * .55);
+  if (!hf.fits) warn(`K.headline "${String(text).slice(0, 40)}" at ${at.toFixed(1)} s: too long for a headline: 2-7 words`);
+  typed(ctx, t, String(text).toUpperCase(), SW / 2, SH / 2, hf.size, at, { cps: o.cps ?? 30, color: '#fff', maxW: SW * .8 });
   if (o.marks) { const done = at + typeTime(text, o.cps ?? 30), R2 = mulberry(11);
     for (let i = 0; i < 6; i++) { const tt = done + i * .12; if (t < tt) continue; const s = back(seg(t, tt, tt + .3), 2.4), x = SW * (.12 + .76 * R2()), y = SH * (.15 + .7 * (R2() < .5 ? R2() * .25 : .75 + R2() * .25));
       ctx.save(); ctx.translate(x, y); ctx.rotate((R2() - .5) * .6 + Math.sin(t * 3 + i) * .08); ctx.scale(s, s); ctx.font = FONT(110); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'; ctx.fillText(o.marks, 0, 0); ctx.restore(); } }

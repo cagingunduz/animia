@@ -253,7 +253,7 @@ def _static(code: str) -> list[str]:
     return [why for pat, why in _FORBIDDEN if re.search(pat, code)]
 
 
-async def _load(st: dict, code: str, timing: dict, bins: dict | None = None) -> tuple[list[str], dict, list]:
+async def _load(st: dict, code: str, timing: dict, bins: dict | None = None, warns: list | None = None) -> tuple[list[str], dict, list]:
     payload = {"files": {"index.html": compose(st, code, timing, probe=True)}}
     if bins:
         payload["binary_files"] = bins
@@ -262,6 +262,8 @@ async def _load(st: dict, code: str, timing: dict, bins: dict | None = None) -> 
         return [f"page failed to load: {r.text[:600]}"], {}, []
     d = r.json(); cues = d.get("cues", [])
     errors = [c.get("msg", "") for c in cues if c.get("kind") == "error"] + list(d.get("errors") or [])
+    if warns is not None:          # layout problems the kit measured (text that doesn't fit, a missing picture)
+        warns[:] = [str(c.get("msg", "")) for c in cues if isinstance(c, dict) and c.get("kind") == "warn"][:20]
     spec = next((c.get("spec") for c in cues if isinstance(c, dict) and c.get("kind") == "spec"), None) or {}
     foley = next((c.get("events") for c in cues if isinstance(c, dict) and c.get("kind") == "foley"), None) or []
     spec = spec if isinstance(spec, dict) else {}           # a film may return sfx: 'none' or a list
@@ -324,9 +326,10 @@ async def _film(job_id: str, st: dict, s: dict, timing: dict, stills: list | Non
         problems = _static(code)
         errors, spec, foley = ([], {}, [])
         if not problems:
-            errors, spec, foley = await _load(st, code, timing, bins)
+            warns: list = []
+            errors, spec, foley = await _load(st, code, timing, bins, warns)
             if not errors and attempt < 2:
-                errors = _offscreen(st, foley)
+                errors = _offscreen(st, foley) + [f"LAYOUT: {w}" for w in warns]
         if not problems and not errors:
             return code, spec, foley
         if attempt == MAX_FIXES:
