@@ -219,7 +219,31 @@ async def pitch(template: str, hint: str = "") -> list[dict]:
                         f"Pitch 3 topics (a what-if, a 'why does X happen', a true story, or how something works), each with one "
                         f"shocking true angle.{(' The creator wants: ' + hint) if hint else ''}", 1500, "pitch", tool)
     job_store.pop(pid, None)
+    res = _tidy(res)
     return [{"topic": str(p.get("topic"))[:120], "angle": str(p.get("angle"))[:240]} for p in (res.get("pitches") or [])][:3]
+
+
+# list field -> the field a bare-string item becomes
+_ITEM_KEY = {"pitches": "topic", "places": "id", "cast": "id", "props": "id", "pictures": "id", "sections": "title",
+             "lines": "text", "shots": "action"}
+
+
+def _tidy(x, key: str | None = None):
+    """Claude sometimes sends a nested array or object as a JSON string, or a list item as a bare string. Parse the
+    strings back and turn bare items of the known lists into {field: text}, so the plan cleaners only see dicts."""
+    if isinstance(x, str) and x.strip()[:1] in ("[", "{"):
+        try:
+            x = json.loads(x)
+        except ValueError:
+            return x
+    if isinstance(x, dict):
+        return {k: _tidy(v, k) for k, v in x.items()}
+    if isinstance(x, list):
+        out = [_tidy(i) for i in x]
+        if key in _ITEM_KEY:
+            out = [i if isinstance(i, dict) else {_ITEM_KEY[key]: str(i)} for i in out if isinstance(i, (dict, str)) and i]
+        return out
+    return x
 
 
 def _clean_plan(res: dict, st: dict) -> dict:
@@ -276,7 +300,7 @@ async def _plan(st_: dict, s: dict):
            f"in parts of 150-280 words.\n" + (f"Notes from the creator: {s['notes']}\n" if s.get("notes") else "") + "Write the plan.")
     src = st_.get("art_source")
     tool = ARCHIVE_PLAN_TOOL if src == "archive" else MIXED_PLAN_TOOL if src == "mixed" else PLAN_TOOL
-    res = await _claude(s["id"], plan_system(st_), ask, 32000, "plan", tool)
+    res = _tidy(await _claude(s["id"], plan_system(st_), ask, 32000, "plan", tool))
     s["plan"] = _clean_archive_plan(res) if src == "archive" else _clean_mixed_plan(res) if src == "mixed" else _clean_plan(res, st_)
     s["title"] = s["plan"]["title"]
     s.update(status="awaiting_approval", stage="review", message="Read the script and the shot plan, then approve", progress=0.08)
