@@ -262,8 +262,10 @@ async def _load(st: dict, code: str, timing: dict, bins: dict | None = None) -> 
         return [f"page failed to load: {r.text[:600]}"], {}, []
     d = r.json(); cues = d.get("cues", [])
     errors = [c.get("msg", "") for c in cues if c.get("kind") == "error"] + list(d.get("errors") or [])
-    spec = next((c.get("spec") for c in cues if c.get("kind") == "spec"), None) or {}
-    foley = next((c.get("events") for c in cues if c.get("kind") == "foley"), None) or []
+    spec = next((c.get("spec") for c in cues if isinstance(c, dict) and c.get("kind") == "spec"), None) or {}
+    foley = next((c.get("events") for c in cues if isinstance(c, dict) and c.get("kind") == "foley"), None) or []
+    spec = spec if isinstance(spec, dict) else {}           # a film may return sfx: 'none' or a list
+    foley = [e for e in foley if isinstance(e, dict)] if isinstance(foley, list) else []
     return errors, spec, foley
 
 
@@ -412,7 +414,8 @@ async def _render(job_id: str, st: dict, code: str, timing: dict, tmp: str, plat
 # ─────────────────────────── 6. sound ───────────────────────────
 
 async def _sound(job_id: str, st: dict, video: str, voice_wav: str, timing: dict, spec: dict, foley: list, tmp: str) -> str:
-    kinds = {str(c.get("type")) for c in (spec.get("sfx") or []) if str(c.get("type")) in motion_sound.SFX_LIBRARY}
+    spec = spec if isinstance(spec, dict) else {}
+    kinds = {str(c.get("type")) for c in (spec.get("sfx") or []) if isinstance(c, dict) and str(c.get("type")) in motion_sound.SFX_LIBRARY}
     if st.get("bed") in motion_sound.SFX_LIBRARY:
         kinds.add(st["bed"])
     try:
