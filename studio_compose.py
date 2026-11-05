@@ -56,6 +56,7 @@ html,body{{margin:0;background:#000}}
   window.__kCues = window.__kCues || [];
   const canvas = document.getElementById('film'), c = canvas.getContext('2d');
   if (KIT.setScreen) KIT.setScreen({w}, {h});
+  if (KIT.use && window.TIMING.look) KIT.use(window.TIMING.look);
   const T = window.TIMING;
   T.img = {{}};
   for (const el of document.querySelectorAll('img[data-k]')) if (el.naturalWidth) T.img[el.dataset.k] = el;

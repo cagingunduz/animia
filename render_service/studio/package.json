@@ -19,6 +19,7 @@
     "@fontsource/titan-one": "^5.2.5",
     "@fontsource/vt323": "^5.2.5",
     "esbuild": "0.25.10",
+    "postprocessing": "6.36.7",
     "three": "^0.160.0"
   }
 }

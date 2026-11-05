@@ -34,7 +34,7 @@ from jobs import job_store
 from motion_pipeline import BillingError
 from storybook_pipeline import R2_BUCKET, R2_PUBLIC_BASE, get_r2_client
 
-TEMPLATES = ("flat-explainer", "collage-doc-long", "doc-analysis")
+TEMPLATES = ("flat-explainer", "collage-doc-long", "doc-analysis", "cinecode-film")
 _running: set[str] = set()
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -163,7 +163,45 @@ ARCHIVE_PLAN_TOOL = {
 }
 
 
+CODE_PLAN_TOOL = {
+    "name": "submit_plan",
+    "description": "Submit the video plan.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "the YouTube title (under 70 characters)"},
+            "description": {"type": "string", "description": "a 2-3 sentence YouTube description"},
+            "sections": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "the part's chapter title"},
+                "lines": _LINES,
+                "shots": {"type": "array", "description": "a new picture or step every 3-6 s, in order", "items": {"type": "object", "properties": {
+                    "line": {"type": "integer", "description": "0-based line index inside this part"},
+                    "at": {"type": "string", "description": "the word the shot starts on"},
+                    "build": {"type": "string", "description": "what is built or drawn and what it does (concrete, this story's own thing)"},
+                    "device": {"type": "string", "enum": ["where", "how much", "how it works", "when", "who", "statement", "scene"]},
+                    "camera": {"type": "string", "description": "one camera line, e.g. 'dolly in, 3 s, slow ease-in-out, toward the core'"},
+                    "text": {"type": "string", "description": "the words on screen (6 words at most)"},
+                    "data": {"type": "string", "description": "the real numbers a chart / counter uses"}},
+                    "required": ["line", "build"]}}},
+                "required": ["title", "lines", "shots"]}},
+        },
+        "required": ["title", "sections"],
+    },
+}
+
+
 def plan_system(st: dict) -> str:
+    if st.get("art_source") == "code":
+        return f"""You plan a long YouTube film in the {st['name']} format: the script (in parts) and, for every shot, what an
+animator builds in code (no pictures are generated or downloaded) in the look below.
+
+{st['plan_md']}
+
+THE LOOK ({st.get('look_name', '')}):
+{st['style_md']}
+
+THE LINES: `text` is the caption form; `say` the spoken form only when it differs (numbers, symbols). `mood` sets the
+delivery; `pause` 0.2-0.6 s. Only true claims."""
     if st.get("art_source") == "mixed":
         return f"""You plan a long YouTube analysis documentary in the {st['name']} style: the script (in chapters) and, for every
 shot, its picture layer (A generated illustration, or B real archive footage / photo) and the typography over it. The
@@ -358,6 +396,35 @@ def _clean_archive_plan(res: dict) -> dict:
             "pictures": pics[:90], "places": [], "cast": [], "props": [], "sections": sections}
 
 
+def _clean_code_plan(res: dict) -> dict:
+    sections = []
+    for k, sec in enumerate(_dl(res.get("sections"), "title")):
+        lines = [{"text": str(l.get("text") or "").strip()[:300], **({"say": str(l["say"])[:300]} if l.get("say") else {}),
+                  "pause": float(l.get("pause") or .3), "mood": l.get("mood") or "neutral"} for l in _dl(sec.get("lines"), "text") if str(l.get("text") or "").strip()]
+        if not lines:
+            continue
+        shots = [{"line": max(0, min(len(lines) - 1, int(sh.get("line") or 0))), "at": str(sh.get("at") or "")[:40],
+                  "build": str(sh.get("build") or sh.get("action") or "")[:400], "device": str(sh.get("device") or "scene")[:20],
+                  "camera": str(sh.get("camera") or "")[:160], "text": str(sh.get("text") or "")[:80], "data": str(sh.get("data") or "")[:200]}
+                 for sh in _dl(sec.get("shots"), "build") if str(sh.get("build") or sh.get("action") or "").strip()][:90]
+        sections.append({"id": f"p{k + 1}", "title": str(sec.get("title") or f"Part {k + 1}")[:80], "lines": lines, "shots": shots})
+    if not sections:
+        raise ValueError("the plan came back empty")
+    return {"title": str(res.get("title") or "Untitled")[:100], "description": str(res.get("description") or "")[:600],
+            "places": [], "cast": [], "props": [], "sections": sections}
+
+
+def with_look(st_: dict, s: dict) -> dict:
+    """A template with looks (Cinecode Film): the project's look recipe joins the style rules."""
+    if not st_.get("looks"):
+        return st_
+    look = s.get("look") if s.get("look") in st_["looks"] else st_["look"]
+    st = dict(st_)
+    st.update(look_id=look, look_name=st_["looks"][look],
+              style_md=st_["style_md"] + f"\n\nTHE LOOK RECIPE ({st_['looks'][look]}):\n" + studio_styles.look_md(st_["key"], look))
+    return st
+
+
 def _split_tools(tool: dict) -> tuple[dict, dict]:
     """From a template's full plan tool: (1) the script tool (title, description, sections with lines) and (2) the
     per-part shot tool (the template's shot list, plus the art lists it may add to: places / cast / props / pictures)."""
@@ -388,7 +455,7 @@ async def _plan(st_: dict, s: dict):
     _step(s, "plan", "Writing the script", 0.02)
     words = round(s["minutes"] * 60 * st_.get("wps", 3.1))
     src = st_.get("art_source")
-    tool = ARCHIVE_PLAN_TOOL if src == "archive" else MIXED_PLAN_TOOL if src == "mixed" else PLAN_TOOL
+    tool = ARCHIVE_PLAN_TOOL if src == "archive" else MIXED_PLAN_TOOL if src == "mixed" else CODE_PLAN_TOOL if src == "code" else PLAN_TOOL
     script_tool, shot_tool = _split_tools(tool)
     system = plan_system(st_)
     ask = (f"The topic: {s['topic'] or 'pick the best one yourself'}\nThe length: {s['minutes']} minutes (about {words} words), "
@@ -464,7 +531,8 @@ async def _plan(st_: dict, s: dict):
     for sec, pr in zip(sections, parts):
         merged["sections"].append({**sec, "shots": _dl(pr.get("shots"), "action")})
     try:
-        s["plan"] = _clean_archive_plan(merged) if src == "archive" else _clean_mixed_plan(merged) if src == "mixed" else _clean_plan(merged, st_)
+        s["plan"] = (_clean_archive_plan(merged) if src == "archive" else _clean_mixed_plan(merged) if src == "mixed"
+                     else _clean_code_plan(merged) if src == "code" else _clean_plan(merged, st_))
     except ValueError:
         await _save_debug(s, "plan_merged", merged)
         raise
@@ -619,6 +687,23 @@ def _shot_notes(sec: dict, timing: dict) -> str:
     return "THE SHOT PLAN (binding; times are when each shot starts):\n" + "\n".join(rows)
 
 
+def _code_notes(sec: dict, timing: dict, k: int) -> str:
+    norm = lambda w: re.sub(r"[^a-z0-9]", "", str(w).lower())
+    rows = []
+    for sh in sec["shots"]:
+        i = max(0, min(len(timing["lines"]) - 1, int(sh.get("line") or 0)))
+        ln = timing["lines"][i]; when = ln["start"]
+        if sh.get("at"):
+            hit = next((w for w in ln["words"] if norm(w["w"]) == norm(str(sh["at"]).split()[0])), None)
+            if hit:
+                when = hit["s"]
+        rows.append(f'{when:6.2f} s (line {i}, "{sh.get("at") or "start"}"): [{sh.get("device") or "scene"}] {sh.get("build", "")}'
+                    + (f' | camera: {sh["camera"]}' if sh.get("camera") else "") + (f' | text: {sh["text"]}' if sh.get("text") else "")
+                    + (f' | data: {sh["data"]}' if sh.get("data") else ""))
+    head = "This is the FIRST part: the first 2 seconds move from frame 1 with an action.\n" if k == 0 else f"Part {k + 1}: it may open on K.title (kicker 'PART {k + 1}', the part's title) for 2-3 s.\n"
+    return head + "THE SHOT PLAN (binding; times are when each shot starts):\n" + "\n".join(rows)
+
+
 async def _fetch(url: str) -> bytes:
     async with httpx.AsyncClient(timeout=120) as c:
         r = await c.get(url); r.raise_for_status(); return r.content
@@ -685,6 +770,11 @@ async def _part(s: dict, st_: dict, k: int, tmp: str):
     # the pictures this part uses
     if st.get("art_source") == "mixed":
         return await _part_mixed(s, st, k, sec, part, timing, wav, d, base, span, n)
+    if st.get("art_source") == "code":
+        timing["look"] = st.get("look_id")
+        timing["images"] = []
+        script = {"title": f'{s["plan"]["title"]} — part {k + 1}: {sec["title"]}', "visual_notes": _code_notes(sec, timing, k), "lines": sec["lines"]}
+        return await _part_film(s, st, k, n, part, script, timing, d, wav, base, span, None)
 
     used = set()
     for sh in sec["shots"]:
@@ -705,10 +795,15 @@ async def _part(s: dict, st_: dict, k: int, tmp: str):
     notes = _track_notes(sec, timing, assets) if st.get("art_source") == "archive" else _shot_notes(sec, timing)
     script = {"title": f'{s["plan"]["title"]} — part {k + 1}: {sec["title"]}', "visual_notes": notes, "lines": sec["lines"]}
 
+    return await _part_film(s, st, k, n, part, script, timing, d, wav, base, span, bins, sheets_from=(timing["images"], raws))
+
+
+async def _part_film(s, st, k, n, part, script, timing, d, wav, base, span, bins, sheets_from=None):
+    import studio_pipeline as SP
     # film
     if not part.get("code"):
         _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: animating", base + span * .2)
-        sheets = await asyncio.to_thread(_sheet, timing["images"], raws)
+        sheets = await asyncio.to_thread(_sheet, *sheets_from) if sheets_from else None
         code, spec, foley = await SP._film(s["id"], st, script, timing, None, bins, sheets)
         try:
             _step(s, f"part{k + 1}", f"Part {k + 1}/{n}: checking the frames", base + span * .45)
@@ -766,7 +861,7 @@ async def run(pid: str):
         try:
             if not s:
                 return
-            st_ = studio_styles.style(s["template"])
+            st_ = with_look(studio_styles.style(s["template"]), s)
             s["error"] = None
             if s["status"] == "planning":
                 await _plan(st_, s); save(s); return
@@ -776,6 +871,8 @@ async def run(pid: str):
                 await _art_archive(s, tmp)
             elif st_.get("art_source") == "mixed":
                 await _art_mixed(s, tmp)
+            elif st_.get("art_source") == "code":
+                pass                               # nothing to make: every shot is built in the kit
             else:
                 await _art(s)
             save(s)
@@ -803,7 +900,8 @@ async def run(pid: str):
             subprocess.run(["rm", "-rf", tmp])
 
 
-def create(template: str, topic: str, minutes: int, voice: str | None, notes: str | None, uploads: list | None = None) -> dict:
+def create(template: str, topic: str, minutes: int, voice: str | None, notes: str | None, uploads: list | None = None,
+           look: str | None = None) -> dict:
     st_ = studio_styles.style(template)
     lo, hi = st_.get("minutes", (2, 12))
     s = {"id": str(uuid.uuid4()), "template": template, "template_name": st_["name"], "created": time.time(),
@@ -811,6 +909,9 @@ def create(template: str, topic: str, minutes: int, voice: str | None, notes: st
          "voice": voice if voice in (st_.get("voices") or []) else st_["voice"], "status": "planning", "stage": "plan",
          "message": "Queued", "progress": 0.0, "title": None, "plan": None, "assets": {}, "parts": [], "error": None,
          "uploads": [str(u) for u in (uploads or [])][:20]}
+    if st_.get("looks"):
+        s["look"] = look if look in st_["looks"] else st_["look"]
+        s["look_name"] = st_["looks"][s["look"]]
     save(s)
     return s
 
