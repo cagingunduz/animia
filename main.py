@@ -744,6 +744,7 @@ class LongCreate(BaseModel):
     voice: Optional[str] = Field(None, max_length=40)
     notes: Optional[str] = Field(None, max_length=600)
     uploads: Optional[List[str]] = Field(None, max_length=20)        # the user's own clips / photos (/studio/upload)
+    look: Optional[str] = Field(None, max_length=40)                 # Cinecode Film: one of its looks
 
 
 class LongPitch(BaseModel):
@@ -786,7 +787,7 @@ async def long_create(req: LongCreate, x_studio_key: str = Header("")):
     from storybook_pipeline import R2_PUBLIC_BASE
     if any(not str(u).startswith(f"{R2_PUBLIC_BASE}/studio-uploads/") for u in (req.uploads or [])):
         raise HTTPException(status_code=400, detail="Uploads must come from /studio/upload.")
-    s = await asyncio.to_thread(long_pipeline.create, req.template, req.topic or "", req.minutes, req.voice, req.notes, req.uploads)
+    s = await asyncio.to_thread(long_pipeline.create, req.template, req.topic or "", req.minutes, req.voice, req.notes, req.uploads, req.look)
     asyncio.create_task(long_pipeline.run(s["id"]))
     return long_pipeline.public(s)
 

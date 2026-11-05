@@ -192,7 +192,45 @@ STYLES: dict[str, dict] = {
         "minutes": (3, 20),
         "inputs": [],
     },
+    # looks, camera moves and craft rules from github.com/sarpstar/cinecode (MIT; its library recipes after
+    # github.com/lemomo-ai/lemo-opuscar, MIT): studio_styles/cinecode-film/looks/<id>.md, the kit in src/cinecode
+    "cinecode-film": {
+        "name": "Cinecode Film",
+        "kit_file": "cinecode.three.js", "kit_global": "CC",
+        "size": (1920, 1080),
+        "fonts": [{"family": "Inter", "file": f"Inter-{w}.woff2", "weight": w} for w in (500, 600, 700, 800)]
+                 + [{"family": "BarlowCondensed", "file": "BarlowCondensed-600.woff2", "weight": 600},
+                    {"family": "BarlowCondensed", "file": "BarlowCondensed-800.woff2", "weight": 800},
+                    {"family": "IBMPlexMono", "file": "IBMPlexMono-500.woff2", "weight": 500},
+                    {"family": "JetBrainsMono", "file": "JetBrainsMono-500.woff2", "weight": 500},
+                    {"family": "AD", "file": "ArchitectsDaughter-400.woff2"},
+                    {"family": '"Baloo 2"', "file": "Baloo2-800.woff2", "weight": 800},
+                    {"family": "PlayfairDisplay", "file": "PlayfairDisplay-600i.woff2", "weight": 600, "style": "italic"}],
+        "background": "#000",
+        "voice": "pt_michael", "speed": 1.08,
+        "voices": ["pt_michael", "pt_george", "pt_charles", "pt_paul", "pt_alba", "am_michael", "af_heart"],
+        "mood_pace": 0.3,
+        "wps": 2.8,
+        "tail": 0.8,
+        "bed": "studio_bed_analysis", "bed_db": -12.0,
+        "foley": "flat",
+        "long": True,
+        "art_source": "code",               # nothing generated or downloaded: every shot is built in the kit
+        "looks": {"vox-explainer": "Vox Explainer", "iso-infographic": "Isometric Infographic", "lowpoly-island": "Low-poly World",
+                  "hologram-hud": "Hologram HUD", "blueprint": "Blueprint", "dataviz": "Data Story",
+                  "dark-keynote": "Dark Keynote", "swiss-motion": "Swiss Motion"},
+        "look": "vox-explainer",
+        "minutes": (2, 15),
+        "inputs": [],
+    },
 }
+
+
+def look_md(key: str, look: str) -> str:
+    """A template's look recipe (studio_styles/<key>/looks/<look>.md), or ''."""
+    if not look or not all(c.isalnum() or c == "-" for c in look):
+        return ""
+    return _read(key, os.path.join("looks", f"{look}.md"))
 
 
 def style(key: str) -> dict:
