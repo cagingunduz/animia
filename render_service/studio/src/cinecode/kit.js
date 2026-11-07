@@ -57,7 +57,78 @@ export const FILMS = {
     pal: { bg: '#EAE9E5', paper: '#FFFFFF', ink: '#111111', main: '#8C8C8C', second: '#CFCFCB', accent: '#E30613', soft: '#DADAD5' },
     type: { display: F(800, 'Inter', false), text: F(600, 'Inter'), mono: F(500, 'JetBrainsMono'), hand: F(500, 'Inter') },
     grain: { a: 0, size: 1 }, vignette: 0 },
+
+  // —— evidence films ——
+  'teardown': { mode: '3d', base: 'glossy-commercial', ground: 'dark', hold: 1,
+    pal: { bg: '#0D0E10', paper: '#1C1E22', ink: '#F1EFE9', main: '#A7AEB6', second: '#3A3D43', accent: '#FF6B3D', soft: '#25272B' },
+    type: { display: F(700, 'Inter', false), text: F(500, 'Inter'), mono: F(500, 'JetBrainsMono'), hand: F(600, 'Inter') },
+    shading: { shading: 'pbr', roughness: .32 }, light: { azimuthDeg: 140, elevationDeg: 38, intensity: 3.4, ambient: .32 },
+    post: { tone: 'AGX', saturation: 0, contrast: .08, brightness: 0, bloom: { threshold: .82, smoothing: .3, intensity: .45, radius: .6 },
+      outline: null, vignette: { offset: .3, darkness: .6 }, grain: { intensity: .02, size: 1.3 } },
+    grain: { a: .02, size: 1.3 }, vignette: .4 },
+  'white-model': { mode: '3d', base: 'glossy-commercial', ground: 'dark', hold: 1,
+    pal: { bg: '#0B0D10', paper: '#161A1F', ink: '#EEF1F4', main: '#F2F1EC', second: '#4F8FE0', accent: '#F2A33A', soft: '#1B1F25', deep: '#1E3A6E' },
+    type: { display: F(500, 'Inter', false), text: F(500, 'Inter'), mono: F(500, 'IBMPlexMono'), hand: F(600, 'Inter') },
+    shading: { shading: 'pbr', roughness: .85 }, light: { azimuthDeg: 210, elevationDeg: 52, intensity: 2.6, ambient: .42 },
+    post: { tone: 'AGX', saturation: 0, contrast: .06, brightness: 0, bloom: { threshold: .9, smoothing: .3, intensity: .25, radius: .6 },
+      outline: null, vignette: { offset: .3, darkness: .55 }, grain: { intensity: .015, size: 1.3 } },
+    grain: { a: .015, size: 1.3 }, vignette: .4 },
+  'data-physical': { mode: '3d', base: 'glossy-commercial', ground: 'sweep', hold: 1,
+    pal: { bg: '#C4BEB4', paper: '#EFEBE4', ink: '#1C1D20', main: '#C8CCD1', second: '#D2B07A', accent: '#D4521C', soft: '#B3ACA1', glass: '#9FD3D6', wood: '#6B4A33' },
+    type: { display: F(500, 'Inter', false), text: F(500, 'Inter'), mono: F(500, 'IBMPlexMono'), hand: F(600, 'Inter') },
+    shading: { shading: 'pbr', roughness: .3 }, light: { azimuthDeg: 125, elevationDeg: 48, intensity: 2.8, ambient: .6 },
+    post: { tone: 'AGX', saturation: 0, contrast: .04, brightness: .02, bloom: { threshold: .92, smoothing: .2, intensity: .2, radius: .5 },
+      outline: null, vignette: { offset: .45, darkness: .25 }, grain: { intensity: .015, size: 1.3 } },
+    grain: { a: .015, size: 1.3 }, vignette: .18 },
+  'lidar-survey': { mode: '3d', base: 'retro-synthwave-vhs', ground: 'dark', hold: 1,
+    pal: { bg: '#05080A', paper: '#0E1418', ink: '#D4FFF0', main: '#5C9A7A', second: '#1F3F35', accent: '#FFB347', soft: '#0B1114', high: '#E2F3DC', earth: '#C8B38C', stone: '#BDB5A6' },
+    type: { display: F(600, 'BarlowCondensed', false), text: F(600, 'BarlowCondensed'), mono: F(500, 'IBMPlexMono'), hand: F(600, 'BarlowCondensed') },
+    shading: { shading: 'pbr', roughness: .8 }, light: { azimuthDeg: 160, elevationDeg: 35, intensity: 2.2, ambient: .3, fog: .012 },
+    post: { tone: 'ACES_FILMIC', saturation: 0, contrast: .06, brightness: 0, bloom: { threshold: .55, smoothing: .4, intensity: .7, radius: .7 },
+      chromatic: null, scanline: null, vignette: { offset: .3, darkness: .6 }, grain: { intensity: .02, size: 1.2 } },
+    grain: { a: .02, size: 1.2 }, vignette: .45 },
+  'archive-lighttable': { mode: '2d', base: 'cinematic-realistic', ground: 'lighttable', hold: 1,
+    pal: { bg: '#F7F9FB', paper: '#FFFFFF', ink: '#15171A', main: '#7E868E', second: '#D9CBB0', accent: '#FF5A1F', soft: '#E4E9EE', plate: '#0E0F11' },
+    type: { display: F(600, 'Cormorant', false), text: F(500, 'Inter'), mono: F(500, 'IBMPlexMono'), hand: F(600, 'Inter') },
+    grain: { a: .015, size: 1.3 }, vignette: .06 },
+  'briefing-board': { mode: '2d', base: 'handmade-ink', ground: 'board', hold: 1,
+    pal: { bg: '#F2F3F0', paper: '#FFFFFF', ink: '#2B2D31', main: '#2A5CB3', second: '#B9BDC2', accent: '#C8363A', soft: '#E3E5E1' },
+    type: { display: F(400, 'AD', true), text: F(600, 'Inter'), mono: F(500, 'IBMPlexMono'), hand: F(400, 'AD') },
+    grain: { a: .012, size: 1.4 }, vignette: .1 },
+  'satellite-briefing': { mode: '2d', base: 'cinematic-realistic', ground: 'terrain', dark: true, hold: 1,
+    pal: { bg: '#070B0E', paper: '#141A1F', ink: '#F2F5F6', main: '#A1A7A9', second: '#2E70CE', accent: '#FFBE55', soft: '#2A3136' },
+    type: { display: F(600, 'BarlowCondensed', true), text: F(500, 'Inter'), mono: F(500, 'IBMPlexMono'), hand: F(600, 'BarlowCondensed', true) },
+    grain: { a: .03, size: 1.3 }, vignette: .45 },
+
+  // —— print and hand-drawn ——
+  'halftone-dossier': { mode: '2d', base: 'handmade-ink', ground: 'halftone', hold: 2, misreg: 'second',
+    pal: { bg: '#F3E9D2', paper: '#FBF5E6', ink: '#1D2A5B', main: '#2F5FD0', second: '#FF4F8B', accent: '#E8382F', soft: '#E6D8B8', hi: '#F7C531' },
+    type: { display: F(400, 'TitanOne', true), text: F(700, 'Inter'), mono: F(500, 'JetBrainsMono'), hand: F(800, '"Baloo 2"') },
+    grain: { a: .05, size: 1.8 }, vignette: .12 },
+  'risograph': { mode: '2d', base: 'papercut-collage', ground: 'paper', hold: 2, misreg: 'accent',
+    pal: { bg: '#F4EEE2', paper: '#FAF6EC', ink: '#3D5588', main: '#3D5588', second: '#FFB511', accent: '#FF665E', soft: '#E9DFCB' },
+    type: { display: F(800, 'Montserrat', true), text: F(600, 'Inter'), mono: F(500, 'IBMPlexMono'), hand: F(800, 'Montserrat') },
+    grain: { a: .08, size: 1.6 }, vignette: .08 },
+  'whiteboard': { mode: '2d', base: 'handmade-ink', ground: 'board', hold: 1,
+    pal: { bg: '#F7F7F4', paper: '#FFFFFF', ink: '#23262C', main: '#2A5CB3', second: '#BFC3C9', accent: '#D97757', soft: '#E9EAE6' },
+    type: { display: F(400, 'AD', false), text: F(400, 'AD'), mono: F(500, 'IBMPlexMono'), hand: F(400, 'AD') },
+    grain: { a: .01, size: 1.4 }, vignette: .08 },
+  'sticker-explainer': { mode: '2d', base: 'glossy-commercial', ground: 'flat', hold: 1, sticker: true,
+    pal: { bg: '#E9EDF2', paper: '#FFFFFF', ink: '#26313F', main: '#4C7DD8', second: '#8FC9A8', accent: '#FF7A3D', soft: '#D3DAE3' },
+    type: { display: F(800, 'Inter', false), text: F(600, 'Inter'), mono: F(500, 'JetBrainsMono'), hand: F(700, 'Inter') },
+    grain: { a: 0, size: 1 }, vignette: 0 },
+
+  // —— materials and 3D ——
+  'tilt-shift': { mode: '3d', base: 'claymation', ground: 'sky', hold: 1,
+    pal: { bg: '#BFDCEA', paper: '#FFFDF7', ink: '#1E2A33', main: '#F4EEE2', second: '#2E6FB7', accent: '#D9653B', soft: '#5E9E48', leaf: '#3F8A3A', sea: '#3BB3C3', road: '#3B3F45' },
+    type: { display: F(800, 'Inter', true), text: F(600, 'Inter'), mono: F(500, 'JetBrainsMono'), hand: F(800, 'Inter') },
+    shading: { shading: 'pbr', roughness: .6 }, light: { azimuthDeg: 120, elevationDeg: 50, intensity: 3.2, ambient: .55 },
+    post: { tone: 'AGX', saturation: .22, contrast: .08, brightness: .02, bloom: { threshold: .9, smoothing: .3, intensity: .2, radius: .6 },
+      tiltShift: { focusArea: .32, feather: .22 }, vignette: { offset: .4, darkness: .3 }, grain: { intensity: .01, size: 1.2 } },
+    grain: { a: .01, size: 1.2 }, vignette: .15 },
 };
+// a dark look (light type on a dark ground): the dark stage, and grounds that are dark imagery
+const dk = () => LOOK.dark ?? LOOK.ground === 'dark';
 export let LOOK = FILMS['vox-explainer'], P = LOOK.pal, LOOK_ID = 'vox-explainer';
 // the pipeline sets the look (T.look) before film() runs; a film may also call K.use('blueprint')
 export function use(id) { if (FILMS[id]) { LOOK_ID = id; LOOK = FILMS[id]; P = LOOK.pal; } return LOOK; }
@@ -105,6 +176,33 @@ export function bg(ctx) {
     } else if (LOOK.ground === 'dark') {
       const gr = g.createRadialGradient(SW * .5, SH * .35, 0, SW / 2, SH / 2, SW * .7); gr.addColorStop(0, P.soft); gr.addColorStop(1, P.bg); g.fillStyle = gr; g.fillRect(0, 0, SW, SH);
       g.strokeStyle = 'rgba(255,255,255,.035)'; g.lineWidth = 1; for (let x = 0; x <= SW; x += 64) { g.beginPath(); g.moveTo(x + .5, 0); g.lineTo(x + .5, SH); g.stroke(); } for (let y = 0; y <= SH; y += 64) { g.beginPath(); g.moveTo(0, y + .5); g.lineTo(SW, y + .5); g.stroke(); }
+    } else if (LOOK.ground === 'lighttable') {
+      // a cool backlit table: brighter in the middle, a faint registration grid, the frame's edge in shadow
+      const gr = g.createRadialGradient(SW * .5, SH * .45, 0, SW / 2, SH / 2, SW * .72); gr.addColorStop(0, '#FFFFFF'); gr.addColorStop(.7, P.bg); gr.addColorStop(1, P.soft); g.fillStyle = gr; g.fillRect(0, 0, SW, SH);
+      g.strokeStyle = 'rgba(21,23,26,.05)'; g.lineWidth = 1; for (let x = 0; x <= SW; x += 96) { g.beginPath(); g.moveTo(x + .5, 0); g.lineTo(x + .5, SH); g.stroke(); } for (let y = 0; y <= SH; y += 96) { g.beginPath(); g.moveTo(0, y + .5); g.lineTo(SW, y + .5); g.stroke(); }
+      g.fillStyle = 'rgba(21,23,26,.22)'; for (let x = 96; x < SW; x += 96) for (let y = 96; y < SH; y += 96) g.fillRect(x - 4, y - .5, 9, 1), g.fillRect(x - .5, y - 4, 1, 9);
+    } else if (LOOK.ground === 'board') {
+      // enamel in window light: a soft falloff from the top left, ghosts of erased marker, a thin aluminium frame
+      const gr = g.createLinearGradient(0, 0, SW, SH); gr.addColorStop(0, '#FFFFFF'); gr.addColorStop(.55, P.bg); gr.addColorStop(1, P.soft); g.fillStyle = gr; g.fillRect(0, 0, SW, SH);
+      g.lineCap = 'round';
+      for (let i = 0; i < 26; i++) { g.strokeStyle = `rgba(60,64,72,${.018 + R() * .025})`; g.lineWidth = 6 + R() * 18; g.beginPath(); let x = R() * SW, y = R() * SH; g.moveTo(x, y); for (let k = 0; k < 4; k++) { x += (R() - .5) * 360; y += (R() - .5) * 140; g.lineTo(x, y); } g.stroke(); }
+      const sh = g.createLinearGradient(0, 0, SW * .6, SH * .4); sh.addColorStop(0, 'rgba(255,255,255,.55)'); sh.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = sh; g.fillRect(0, 0, SW, SH);
+      g.strokeStyle = '#B9BDC2'; g.lineWidth = 14; g.strokeRect(7, 7, SW - 14, SH - 14); g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 2; g.strokeRect(15, 15, SW - 30, SH - 30);
+    } else if (LOOK.ground === 'halftone') {
+      // newsprint: paper fibre under a light dot screen in the overprint ink
+      for (let i = 0; i < 500; i++) { g.fillStyle = `rgba(120,90,50,${.006 + R() * .012})`; g.beginPath(); g.ellipse(R() * SW, R() * SH, 30 + R() * 160, 20 + R() * 90, R() * 3, 0, TAU); g.fill(); }
+      g.save(); g.translate(SW / 2, SH / 2); g.rotate(.26); g.fillStyle = P.second; g.globalAlpha = .1;
+      for (let y = -SW; y < SW; y += 16) for (let x = -SW; x < SW; x += 16) { const r = 1.2 + 2.2 * (.5 + .5 * Math.sin(x * .002 + y * .003)); g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); }
+      g.restore();
+    } else if (LOOK.ground === 'terrain') {
+      // greyscale imagery seen from orbit: fields, a river, a road grid, dark at the edges
+      for (let i = 0; i < 520; i++) { const v = 30 + Math.floor(R() * 90); g.fillStyle = `rgba(${v},${v + 4},${v + 6},${.18 + R() * .25})`; g.save(); g.translate(R() * SW, R() * SH); g.rotate(.18 + (R() - .5) * .15); g.fillRect(0, 0, 40 + R() * 180, 30 + R() * 120); g.restore(); }
+      g.strokeStyle = 'rgba(10,14,18,.55)'; g.lineWidth = 16; g.beginPath(); g.moveTo(-40, SH * .7); for (let x = 0; x <= SW + 40; x += 80) g.lineTo(x, SH * .7 + Math.sin(x * .004) * 140 - x * .12); g.stroke();
+      g.strokeStyle = 'rgba(200,205,207,.16)'; g.lineWidth = 3; for (let k = 0; k < 7; k++) { const x0 = R() * SW; g.beginPath(); g.moveTo(x0, 0); g.lineTo(x0 + 200, SH); g.stroke(); }
+      const vg = g.createRadialGradient(SW / 2, SH / 2, SH * .25, SW / 2, SH / 2, SW * .7); vg.addColorStop(0, 'rgba(7,11,14,0)'); vg.addColorStop(1, 'rgba(7,11,14,.75)'); g.fillStyle = vg; g.fillRect(0, 0, SW, SH);
+    } else if (LOOK.ground === 'sweep') {
+      // a seamless studio sweep: lighter at the floor line, darker up the wall
+      const gr = g.createLinearGradient(0, 0, 0, SH); gr.addColorStop(0, P.soft); gr.addColorStop(.62, P.bg); gr.addColorStop(1, P.paper); g.fillStyle = gr; g.fillRect(0, 0, SW, SH);
     }
     _grounds[key] = c;
   }
@@ -138,12 +236,13 @@ function tornPath(g, x, y, w, h, seed, teeth = 4) {
 export function card(ctx, t, o) {
   const a = vis(t, o.at ?? 0, o.out, .3); if (a <= 0) return;
   const th = held(t), u = seg(th, o.at ?? 0, (o.at ?? 0) + .45), drop = (1 - back(u, 1.6)) * -60, w = o.w ?? 480, h = o.h ?? 320;
-  const dark = LOOK.ground === 'dark', torn = o.torn ?? (LOOK.ground === 'paper');
+  const dark = dk(), torn = o.torn ?? (LOOK.ground === 'paper');
   ctx.save(); ctx.globalAlpha *= LOOK_ID === 'vox-explainer' ? Math.min(1, a * 3) : a; ctx.translate(o.x, o.y + drop); ctx.rotate(((o.rot ?? 0) * Math.PI) / 180); ctx.translate(-w / 2, -h / 2);
   ctx.shadowColor = dark ? 'rgba(0,0,0,.55)' : 'rgba(40,30,20,.28)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 8;
   ctx.fillStyle = o.color || P.paper;
-  if (torn) tornPath(ctx, 0, 0, w, h, Math.round(o.x * 3 + o.y)); else { ctx.beginPath(); ctx.roundRect(0, 0, w, h, LOOK.ground === 'dark' ? 18 : LOOK_ID === 'swiss-motion' ? 0 : 8); }
+  if (torn) tornPath(ctx, 0, 0, w, h, Math.round(o.x * 3 + o.y)); else { ctx.beginPath(); ctx.roundRect(0, 0, w, h, dk() ? 18 : LOOK_ID === 'swiss-motion' ? 0 : 8); }
   ctx.fill(); ctx.shadowColor = 'transparent';
+  if (LOOK.sticker && !o.plain) { ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 12; ctx.stroke(); ctx.strokeStyle = 'rgba(38,49,63,.10)'; ctx.lineWidth = 1.5; ctx.stroke(); }
   if (dark) { ctx.strokeStyle = 'rgba(255,255,255,.10)'; ctx.lineWidth = 1.5; ctx.stroke(); }
   if (LOOK.ground === 'cyanotype') { ctx.strokeStyle = P.ink; ctx.globalAlpha *= .8; ctx.lineWidth = 2; ctx.stroke(); }
   if (o.draw) { ctx.save(); ctx.clip(); o.draw(ctx, w, h); ctx.restore(); }
@@ -162,18 +261,21 @@ export function text(ctx, t, o) {
   if (o.halo) { ctx.shadowColor = typeof o.halo === 'string' ? o.halo : P.bg; ctx.shadowBlur = 14; }
   const y0 = o.y - (o.valign === 'middle' ? f.lines.length * lead / 2 : 0);
   const th = held(t); let wi = 0; let maxw = 0;
+  const mis = LOOK.misreg && role === 'display' && !o.color ? P[LOOK.misreg] : null, off = Math.max(3, f.size * .05);
   f.lines.forEach((ln, i) => {
     const y = y0 + i * lead; maxw = Math.max(maxw, ctx.measureText(ln).width);
     if (reveal === 'words') {
       const words = ln.split(' '), full = ctx.measureText(ln).width;
       let x = align === 'center' ? o.x - full / 2 : align === 'right' ? o.x - full : o.x; ctx.textAlign = 'left';
       for (const w of words) { const k = eo(seg(th, (o.at ?? 0) + wi * .09, (o.at ?? 0) + wi * .09 + .22)); wi++;
-        if (k > 0) { ctx.save(); ctx.globalAlpha *= k; ctx.fillText(w, x, y + (1 - k) * f.size * .25); ctx.restore(); } x += ctx.measureText(w + ' ').width; }
+        if (k > 0) { ctx.save(); ctx.globalAlpha *= k;
+          if (mis) { const fs = ctx.fillStyle; ctx.fillStyle = mis; ctx.globalCompositeOperation = 'multiply'; ctx.fillText(w, x + off, y + off + (1 - k) * f.size * .25); ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = fs; }
+          ctx.fillText(w, x, y + (1 - k) * f.size * .25); ctx.restore(); } x += ctx.measureText(w + ' ').width; }
       ctx.textAlign = align;
     } else if (reveal === 'wipe') {
       const k = eio(seg(t, (o.at ?? 0) + i * .12, (o.at ?? 0) + i * .12 + .5)), lw = ctx.measureText(ln).width, x0 = align === 'center' ? o.x - lw / 2 : align === 'right' ? o.x - lw : o.x;
       ctx.save(); ctx.beginPath(); ctx.rect(x0 - 4, y - 4, (lw + 8) * k, lead + 8); ctx.clip(); ctx.fillText(ln, o.x, y); ctx.restore();
-    } else ctx.fillText(ln, o.x, y);
+    } else { if (mis) { const fs = ctx.fillStyle; ctx.fillStyle = mis; ctx.globalCompositeOperation = 'multiply'; ctx.fillText(ln, o.x + off, y + off); ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = fs; } ctx.fillText(ln, o.x, y); }
   });
   ctx.restore();
   return { w: maxw, h: f.lines.length * lead, size: f.size };
@@ -200,7 +302,7 @@ export function stroke(ctx, t, o) {
   let total = 0; const L = [0]; for (let i = 1; i < pts.length; i++) { total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); L.push(total); }
   const k = eio(seg(t, at, at + (o.dur ?? .6))), lim = total * k;
   ctx.save(); ctx.strokeStyle = o.color || P.accent; ctx.lineWidth = o.width ?? 8; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; if (o.dash) ctx.setLineDash(o.dash);
-  if (LOOK.ground === 'cyanotype' || LOOK.ground === 'dark') { ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 10; }
+  if (LOOK.ground === 'cyanotype' || dk()) { ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 10; }
   ctx.beginPath(); ctx.moveTo(...pts[0]); let end = pts[0];
   for (let i = 1; i < pts.length; i++) { if (L[i] <= lim) { ctx.lineTo(...pts[i]); end = pts[i]; } else { const u = (lim - L[i - 1]) / (L[i] - L[i - 1] || 1); end = [lerp(pts[i - 1][0], pts[i][0], u), lerp(pts[i - 1][1], pts[i][1], u)]; ctx.lineTo(...end); break; } }
   ctx.stroke();
@@ -211,7 +313,7 @@ export function stroke(ctx, t, o) {
 // a highlighter bar laid behind a word (draw it before the text): K.highlight(ctx, t, { x, y, w, h, at, dur: .5, color })
 export function highlight(ctx, t, o) {
   if (t < (o.at ?? 0) || (o.out != null && t > o.out)) return; const k = eio(seg(t, o.at ?? 0, (o.at ?? 0) + (o.dur ?? .5)));
-  ctx.save(); ctx.globalAlpha *= LOOK.ground === 'dark' ? .35 : .55; ctx.fillStyle = o.color || P.second;
+  ctx.save(); ctx.globalAlpha *= dk() ? .35 : .55; ctx.fillStyle = o.color || P.second;
   ctx.beginPath(); ctx.moveTo(o.x, o.y + 4); ctx.lineTo(o.x + o.w * k, o.y); ctx.lineTo(o.x + o.w * k + 3, o.y + o.h - 2); ctx.lineTo(o.x - 2, o.y + o.h); ctx.closePath(); ctx.fill(); ctx.restore();
 }
 // a label with a leader: K.label(ctx, t, { x, y (the point), text, at, out, dx: 120, dy: -90 (where the tag sits), color })
@@ -229,11 +331,13 @@ export function label(ctx, t, o) {
     card(ctx, t, { x: o.x + dx + (left ? tw / 2 : -tw / 2), y: o.y + dy, w: tw, h: size * 1.7, at: (o.at ?? 0) + .2, out: o.out, torn: false, color: o.bg });
     text(ctx, t, { text: o.text, role: 'mono', size, x: o.x + dx + (left ? tw / 2 : -tw / 2), y: o.y + dy, valign: 'middle', w: 560, h: size * 1.5, align: 'center', at: (o.at ?? 0) + .25, out: o.out, color: o.color }); }
 }
-// a number that counts: K.counter(ctx, t, { x, y (centre), from: 0, to, at, dur: 1.6, size: 160, prefix, suffix, decimals, color, role: 'display' })
+// a number that counts: K.counter(ctx, t, { x, y (centre), from: 0, to, at, dur: 1.6, size: 160, prefix, suffix, decimals, color, role: 'display', group })
 export function counter(ctx, t, o) {
   const a = vis(t, o.at ?? 0, o.out, .2); if (a <= 0) return;
   const k = eo(seg(t, o.at ?? 0, (o.at ?? 0) + (o.dur ?? 1.6))), v = lerp(o.from ?? 0, o.to, k), d = o.decimals ?? (Math.abs(o.to) < 10 && o.to % 1 ? 1 : 0);
-  const s = (o.prefix || '') + v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) + (o.suffix || '');
+  // years count without a thousands comma (1907, not 1,907); group: false / true forces it
+  const grp = o.group ?? !(d === 0 && Number.isInteger(o.to) && o.to >= 1000 && o.to <= 2199 && !o.prefix && !o.suffix);
+  const s = (o.prefix || '') + v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: grp }) + (o.suffix || '');
   ctx.save(); ctx.globalAlpha *= a; ctx.font = font(o.role || 'display', o.size ?? 160); ctx.fillStyle = o.color || (k >= 1 ? P.accent : P.ink);
   ctx.textAlign = o.align || 'center'; ctx.textBaseline = 'middle'; ctx.fillText(s, o.x, o.y); ctx.restore();
 }
@@ -270,7 +374,7 @@ export function grid(ctx, t, o) {
   for (let i = 0; i < total; i++) {
     const c = i % (o.cols ?? 10), r = Math.floor(i / (o.cols ?? 10)), x = o.x + c * (s + gp) + s / 2, y = o.y + r * (s + gp) + s / 2;
     const k = back(seg(held(t), (o.at ?? 0) + i * (o.stagger ?? .02), (o.at ?? 0) + i * (o.stagger ?? .02) + .3), 2); if (k <= 0) continue;
-    ctx.fillStyle = mark.has(i) ? P.accent : i < (o.n ?? total) ? (o.color || P.main) : (LOOK.ground === 'dark' ? P.second : P.soft);
+    ctx.fillStyle = mark.has(i) ? P.accent : i < (o.n ?? total) ? (o.color || P.main) : (dk() ? P.second : P.soft);
     ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
     if ((o.shape || 'dot') === 'square') ctx.fillRect(-s / 2, -s / 2, s, s);
     else if (o.shape === 'person') { ctx.beginPath(); ctx.arc(0, -s * .3, s * .2, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.roundRect(-s * .28, -s * .06, s * .56, s * .56, s * .14); ctx.fill(); }
@@ -282,7 +386,7 @@ export function grid(ctx, t, o) {
 // a UI panel / window (dark-keynote, hologram): K.panel(ctx, t, { x, y (centre), w, h, at, out, title, draw: (g, w, h) => {} })
 export function panel(ctx, t, o) {
   card(ctx, t, { ...o, torn: false, draw: (g, w, h) => {
-    if (o.title) { g.fillStyle = LOOK.ground === 'dark' ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.05)'; g.fillRect(0, 0, w, 56);
+    if (o.title) { g.fillStyle = dk() ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.05)'; g.fillRect(0, 0, w, 56);
       g.font = font('mono', 22); g.fillStyle = P.main; g.textBaseline = 'middle'; g.fillText(caps('mono', o.title), 22, 28);
       [0, 1, 2].forEach(i => { g.beginPath(); g.arc(w - 30 - i * 24, 28, 6, 0, TAU); g.fillStyle = i === 2 ? P.accent : P.second; g.fill(); }); }
     o.draw && o.draw(g, w, h);
@@ -376,6 +480,31 @@ export function wire(obj, o = {}) {
   const meshes = []; obj.traverse(m => { if (m.isMesh) meshes.push(m); });
   for (const m of meshes) { const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, o.angle ?? 20), new THREE.LineBasicMaterial({ color: o.color || P.main, transparent: true, opacity: o.opacity ?? 1 })); e.userData.noOutline = true; m.add(e); }
   return obj;
+}
+// a lidar point cloud of an object (lidar-survey; works in any 3D look): K.scan(obj, { n: 30000, size: .06, axis: 'x',
+//   colors: [low, high] (by height), color }) -> THREE.Points (add it with S.add; the meshes themselves need not be added).
+//   pts.userData.sweep(k) shows the share k (0..1) of the points, in order along the axis: the scanner's front passing.
+export function scan(obj, o = {}) {
+  obj.updateMatrixWorld(true); const meshes = []; obj.traverse(m => { if (m.isMesh) meshes.push(m); });
+  const areas = meshes.map(m => { const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, p = g.attributes.position, wm = m.matrixWorld, tris = [];
+    let A = 0; const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    for (let i = 0; i < p.count; i += 3) { a.fromBufferAttribute(p, i).applyMatrix4(wm); b.fromBufferAttribute(p, i + 1).applyMatrix4(wm); c.fromBufferAttribute(p, i + 2).applyMatrix4(wm);
+      const ar = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).length() / 2; A += ar; tris.push([a.clone(), b.clone(), c.clone(), A]); }
+    return { tris, A }; });
+  const total = areas.reduce((s, x) => s + x.A, 0) || 1, n = o.n ?? 30000, R = mulberry(o.seed ?? 3), pts = [];
+  for (const { tris, A } of areas) { const k = Math.round(n * A / total);
+    for (let j = 0; j < k; j++) { const r = R() * A; let lo = 0, hi = tris.length - 1; while (lo < hi) { const mid = (lo + hi) >> 1; if (tris[mid][3] < r) lo = mid + 1; else hi = mid; }
+      const [a, b, c] = tris[lo]; let u = R(), v = R(); if (u + v > 1) { u = 1 - u; v = 1 - v; }
+      pts.push(a.clone().addScaledVector(new THREE.Vector3().subVectors(b, a), u).addScaledVector(new THREE.Vector3().subVectors(c, a), v)); } }
+  const ax = o.axis || 'x'; pts.sort((p, q) => p[ax] - q[ax]);
+  let y0 = Infinity, y1 = -Infinity; for (const p of pts) { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  const lo = new THREE.Color((o.colors || [])[0] || P.second), hiC = new THREE.Color((o.colors || [])[1] || P.high || P.ink), one = o.color ? new THREE.Color(o.color) : null;
+  const pos = new Float32Array(pts.length * 3), col = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => { pos.set([p.x, p.y, p.z], i * 3); const cc = one || lo.clone().lerp(hiC, (p.y - y0) / ((y1 - y0) || 1)); const s = .8 + R() * .4; col.set([cc.r * s, cc.g * s, cc.b * s], i * 3); });
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const P3 = new THREE.Points(geo, new THREE.PointsMaterial({ size: o.size ?? .06, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: o.opacity ?? .95, depthWrite: false }));
+  P3.userData.noOutline = true; P3.castShadow = false; P3.userData.sweep = k => geo.setDrawRange(0, Math.floor(pts.length * clamp(k)));
+  return P3;
 }
 // 3D text-free markers: a flat ring on the ground (a station, a target): K.ring(r, { color, width })
 export function ring(r = 1, o = {}) { const x = new THREE.Mesh(new THREE.RingGeometry(r - (o.width ?? .08), r, 64), new THREE.MeshBasicMaterial({ color: o.color || P.accent, side: THREE.DoubleSide, transparent: true })); x.rotation.x = -Math.PI / 2; x.position.y = .02; x.userData.noOutline = true; return x; }

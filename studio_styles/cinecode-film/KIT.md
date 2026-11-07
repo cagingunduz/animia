@@ -1,7 +1,10 @@
 THE KIT (K = window.CC): cinecode films drawn in code. Frame 1920 x 1080 px, (0, 0) top left, y DOWN. Draw every frame
 from scratch. You animate ONE PART of a long video: its lines are T.lines, it starts at 0 and ends at T.end. The look is
 already set (T.look; K.LOOK_ID); its palette is K.P = { bg, paper, ink, main, second, accent, soft } and its type roles
-are 'display' | 'text' | 'mono' | 'hand'. Use only these colours (plus K.P.* tints of them).
+are 'display' | 'text' | 'mono' | 'hand'. Use only these colours (plus K.P.* tints of them); some looks add named
+extras the recipe needs (e.g. K.P.hi, K.P.leaf, K.P.sea, K.P.road, K.P.high, K.P.glass, K.P.wood, K.P.plate, K.P.deep).
+Print looks (halftone-dossier, risograph) print display type twice with an offset plate; sticker-explainer cards
+carry a thick white sticker border on their own.
 THE LOOK'S ENGINE: K.LOOK.mode is '3d' (build the subject in three.js on K.stage, 2D type and marks over it) or '2d'
 (a 2D world under K.cam2 / K.view). Follow it; a 2D look may still use a small K.stage for one 3D object, and a 3D look
 uses 2D cards for statements and numbers.
@@ -10,7 +13,8 @@ THE SHOT PLAN in the notes is binding: what is said is what is shown, each shot 
 build what the shot names, with its device, its camera line and its text.
 
 2D (any look):
-  K.bg(ctx)                                         the look's ground (paper, cyanotype sheet, dark stage, flat page)
+  K.bg(ctx)                                         the look's ground (paper, cyanotype sheet, dark stage, flat page,
+                                                    light table, marker board, halftone newsprint, orbital terrain, studio sweep)
   const cm = K.cam2(t, [[t, cx, cy, zoom], ...])    a camera over a WORLD drawn in px (zoom 1 = the frame); keys eased
   K.view(ctx, cm, g => { ...draw in world px... })  everything inside moves with the camera; the world can be wider
                                                     than the frame (lay shots out side by side and travel between them)
@@ -24,7 +28,8 @@ build what the shot names, with its device, its camera line and its text.
                                                     a line / marker circle / curved arrow that draws itself
   K.highlight(g, t, { x, y, w, h, at, dur })        a highlighter bar (draw it BEFORE the words it marks)
   K.label(g, t, { x, y (the point), text, at, out, dx: 120, dy: -90 })               a dot, a leader and a tag
-  K.counter(g, t, { x, y (centre), from: 0, to, at, dur: 1.6, size: 160, prefix, suffix, decimals, role, align })
+  K.counter(g, t, { x, y (centre), from: 0, to, at, dur: 1.6, size: 160, prefix, suffix, decimals, role, align, group })
+                                                    (a bare year 1000-2199 counts without a comma; group forces it)
   K.bars(g, t, { x, y (bottom-left), w, h, values, labels, at, stagger, max, accentIndex, unit, prefix })
   K.plot(g, t, { x, y (bottom-left), w, h, values, min, max, at, dur: 2, labels: [first, last] })
   K.grid(g, t, { x, y (top-left), cols, rows, n (lit), size, gap, at, shape: 'dot' | 'person' | 'square', mark: [i] })
@@ -37,6 +42,9 @@ build what the shot names, with its device, its camera line and its text.
   K.cone(r, h, { color }), K.building(w, h, d, { roof: 'flat' | 'pitched', color, roofColor }), K.tree(h),
   K.person({ h: 1.75, color }) (no face), K.ring(r, { color }) (a flat ring on the ground), K.group(...kids),
   K.wire(obj, { color, opacity }) (glowing edges, for hologram), K.mat(color) (a material in the look), K.THREE
+  K.scan(obj, { n: 30000, size: .06, axis: 'x', colors: [low, high] }) → THREE.Points: the object's surfaces as a lidar
+  point cloud coloured by height (lidar-survey; S.add the points, not the meshes); pts.userData.sweep(k) each frame shows
+  the share k of the points in order along the axis (the scanner's front passing)
   Everything sits on y = 0, in metres. Build the whole part's world in film(); per frame only move / show things.
   K.pop(obj, t, at, { how: 'pop' | 'rise', dur, out })   arrival (scale with overshoot, or rise from below); hides it
                                                     before `at` and after `out`
