@@ -10,10 +10,11 @@ Crew (each role is its own Claude call, see motion_prompts.py):
                   -> 0-10 scores; a segment under REVISE_BELOW gets one find/replace revision
   Sound designer  music bed + transition SFX (ElevenLabs sound generation)
 
-Cost control: every job has a hard Claude budget (BUDGET_PER_SECOND × length, floor
-BUDGET_MIN). Mandatory calls (director, first animation of each segment) have capped
-output so they always fit; optional calls (critic, revisions, gate revisions, loop test)
-only run when their worst-case cost still fits next to the mandatory work left.
+Cost control: every job has a cost target (BUDGET_PER_SECOND × length, floor BUDGET_MIN), tracked in
+job["budget"] and job["usage"]. The target never stops a video: the critic, revisions and render fixes
+always run (their counts are bounded: MAX_RENDER_FIXES, one revision per segment). Optional calls only
+stop at a runaway safety ceiling (SAFETY_FACTOR × target, at least SAFETY_MIN), far above a normal job;
+render fixes never stop, because a failed segment fails the whole video.
 
 Approval gates: the shot list and the style frame (a frame of segment 1). The job waits for
 POST /motion/{id}/approve, or carries on by itself after `approval_timeout` seconds.
@@ -64,6 +65,9 @@ THINK_ROOM = {"low": 3000, "medium": 10000, "high": 16000}  # max_tokens covers 
 # Hard Claude budget per job: $0.025 per output second → $0.25 for a 10 s video.
 BUDGET_PER_SECOND = float(os.environ.get("MOTION_BUDGET_PER_SECOND", "0.025"))
 BUDGET_MIN = float(os.environ.get("MOTION_BUDGET_MIN", "0.20"))
+# Runaway safety ceiling (not a quality budget): optional calls stop only past SAFETY_FACTOR × target.
+SAFETY_FACTOR = float(os.environ.get("MOTION_SAFETY_FACTOR", "8"))
+SAFETY_MIN = float(os.environ.get("MOTION_SAFETY_MIN", "3.0"))
 SEGMENT_MAX_SECONDS = 15.0
 
 PASS_SCORE = 8.0           # "ships" on the critic's scale
@@ -195,7 +199,8 @@ def _budget(job_id: str) -> dict:
 def _affordable(job_id: str, est: float) -> bool:
     b = _budget(job_id)
     spent = _job(job_id).get("usage", {}).get("cost_usd", 0.0)
-    return spent + b["reserved"] + b["future"] + est <= b["limit"] + 1e-9
+    ceiling = max(SAFETY_MIN, b["limit"] * SAFETY_FACTOR)
+    return spent + b["reserved"] + b["future"] + est <= ceiling + 1e-9
 
 
 # ─────────────────────────── Claude ───────────────────────────
@@ -227,7 +232,7 @@ async def _claude(job_id: str, system: str, content, max_tokens: int, role: str,
     est = _est_cost(job_id, role, system, content, max_tokens)
     b = _budget(job_id)
     if optional and not _affordable(job_id, est):
-        raise OverBudget(f"{role}: ${est:.3f} would exceed the ${b['limit']:.2f} ceiling")
+        raise OverBudget(f"{role}: ${est:.3f} would pass the ${max(SAFETY_MIN, b['limit'] * SAFETY_FACTOR):.2f} safety ceiling")
     b["future"] = max(0.0, b["future"] - mandatory_slot)
     b["reserved"] += est
     model = _model(job_id, role)
@@ -697,7 +702,8 @@ async def _render(job_id: str, label: str, html: str, assets: dict, out_path: st
             break
         _say(job_id, "Render engineer", f"{label}: fixing a render error.")
         try:
-            fixed = await _edit(job_id, ctx, html, f"{RENDER_ENGINEER_NOTE}\n\nERROR:\n{error}", optional=True)
+            # never gated: a segment that doesn't render fails the whole video
+            fixed = await _edit(job_id, ctx, html, f"{RENDER_ENGINEER_NOTE}\n\nERROR:\n{error}", optional=False)
         except OverBudget:
             _say(job_id, "Render engineer", f"{label}: no budget left for another fix.")
             break
