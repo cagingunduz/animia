@@ -600,11 +600,12 @@ def _director_max_out(total: float) -> int:
 
 
 def _animator_max_out(seconds: float) -> int:
-    return int(min(9000, max(3000, 450 * seconds)))
+    # the code itself (THINK_ROOM covers the thinking on top); a 10 s segment of a dense reel needs ~6-8k
+    return int(min(14000, max(6000, 800 * seconds)))
 
 
 CRITIC_MAX_OUT = 700
-EDIT_MAX_OUT = 1500
+EDIT_MAX_OUT = 4000             # a critic revision of a weak segment needs room; unused tokens cost nothing
 
 
 # ─────────────────────────── render with repairs ───────────────────────────
@@ -866,12 +867,22 @@ async def _animate(job_id: str, ctx: list, seconds: float, mandatory_slot: float
     except (BillingError, OverBudget):
         raise
     except Exception as e:
-        # one more go with less thinking (a dropped connection, or no HTML left after thinking)
+        # thinking ate the output (or the connection dropped): one more go at the same effort with more room;
+        # low effort only as the last resort, because it writes much weaker segments
         print(f"[motion] animator retry: {e!r}")
         _record_error(job_id, f"animator retry: {e!r}")
-        text = await _claude(job_id, ANIMATOR_SYSTEM, ask, max_tokens=_animator_max_out(seconds),
-                             role="animator", effort="low")
-        return _extract_html(text)
+        try:
+            text = await _claude(job_id, ANIMATOR_SYSTEM, ask, max_tokens=int(_animator_max_out(seconds) * 1.6),
+                                 role="animator")
+            return _extract_html(text)
+        except (BillingError, OverBudget):
+            raise
+        except Exception as e2:
+            print(f"[motion] animator second retry (low effort): {e2!r}")
+            _record_error(job_id, f"animator second retry: {e2!r}")
+            text = await _claude(job_id, ANIMATOR_SYSTEM, ask, max_tokens=int(_animator_max_out(seconds) * 1.6),
+                                 role="animator", effort="low")
+            return _extract_html(text)
 
 
 async def _critique(job_id: str, p: dict, plan: dict, seg: dict, video: str, tmp: str,
@@ -1036,6 +1047,11 @@ async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: 
             _say(job_id, "Animator", f"{label}: revision skipped to stay within budget.")
         except BillingError:
             pass
+        except Exception as e:
+            # a failed revision never fails the segment: the first version is rendered and kept
+            print(f"[motion] revision failed, keeping the first version: {e!r}")
+            _record_error(job_id, f"{label}: revision failed, first version kept: {e!r}")
+            _say(job_id, "Animator", f"{label}: the revision failed, keeping the first version.")
 
     await _beat_thumbs(job_id, seg, best["video"], tmp)
     try:

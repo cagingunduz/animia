@@ -90,10 +90,30 @@ def _to_mp3(raw: bytes, rate: int, factor: float) -> bytes:
         return open(out, "rb").read()
 
 
+def _seconds(raw: bytes, rate: int) -> float:
+    """Length of 16-bit mono audio (raw PCM, or a WAV with its 44-byte header)."""
+    return max(0, len(raw) - (44 if raw[:4] == b"RIFF" else 0)) / (2 * rate)
+
+
+# Gemini TTS sometimes drops part of a line. Natural Turkish speech at 1.0x is ~11-15 characters a second; a take
+# faster than this was cut short and is recorded again (the longest take wins).
+MAX_CPS = 20.0
+
+
 async def speech(text: str, voice_id: str, factor: float | None = None, hook: bool = False) -> bytes:
     """One line -> MP3 bytes at the voice's pace (the hook pace for the first beat)."""
     v = VOICES[voice_id]
-    raw, rate = await _pcm(text, v)
+    chars = len("".join(text.split()))
+    best = None
+    for attempt in range(3):
+        raw, rate = await _pcm(text, v)
+        secs = _seconds(raw, rate)
+        if best is None or secs > best[2]:
+            best = (raw, rate, secs)
+        if secs > 0 and chars / secs <= MAX_CPS:
+            break
+        print(f"[gemini voice] take {attempt + 1} looks cut short ({secs:.2f} s for {chars} characters): recording again")
+    raw, rate, _ = best
     return await asyncio.to_thread(_to_mp3, raw, rate, factor if factor else tempo(voice_id, hook))
 
 
