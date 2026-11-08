@@ -45,8 +45,11 @@ DEFAULT_TONE = {"stability": 0.40, "style": 0.42}
 
 
 async def generate_speech(text: str, voice_id: str, tone: str = None, model: str = None) -> bytes:
-    """Generate narration audio (MP3 bytes) with ElevenLabs TTS.
+    """Generate narration audio (MP3 bytes) with ElevenLabs TTS (or a Gemini narrator, voice ids "gm_...").
     `tone` shapes the emotional delivery (see TONE_SETTINGS)."""
+    import gemini_voice
+    if gemini_voice.is_gemini(voice_id):
+        return await gemini_voice.speech(text, voice_id)
     ts = TONE_SETTINGS.get((tone or "").strip().lower(), DEFAULT_TONE)
     url = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"
     payload = {
@@ -82,8 +85,11 @@ def _tts_sem():
 
 
 async def generate_speech_timed(text: str, voice_id: str, tone: str = None, model: str = None,
-                                speed: float = None) -> tuple:
+                                speed: float = None, hook: bool = False) -> tuple:
     import asyncio
+    import gemini_voice
+    if gemini_voice.is_gemini(voice_id):      # its own delivery and pace (hook = the first beat, a little faster)
+        return await gemini_voice.speech_timed(text, voice_id, hook=hook)
     for attempt in range(4):
         async with _tts_sem():
             try:
@@ -150,7 +156,7 @@ def get_audio_duration(audio_bytes: bytes) -> float:
         return len(audio_bytes) / 16000.0
 
 
-async def get_word_timestamps(audio_bytes: bytes) -> list:
+async def get_word_timestamps(audio_bytes: bytes, language: str | None = None) -> list:
     """Use OpenAI Whisper to get word-level timestamps from audio (for captions).
     Independent of the TTS engine — works on any MP3."""
     import asyncio
@@ -167,7 +173,8 @@ async def get_word_timestamps(audio_bytes: bytes) -> list:
             model="whisper-1",
             file=audio_file,
             response_format="verbose_json",
-            timestamp_granularities=["word"]
+            timestamp_granularities=["word"],
+            **({"language": language} if language else {}),
         )
         return [{"word": w.word, "start": w.start, "end": w.end} for w in (transcript.words or [])]
 
@@ -200,7 +207,13 @@ async def get_voices() -> list:
             resp.raise_for_status()
             data = resp.json()
         voices = [_map_voice(v) for v in data.get("voices", []) if v.get("voice_id")]
-        return voices or _FALLBACK_VOICES
+        return _with_gemini(voices or _FALLBACK_VOICES)
     except Exception as e:
         print(f"[WARN] ElevenLabs get_voices failed: {repr(e)}")
-        return _FALLBACK_VOICES
+        return _with_gemini(_FALLBACK_VOICES)
+
+
+def _with_gemini(voices: list) -> list:
+    """The Gemini narrators (gemini_voice.VOICES) first, then the ElevenLabs voices."""
+    import gemini_voice
+    return gemini_voice.voice_list() + list(voices)

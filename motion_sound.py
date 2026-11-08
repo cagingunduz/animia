@@ -264,13 +264,17 @@ async def narrate_first(beats: list[dict], voice_id: str, tmp: str, tone: str = 
         text = (b.get("voiceover") or "").strip()
         if not text:
             return None
-        audio, words = await generate_speech_timed(text, voice_id, tone, speed=speed)
+        audio, words = await generate_speech_timed(text, voice_id, tone, speed=speed, hook=(i == 0))
         p = os.path.join(tmp, f"vo_{i}.mp3")
         open(p, "wb").write(audio)
         p, words = tighten(p, words)
         p = normalize_voice(p, VOICE_TARGET_LUFS)
         return {"path": p, "dur": probe(p), "words": words}
     res = await asyncio.gather(*[one(i, b) for i, b in enumerate(beats)], return_exceptions=True)
+    import gemini_voice
+    gem = next((r for r in res if isinstance(r, gemini_voice.GeminiTTSError)), None)
+    if gem:                     # a picked Gemini narrator that can't speak: stop before any animation is paid for
+        raise gem
     out = []
     for r in res:
         if isinstance(r, Exception):
