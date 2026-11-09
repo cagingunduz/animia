@@ -792,8 +792,8 @@ async def long_create(req: LongCreate, x_studio_key: str = Header("")):
         raise HTTPException(status_code=400, detail="Uploads must come from /studio/upload.")
     reference = None
     if req.analysis_id:
-        if req.template != "doc-analysis":
-            raise HTTPException(status_code=400, detail="Remakes are made with the Documentary Analysis engine")
+        if req.template not in ("doc-analysis", "cinecode-film"):      # pictures + code graphics, or code animation only
+            raise HTTPException(status_code=400, detail="Remakes are made with Documentary Analysis or Cinecode Film")
         job = await asyncio.to_thread(video_analysis_pipeline.load_snapshot, req.analysis_id)
         if not job or job.get("status") != "completed":
             raise HTTPException(status_code=404, detail="That analysis was not found (or isn't finished). Analyse the video again.")
@@ -964,7 +964,7 @@ async def analysis_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "source", "brief", "report", "breakdown", "breakdown_error",
-            "transcript", "files", "usage", "error", "created"]
+            "transcript", "sources", "files", "usage", "error", "created"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 

@@ -25,6 +25,7 @@ import anthropic
 
 from jobs import job_store
 from motion_pipeline import THINK_ROOM, BillingError, _anthropic, _record_usage
+import video_analysis_sources as sources
 from storybook_pipeline import R2_BUCKET, R2_PUBLIC_BASE, get_r2_client, upload_bytes_to_r2
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,7 @@ MODEL = os.environ.get("ANALYSIS_MODEL", os.environ.get("PROMPT_MODEL", "claude-
 EFFORT = os.environ.get("ANALYSIS_EFFORT", "medium")
 MAX_SECONDS = int(os.environ.get("ANALYSIS_MAX_SECONDS", "1200"))     # longer references are refused (CPU time)
 TIMEOUT = int(os.environ.get("ANALYSIS_TIMEOUT", "1800"))
-STEPS = 4
+STEPS = 5
 _slots = asyncio.Semaphore(int(os.environ.get("ANALYSIS_CONCURRENCY", "2")))   # analyze.py uses every core
 
 LANGS = {"tr": "Turkish", "en": "English"}
@@ -42,7 +43,7 @@ LANGS = {"tr": "Turkish", "en": "English"}
 def new_job(source: str, brief: str, lang: str) -> dict:
     return {
         "kind": "analysis", "created": time.time(), "status": "queued", "stage": "queued", "step": 0, "total_steps": STEPS, "message": "Queued",
-        "source": source, "brief": brief, "lang": lang, "report": None, "breakdown": None, "transcript": None, "files": {},
+        "source": source, "brief": brief, "lang": lang, "report": None, "breakdown": None, "transcript": None, "sources": None, "files": {},
         "error": None, "traceback": None, "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
     }
 
@@ -136,6 +137,18 @@ def _publish(job_id: str, out: str) -> dict:
             with open(p, "rb") as f:
                 files[key] = upload_bytes_to_r2(f.read(), f"analysis/{job_id}", name.rsplit(".", 1)[1], ctype)
     return files
+
+
+def _publish_frames(job_id: str, probes: list[dict]) -> dict:
+    """The sharp per-shot frames → R2 (the page shows them; a remake's reference look reads them)."""
+    urls = {}
+    for p in probes:
+        try:
+            with open(p["frame"], "rb") as f:
+                urls[p["shot"]] = upload_bytes_to_r2(f.read(), f"analysis/{job_id}/shots", "jpg", "image/jpeg")
+        except OSError:
+            pass
+    return urls
 
 
 def compact(rep: dict) -> dict:
@@ -232,7 +245,7 @@ def _snapshot_key(job_id: str) -> str:
 
 
 SNAPSHOT_KEYS = ("kind", "status", "stage", "step", "total_steps", "message", "source", "brief", "lang", "report", "breakdown",
-                 "breakdown_error", "transcript", "files", "usage", "error", "created")
+                 "breakdown_error", "transcript", "sources", "files", "usage", "error", "created")
 
 
 def save_snapshot(job_id: str):
@@ -256,13 +269,17 @@ def load_snapshot(job_id: str) -> dict | None:
         return None
 
 
-async def _describe(job_id: str, out: str, summary: dict, brief: str, lang: str, transcript: dict | None = None) -> dict:
+async def _describe(job_id: str, out: str, summary: dict, brief: str, lang: str, transcript: dict | None = None,
+                    src: dict | None = None) -> dict:
     content = []
     for name, label in [("sheet_1fps.jpg", "Contact sheet, one frame per second:"), ("sheet_scenes.jpg", "Middle frame of each shot:")]:
         img = _image_block(os.path.join(out, name))
         if img:
             content += [{"type": "text", "text": label}, img]
     content.append({"type": "text", "text": "Measurements:\n" + json.dumps(summary, ensure_ascii=False)})
+    if src and src.get("shares"):
+        content.append({"type": "text", "text": "What the shots are made of (labelled shot by shot from sharp frames): "
+                        + json.dumps({"shares": src["shares"], "shots": [{k: x[k] for k in ("shot", "source", "overlay")} for x in src["shots"]]})})
     if transcript:
         content.append({"type": "text", "text": "What is said (transcript, for structure and tone; never quote it at length):\n"
                                                 + "\n".join(f"[{x['start']:.0f}s] {x['text']}" for x in transcript["segments"])[:12000]})
@@ -301,6 +318,13 @@ async def run_analysis(job_id: str, file_path: str | None, url: str | None, brie
             _log(job_id, 1, "measuring", "Measuring shots, camera, colour and rhythm")
             out = os.path.join(work, "analysis")
             report = await asyncio.to_thread(_measure, src, out)
+            _log(job_id, 1, "measuring", "Taking a sharp frame from every shot")
+            try:
+                probes = await asyncio.to_thread(sources.probe, os.path.join(out, report.get("analysed") or "source.mp4"),
+                                                 report.get("shots") or [], report["video"]["duration"], os.path.join(out, "shots"))
+            except Exception as e:
+                probes = []
+                print(f"[analysis {job_id}] shot probes skipped: {e}")
         summary = compact(report)
         job_store[job_id]["report"] = summary
         _log(job_id, 2, "publishing", "Saving contact sheets")
@@ -310,9 +334,20 @@ async def run_analysis(job_id: str, file_path: str | None, url: str | None, brie
             job_store[job_id]["transcript"] = await asyncio.to_thread(_transcribe, out)
         except Exception as e:
             print(f"[analysis {job_id}] transcript skipped: {e}")
-        _log(job_id, 4, "describing", "Writing the style breakdown")
+        _log(job_id, 4, "classifying", "Telling generated pictures, code animation and footage apart")
+        if probes:
+            try:
+                labels = await sources.classify(job_id, probes, _anthropic(), MODEL, EFFORT, THINK_ROOM.get(EFFORT, 10000), _record_usage)
+                urls = await asyncio.to_thread(_publish_frames, job_id, probes)
+                for x in labels:
+                    x["frame"] = urls.get(x["shot"])
+                job_store[job_id]["sources"] = {"shots": labels, **sources.decide(labels, report.get("shots") or [], report["video"]["duration"])}
+            except Exception as e:
+                print(f"[analysis {job_id}] shot sources skipped: {e}")
+        _log(job_id, 5, "describing", "Writing the style breakdown")
         try:   # the measurements are already useful on their own: a failed write-up doesn't fail the job
-            job_store[job_id]["breakdown"] = await _describe(job_id, out, summary, brief, lang, job_store[job_id].get("transcript"))
+            job_store[job_id]["breakdown"] = await _describe(job_id, out, summary, brief, lang, job_store[job_id].get("transcript"),
+                                                             job_store[job_id].get("sources"))
         except Exception as e:
             job_store[job_id]["breakdown_error"] = str(e)[:300]
             print(f"[analysis {job_id}] breakdown skipped: {e}")

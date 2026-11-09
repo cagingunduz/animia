@@ -445,7 +445,24 @@ def reference_from_analysis(job: dict, same_topic: bool) -> dict:
     return {"source": str(job.get("source") or "")[:300], "same_topic": bool(same_topic),
             "duration": (rep.get("video") or {}).get("duration"), "report": {k: rep.get(k) for k in ("video", "pacing", "look_summary", "audio", "flashes", "motion", "shots")},
             "breakdown": job.get("breakdown") or {}, "files": job.get("files") or {},
+            "sources": {k: (job.get("sources") or {}).get(k) for k in ("shares", "engine", "confidence")} if job.get("sources") else None,
+            "frames": _pick_frames((job.get("sources") or {}).get("shots") or []),
             "transcript": {"language": tr.get("language"), "segments": (tr.get("segments") or [])[:600]} if tr else None}
+
+
+def _pick_frames(shots: list, n: int = 6) -> list[dict]:
+    """Up to n sharp shot frames for the reference look: one of each kind first, then spread over the film."""
+    shots = [x for x in shots if x.get("frame")]
+    picked, seen = [], set()
+    for x in shots:
+        if x["source"] not in seen:
+            seen.add(x["source"]); picked.append(x)
+    for x in shots[::max(1, len(shots) // n)]:
+        if len(picked) >= n:
+            break
+        if x not in picked:
+            picked.append(x)
+    return [{"url": x["frame"], "source": x["source"], "overlay": x.get("overlay"), "t": x.get("start")} for x in picked[:n]]
 
 
 def reference_plan_md(ref: dict) -> str:
@@ -461,10 +478,7 @@ def reference_plan_md(ref: dict) -> str:
            f"Its structure, scaled to this film's length:\n{beats}" if beats else "",
            f"Its on-screen text: {b.get('text_and_graphics', '')}",
            f"Its camera: {b.get('camera', '')}",
-           f"Its picture mix (follow it with layers A / B / G): {ref['mix']}" if ref.get("mix") else "",
-           "LAYER G (besides A and B): a full-frame explainer graphic the animator builds entirely in code (a diagram, map, "
-           "chart, timeline, counter, comparison); put the whole graphic and how it builds in `overlay`. Use it where the "
-           "reference cuts to explainer graphics.",
+           *(_layer_rules(ref) if ref.get("template") == "doc-analysis" else []),
            "Its rules: " + "; ".join(b.get("recreate") or []) if b.get("recreate") else ""]
     tr = ref.get("transcript")
     if ref.get("same_topic") and tr and tr.get("segments"):
@@ -474,6 +488,17 @@ def reference_plan_md(ref: dict) -> str:
                    f"({tr.get('language') or 'as spoken'}) unless the creator's notes ask for another.\n"
                    + "\n".join(f"[{x['start']:.0f}s] {x['text']}" for x in tr["segments"])[:14000])
     return "\n".join(x for x in out if x)
+
+
+def _layer_rules(ref: dict) -> list[str]:
+    sh = (ref.get("sources") or {}).get("shares") or {}
+    measured = (f"Measured shot by shot, the reference is {round(100 * sh.get('generated', 0))} % generated pictures, "
+                f"{round(100 * sh.get('code', 0))} % code animation and {round(100 * sh.get('footage', 0))} % real footage: "
+                "keep those shares with layers A (generated), G (code) and B (footage).") if sh else ""
+    return [measured, f"Its picture mix: {ref['mix']}" if ref.get("mix") else "",
+            "LAYER G (besides A and B): a full-frame explainer graphic the animator builds entirely in code (a diagram, map, "
+            "chart, timeline, counter, comparison); put the whole graphic and how it builds in `overlay`. Use it where the "
+            "reference cuts to explainer graphics."]
 
 
 async def _image_from_url(url: str) -> dict | None:
@@ -501,6 +526,13 @@ async def _reference_look(st_: dict, s: dict):
             img = await _image_from_url(ref["files"][key])
             if img:
                 content += [{"type": "text", "text": label}, img]
+    for fr in (ref.get("frames") or [])[:6]:
+        img = await _image_from_url(fr["url"])
+        if img:
+            content += [{"type": "text", "text": f"Sharp frame at {float(fr.get('t') or 0):.1f} s, measured as {fr['source']}"
+                                                 + (" with code graphics over it" if fr.get("overlay") else "") + ":"}, img]
+    if ref.get("sources"):
+        content.append({"type": "text", "text": "What the reference's shots are made of (measured): " + json.dumps(ref["sources"])})
     example = (studio_styles.look_md(s["template"], st_.get("look") or "vox-explainer") if st_.get("looks")
                else studio_styles._read(s["template"], "STYLE.md"))
     kit = studio_styles._read(s["template"], "KIT.md")
@@ -1047,7 +1079,7 @@ def create(template: str, topic: str, minutes: int, voice: str | None, notes: st
         s["look"] = look if look in st_["looks"] else st_["look"]
         s["look_name"] = st_["looks"][s["look"]]
     if reference:
-        s["reference"] = reference
+        s["reference"] = {**reference, "template": template}
         s["look_name"] = "From your reference"
         if reference.get("same_topic") and not s["topic"]:
             s["topic"] = "The same subject as the reference video (see the plan rules)"
