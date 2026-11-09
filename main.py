@@ -1175,9 +1175,14 @@ async def download(url: str, filename: str = "video.mp4"):
     import httpx
     from fastapi.responses import StreamingResponse
 
+    from urllib.parse import quote
+    import unicodedata
     safe_name = "".join(c for c in filename if c.isalnum() or c in " ._-").strip() or "video.mp4"
     if not safe_name.lower().endswith(".mp4"):
         safe_name += ".mp4"
+    # HTTP headers are latin-1: an ASCII name for old browsers, the real (Turkish) name as filename* (RFC 6266)
+    tr = str.maketrans({"ı": "i", "İ": "I", "ş": "s", "Ş": "S", "ğ": "g", "Ğ": "G", "ç": "c", "Ç": "C", "ö": "o", "Ö": "O", "ü": "u", "Ü": "U"})
+    ascii_name = unicodedata.normalize("NFKD", safe_name.translate(tr)).encode("ascii", "ignore").decode() or "video.mp4"
 
     async def stream():
         async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
@@ -1189,7 +1194,7 @@ async def download(url: str, filename: str = "video.mp4"):
     return StreamingResponse(
         stream(),
         media_type="video/mp4",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(safe_name)}'},
     )
 
 
