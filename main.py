@@ -487,7 +487,7 @@ async def generate_motion(req: GenerateMotionRequest):
         "message": "Kuyrukta bekleniyor...", "scenes": [], "shots": [], "plan": None, "gate": None,
         "activity": [], "style_frame_url": None, "final_video_url": None, "error": None, "traceback": None,
         "aspect_ratio": req.aspect_ratio, "resolution": req.resolution, "auto_approve": bool(req.auto_approve),
-        "models": {k: v for k, v in (req.models or {}).items() if k in ("director", "animator", "critic") and isinstance(v, str) and v.startswith("claude-")},
+        "models": {k: v for k, v in (req.models or {}).items() if k in ("director", "animator", "critic", "fixer") and isinstance(v, str) and v.startswith("claude-")},
         "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
     }
     asyncio.create_task(run_motion_pipeline(job_id, req.model_dump()))
