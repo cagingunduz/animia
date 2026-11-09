@@ -115,6 +115,16 @@ exact time, captures pixels, and moves on. Nothing plays in real time.
 7. Fonts: Google Fonts via <link href="https://fonts.googleapis.com/css2?family=...&display=block" rel="stylesheet">
    (display=block). Always give a fallback stack. Only the image files you are told about
    exist (e.g. assets/logo.png).
+   NON-ENGLISH TEXT (Turkish ı İ ş ğ ç ö ü, and any accented letters): pick a family that has
+   these glyphs, or a letter is drawn from a fallback font. Safe picks: Inter, DM Sans, Manrope,
+   Plus Jakarta Sans, Poppins, Montserrat, Rubik, Nunito, Work Sans, Outfit, Sora, Lexend,
+   Space Grotesk, Bricolage Grotesque, Unbounded, Syne, Archivo Black, Anton, Bebas Neue,
+   Oswald, Barlow Condensed, Lilita One, Fredoka, Baloo 2. Uppercase Turkish with
+   text-transform only on an element with lang="tr" (i → İ, ı → I).
+   LETTER-SPACING: never below 0 on text with a dotless ı (Turkish): heavy display type with
+   negative tracking glues "rı" into an "n" ("yarıyor" reads "yanyor"). Elsewhere at most
+   -0.02em, and only above 80px. The layout check measures every letter: letters that touch
+   or a missing glyph fail the segment.
 8. ICONS: never draw icons, pictograms or symbols with SVG paths. Write
    <i data-icon="NAME"></i> with a Lucide icon name (coins, wallet, piggy-bank, banknote,
    chart-line, chart-column, trending-up, rocket, zap, sparkles, lightbulb, target, check,
