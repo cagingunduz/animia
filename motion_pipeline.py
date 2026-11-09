@@ -50,6 +50,9 @@ ROLE_MODELS = {
     "director": os.environ.get("MOTION_DIRECTOR_MODEL", _PLANNING_MODEL),
     "animator": os.environ.get("MOTION_ANIMATOR_MODEL", _DEFAULT_MODEL),
     "critic": os.environ.get("MOTION_CRITIC_MODEL", _PLANNING_MODEL),
+    # small find/replace edits (layout QA fixes, render fixes, critic revisions): the animator's Opus code is
+    # already written; a fix needs a careful reader, not deep thinking (cost: 2026-11-09, ~$1.75 -> ~$0.8 a reel)
+    "fixer": os.environ.get("MOTION_FIXER_MODEL", _PLANNING_MODEL),
 }
 RENDER_SERVICE_URL = os.environ.get("RENDER_SERVICE_URL", "").rstrip("/")
 RENDER_TOKEN = os.environ.get("RENDER_TOKEN", "")
@@ -59,7 +62,8 @@ PRICES = {"opus-5-5": (4.0, 20.0), "sonnet-5-5": (2.0, 10.0), "haiku-5-5": (0.1,
 # Current models always think; effort is the only knob (Opus 5.5 defaults to medium).
 EFFORT = {"director": os.environ.get("MOTION_DIRECTOR_EFFORT", "medium"),
           "animator": os.environ.get("MOTION_ANIMATOR_EFFORT", "medium"),
-          "critic": os.environ.get("MOTION_CRITIC_EFFORT", "medium")}
+          "critic": os.environ.get("MOTION_CRITIC_EFFORT", "medium"),
+          "fixer": os.environ.get("MOTION_FIXER_EFFORT", "low")}
 THINK_ROOM = {"low": 3000, "medium": 10000, "high": 16000}  # max_tokens covers thinking too
 
 # Hard Claude budget per job: $0.025 per output second → $0.25 for a 10 s video.
@@ -74,7 +78,7 @@ PASS_SCORE = 8.0           # "ships" on the critic's scale
 # When the visual critic runs: "suspect" = only if layout QA saw something that might be visible
 # (a transient overlap, poor contrast, or unresolved problems); "always"; or "off".
 CRITIC_MODE = os.environ.get("MOTION_CRITIC_MODE", "suspect")
-REVISE_BELOW = float(os.environ.get("MOTION_REVISE_BELOW", "7.5"))
+REVISE_BELOW = float(os.environ.get("MOTION_REVISE_BELOW", "6.0"))   # was 7.5: a 6-7/10 segment ships as it is
 MAX_RENDER_FIXES = 2
 MAX_DEFECT_FIXES = int(os.environ.get("MOTION_DEFECT_FIXES", "3"))  # layout-QA repair rounds (always run)
 FPS = 30
@@ -611,10 +615,10 @@ EDIT_MAX_OUT = 4000             # a critic revision of a weak segment needs room
 # ─────────────────────────── render with repairs ───────────────────────────
 
 async def _edit(job_id: str, ctx: list, html: str, problem: str, optional: bool = True) -> str | None:
-    """Ask the animator for find/replace edits. Returns the edited HTML, or None."""
+    """Ask for find/replace edits (the fixer: Sonnet, low effort). Returns the edited HTML, or None."""
     res = await _claude(job_id, ANIMATOR_SYSTEM, [
         *ctx, {"type": "text", "text": f"{problem}\n\n{EDIT_NOTE}\n\nCURRENT HTML:\n```html\n{html}\n```"},
-    ], max_tokens=EDIT_MAX_OUT, role="animator", tool=EDIT_TOOL, optional=optional)
+    ], max_tokens=EDIT_MAX_OUT, role="fixer", tool=EDIT_TOOL, optional=optional)
     new, applied = _apply_edits(html, res.get("edits", []))
     return new if applied else None
 
