@@ -123,7 +123,11 @@ exact time, captures pixels, and moves on. Nothing plays in real time.
    text-transform only on an element with lang="tr" (i → İ, ı → I).
    LETTER-SPACING: never below 0 on text with a dotless ı (Turkish): heavy display type with
    negative tracking glues "rı" into an "n" ("yarıyor" reads "yanyor"). Elsewhere at most
-   -0.02em, and only above 80px. The layout check measures every letter: letters that touch
+   -0.02em, and only above 80px.
+   WORD LENGTH: Turkish words are long ("yarıyor", "gönderiyorsun") and a word never wraps:
+   size display type so the LONGEST single word fits the frame width minus 2 x 64px (at heavy
+   weights a letter is ~0.6em wide: 7 letters at 150px is ~630px). A word cut by the frame edge
+   fails the segment. The layout check measures every letter: letters that touch
    or a missing glyph fail the segment.
 8. ICONS: never draw icons, pictograms or symbols with SVG paths. Write
    <i data-icon="NAME"></i> with a Lucide icon name (coins, wallet, piggy-bank, banknote,

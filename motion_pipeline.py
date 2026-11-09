@@ -1076,14 +1076,21 @@ async def _produce_segment(job_id: str, p: dict, plan: dict, seg: dict, n_segs: 
                 fixed, ok, qa2 = await _render(job_id, label, fixed, assets, out2, ctx)  # no rewrite for a revision
                 # never trade a clean layout for a revision that still has defects
                 if ok and (qa2.get("ok") or not qa.get("ok")):
+                    first_version = dict(best)
                     best.update(html=fixed, video=out2)
                     _seg_state(job_id, seg, attempts=2)
                     try:  # re-score only if the budget still allows it
                         r2 = await _critique(job_id, p, plan, seg, out2, tmp, fixed, assets, qa=qa2)
-                        best.update(score=r2["overall"], review=r2)
-                        _seg_state(job_id, seg, score=round(r2["overall"], 1), scores=r2.get("scores", {}),
-                                   issues=r2.get("issues", [])[:6])
-                        _say(job_id, "Critic", f"{label}: revised version {r2['overall']:.1f}/10.")
+                        if r2["overall"] < review["overall"]:
+                            # the revision made it worse (5.3 -> 4.0 shipped once): keep the first version
+                            best.clear(); best.update(first_version)
+                            _say(job_id, "Critic", f"{label}: revised version {r2['overall']:.1f}/10 is worse than "
+                                                   f"{review['overall']:.1f}/10, keeping the first version.")
+                        else:
+                            best.update(score=r2["overall"], review=r2)
+                            _seg_state(job_id, seg, score=round(r2["overall"], 1), scores=r2.get("scores", {}),
+                                       issues=r2.get("issues", [])[:6])
+                            _say(job_id, "Critic", f"{label}: revised version {r2['overall']:.1f}/10.")
                     except OverBudget:
                         pass
         except OverBudget:

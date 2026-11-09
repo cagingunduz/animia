@@ -61,8 +61,10 @@ function measure() {
       if (!ch.trim()) { chars.push(null); continue; }
       const rect = r.getBoundingClientRect();
       if (!rect.width || rect.right < 0 || rect.left > W || rect.bottom < 0 || rect.top > H) { chars.push(null); continue; }
+      // a letter cut by the edge of the frame (the viewer sees half of it); parked fully off-frame is fine
+      const cut = rect.left < -1 || rect.right > W + 1 || rect.top < -1 || rect.bottom > H + 1;
       const m = ink(font, ch), scale = m.w + ls > 0 ? rect.width / (m.w + ls) : 1;
-      chars.push({ ch, el, size: size * scale, top: rect.top, h: rect.height,
+      chars.push({ ch, el, cut, size: size * scale, top: rect.top, h: rect.height,
         inkL: rect.left - m.l * scale, inkR: rect.left + m.r * scale, miss: ch.charCodeAt(0) > 127 && missing(cs, ch) });
     }
     chars.push(null);                                     // never pair across text nodes in different elements' ends
@@ -73,6 +75,7 @@ function measure() {
     list.forEach((c, k) => {
       if (!c) return;
       if (c.miss) out.push({ code: 'missing_glyph', ch: c.ch, word: word(list, k) });
+      if (c.cut) out.push({ code: 'text_off_frame', ch: c.ch, word: word(list, k) });
       const d = list[k + 1];
       if (!d || Math.abs(d.top - c.top) > c.h * 0.3) return;
       const overlap = c.inkR - d.inkL;                   // > 0: the ink of the two letters overlaps
@@ -103,7 +106,7 @@ export async function glyphCheck(browser, dir, { step = 250, held = 500 } = {}) 
       await page.evaluate(ms => { for (const tl of window.__hfAnime || []) { try { tl.seek(ms); } catch { /* not a timeline */ } } }, t);
       const found = await page.evaluate(measure);
       for (const f of found) {
-        const k = `${f.code}|${f.pair || f.ch}|${f.word}`;
+        const k = f.code === 'text_off_frame' ? `${f.code}|${f.word}` : `${f.code}|${f.pair || f.ch}|${f.word}`;
         const s = seen.get(k);
         if (!s) { seen.set(k, { start: t, last: t, first: t, best: step, f }); continue; }
         if (t - s.last > step) s.start = t;                 // a new run after a gap
@@ -116,6 +119,12 @@ export async function glyphCheck(browser, dir, { step = 250, held = 500 } = {}) 
     for (const { first, best, f } of seen.values()) {
       if (best < held) continue;
       const last = first + best - step;
+      if (f.code === 'text_off_frame') {
+        findings.push({ code: 'text_off_frame', severity: 'error', section: 'layout', time: first / 1000, heldMs: last - first + step, text: f.word,
+          message: `"${f.word}" runs off the edge of the frame: part of it is cut off.`,
+          fixHint: 'Keep every line inside the frame with a margin of at least 64px: lower the font-size, allow the line to wrap, or measure the longest word against the frame width.' });
+        continue;
+      }
       findings.push(f.code === 'glyph_collision'
         ? { code: 'glyph_collision', severity: 'error', section: 'layout', time: first / 1000, heldMs: last - first + step, text: f.word,
             message: f.px > 0
