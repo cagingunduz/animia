@@ -431,7 +431,7 @@ REF_LOOK_TOOL = {
             "recipe": {"type": "string", "description": "the look recipe in markdown, same sections as the example recipe"},
             "shot_seconds": {"type": "number", "description": "how often a new shot or step should land, in seconds, matching the reference"},
             "closest_look": {"type": "string", "description": "the id of the stock look it is closest to (if the template has looks)"},
-            "image_style": {"type": "string", "description": "ONE line every generated picture starts with, so the stills look like the reference's pictures: medium (photo / 3D render / illustration), realism, era, palette, light, lens, grain, composition with room for text"},
+            "image_style": {"type": "string", "description": "ONE paragraph every generated picture starts with, so the stills look like the reference's pictures: medium (photo / 3D render / illustration), line work and texture, realism, era, palette, light, lens, grain, composition with room for text. If the reference has recurring characters, end with ONE fixed sentence that describes how every person is drawn (head, face, body, proportions; children smaller than adults) and that only people have faces. Write every rule positively (image models often draw what a 'no X' names); ask for plain, unmarked surfaces instead of naming signs or labels."},
             "mix": {"type": "string", "description": "how the reference's shots split between generated pictures (A), real footage (B) and full-frame code graphics (G), with rough shares and when each is used"},
         },
     },
@@ -1261,8 +1261,17 @@ async def _art_mixed(s: dict, tmp: str):
     shots = [(sec, sh) for sec in s["plan"]["sections"] for sh in sec["shots"] if sh.get("layer") != "G"]
     todo = [(sec, sh) for sec, sh in shots if sh["id"] not in assets]
     ref = s.get("reference") or {}
-    lock = (ref["image_style"].rstrip(". ") + ". ") if ref.get("image_style") else LOCK
-    neg = REF_NEG if ref.get("image_style") else NEG
+    remake = bool(ref.get("image_style"))
+    lock = (ref["image_style"].rstrip(". ") + ". ") if remake else LOCK
+    neg = REF_NEG if remake else NEG
+    # remakes: Nano Banana, and every still after the first is drawn with the first as its style reference, so the
+    # characters and the hand stay the same across the film (the first is the style master)
+    master = {"url": s.get("style_master"), "raw": None}
+    if remake and master["url"]:
+        try:
+            master["raw"] = await _fetch(master["url"])
+        except Exception:
+            master["url"] = None
     done = {"n": len(shots) - len(todo)}
     sem = asyncio.Semaphore(4)
 
@@ -1277,8 +1286,10 @@ async def _art_mixed(s: dict, tmp: str):
             if not got:
                 try:
                     prompt = lock + (sh["prompt"] if sh["layer"] == "A" else f"A picture of {sh['prompt']}") + "." + neg
-                    raw = await long_art.make(prompt, "16:9")
+                    raw = await long_art.make(prompt, "16:9", ref=master["raw"], ref_url=master["url"], nano=remake)
                     url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.png", raw, "image/png")
+                    if remake and not master["url"]:
+                        master.update(url=url, raw=raw); s["style_master"] = url
                     got = {"url": url, "kind": "image", "layer": "A", "shows": sh["prompt"][:120]}
                 except Exception as e:
                     print(f"[long] art {sh['id']} failed: {e!r}")
@@ -1288,6 +1299,11 @@ async def _art_mixed(s: dict, tmp: str):
             done["n"] += 1
             _step(s, "art", f"Finding the footage and drawing the scenes ({done['n']}/{len(shots)})", 0.1 + 0.15 * done["n"] / len(shots))
             save(s)
+    if remake and not master["url"]:
+        first = next(((sec, sh) for sec, sh in todo if sh["layer"] == "A" and sh.get("upload") is None), None)
+        if first:
+            await one(*first)                 # the style master, alone, before the rest use it
+            todo = [x for x in todo if x[1]["id"] != first[1]["id"]]
     await asyncio.gather(*[one(sec, sh) for sec, sh in todo])
     if shots and sum(1 for _, sh in shots if sh["id"] in assets) < len(shots) * .6:
         raise RuntimeError("too many shots have no picture yet: resume to try them again")
