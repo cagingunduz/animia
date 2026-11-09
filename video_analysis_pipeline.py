@@ -30,8 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ANALYZE = os.path.join(HERE, "video_analysis", "analyze.py")
 MODEL = os.environ.get("ANALYSIS_MODEL", os.environ.get("PROMPT_MODEL", "claude-sonnet-5-5"))
 EFFORT = os.environ.get("ANALYSIS_EFFORT", "medium")
-MAX_SECONDS = int(os.environ.get("ANALYSIS_MAX_SECONDS", "600"))      # longer references are refused (CPU time)
-TIMEOUT = int(os.environ.get("ANALYSIS_TIMEOUT", "900"))
+MAX_SECONDS = int(os.environ.get("ANALYSIS_MAX_SECONDS", "1200"))     # longer references are refused (CPU time)
+TIMEOUT = int(os.environ.get("ANALYSIS_TIMEOUT", "1800"))
 STEPS = 3
 _slots = asyncio.Semaphore(int(os.environ.get("ANALYSIS_CONCURRENCY", "2")))   # analyze.py uses every core
 
@@ -86,10 +86,11 @@ def _cookie_file(out: str) -> str | None:
 
 
 def _download(url: str, out: str) -> str:
-    """yt-dlp at ≤720p, refusing anything longer than MAX_SECONDS before it is downloaded.
+    """yt-dlp at ≤720p, refusing anything known to be longer than MAX_SECONDS before it is downloaded (an unreported
+    length passes here; run_analysis measures the file).
     Optional: YTDLP_COOKIES (see _cookie_file) and YTDLP_PROXY (e.g. a residential proxy URL)."""
     cmd = [sys.executable, "-m", "yt_dlp", "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
-           "--match-filter", f"duration <= {MAX_SECONDS}", "--no-playlist", "-o", os.path.join(out, "input.%(ext)s")]
+           "--match-filter", f"duration <=? {MAX_SECONDS}", "--no-playlist", "-o", os.path.join(out, "input.%(ext)s")]
     cookies = _cookie_file(out)
     if cookies:
         cmd += ["--cookies", cookies]
