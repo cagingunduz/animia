@@ -67,7 +67,11 @@ def save(st: dict):
 
 def public(st: dict) -> dict:
     """What the site sees (no internal paths, no film code)."""
-    out = {k: v for k, v in st.items() if k not in ("film",)}
+    out = {k: v for k, v in st.items() if k not in ("film", "reference")}
+    if st.get("reference"):
+        r = st["reference"]
+        out["reference"] = {"source": r.get("source"), "same_topic": r.get("same_topic"), "look_name": r.get("look_name"),
+                            "sheet": (r.get("files") or {}).get("sheet_scenes"), "duration": r.get("duration")}
     out["running"] = st["id"] in _running
     if st.get("status") in ("planning", "producing") and not out["running"]:
         out["status_note"] = "paused"          # the server restarted mid-way: resume continues from the last finished step
@@ -414,8 +418,134 @@ def _clean_code_plan(res: dict) -> dict:
             "places": [], "cast": [], "props": [], "sections": sections}
 
 
+# ─────────────────────────── remakes of an analysed video ───────────────────────────
+
+REF_LOOK_TOOL = {
+    "name": "submit_look",
+    "description": "Submit the look recipe that rebuilds the reference video's style in the Cinecode kit.",
+    "input_schema": {
+        "type": "object",
+        "required": ["name", "recipe", "shot_seconds"],
+        "properties": {
+            "name": {"type": "string", "description": "a 2-4 word name for this look"},
+            "recipe": {"type": "string", "description": "the look recipe in markdown, same sections as the example recipe"},
+            "shot_seconds": {"type": "number", "description": "how often a new shot or step should land, in seconds, matching the reference"},
+            "closest_look": {"type": "string", "description": "the id of the stock look it is closest to (if the template has looks)"},
+            "image_style": {"type": "string", "description": "ONE paragraph every generated picture starts with, so the stills look like the reference's pictures: medium (photo / 3D render / illustration), line work and texture, realism, era, palette, light, lens, grain, composition with room for text. If the reference has recurring characters, end with ONE fixed sentence that describes how every person is drawn (head, face, body, proportions; children smaller than adults) and that only people have faces. Write every rule positively (image models often draw what a 'no X' names); ask for plain, unmarked surfaces instead of naming signs or labels."},
+            "mix": {"type": "string", "description": "how the reference's shots split between generated pictures (A), real footage (B) and full-frame code graphics (G), with rough shares and when each is used"},
+        },
+    },
+}
+
+
+def reference_from_analysis(job: dict, same_topic: bool) -> dict:
+    """What a remake keeps from an analysis (the snapshot can change or vanish later; the project carries its own copy)."""
+    rep = job.get("report") or {}
+    tr = job.get("transcript") or {}
+    return {"source": str(job.get("source") or "")[:300], "same_topic": bool(same_topic),
+            "duration": (rep.get("video") or {}).get("duration"), "report": {k: rep.get(k) for k in ("video", "pacing", "look_summary", "audio", "flashes", "motion", "shots")},
+            "breakdown": job.get("breakdown") or {}, "files": job.get("files") or {},
+            "transcript": {"language": tr.get("language"), "segments": (tr.get("segments") or [])[:600]} if tr else None}
+
+
+def reference_plan_md(ref: dict) -> str:
+    """The reference's pace and structure as plan rules (they override the template's defaults where they differ)."""
+    b, rep = ref.get("breakdown") or {}, ref.get("report") or {}
+    dur = float(ref.get("duration") or 0) or 1.0
+    beats = "\n".join(f"  - {100 * float(x.get('start', 0)) / dur:.0f}-{100 * float(x.get('end', 0)) / dur:.0f} % of the film: {x.get('beat', '')}"
+                      for x in (b.get("structure") or []))
+    out = [f"THE REFERENCE THIS FILM REMAKES (binding where it differs from the rules above). It is {dur:.0f} s long, "
+           f"{(rep.get('pacing') or {}).get('count') or 1} shots, a new shot every ~{ref.get('shot_seconds') or (rep.get('pacing') or {}).get('mean_shot_s') or 4} s: keep that pace.",
+           f"Its kind: {b.get('format', '')}. {b.get('summary', '')}",
+           f"Its hook: {b.get('hook', '')}",
+           f"Its structure, scaled to this film's length:\n{beats}" if beats else "",
+           f"Its on-screen text: {b.get('text_and_graphics', '')}",
+           f"Its camera: {b.get('camera', '')}",
+           f"Its picture mix (follow it with layers A / B / G): {ref['mix']}" if ref.get("mix") else "",
+           "LAYER G (besides A and B): a full-frame explainer graphic the animator builds entirely in code (a diagram, map, "
+           "chart, timeline, counter, comparison); put the whole graphic and how it builds in `overlay`. Use it where the "
+           "reference cuts to explainer graphics.",
+           "Its rules: " + "; ".join(b.get("recreate") or []) if b.get("recreate") else ""]
+    tr = ref.get("transcript")
+    if ref.get("same_topic") and tr and tr.get("segments"):
+        out.append("THE SUBJECT: the same as the reference. Below is what the reference says, for the subject, the facts and their "
+                   "order ONLY. Retell it in entirely your own words: never reuse its sentences, phrases, jokes or title; keep only "
+                   "claims that are true; you may tighten or reorder. Write in the reference's language "
+                   f"({tr.get('language') or 'as spoken'}) unless the creator's notes ask for another.\n"
+                   + "\n".join(f"[{x['start']:.0f}s] {x['text']}" for x in tr["segments"])[:14000])
+    return "\n".join(x for x in out if x)
+
+
+async def _image_from_url(url: str) -> dict | None:
+    try:
+        data = await _fetch(url)
+    except Exception:
+        return None
+    if len(data) > 3_500_000:
+        import cv2, numpy as np
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        img = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2))
+        data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+    import base64
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(data).decode()}}
+
+
+async def _reference_look(st_: dict, s: dict):
+    """Claude studies the reference (contact sheets, measurements, breakdown) and writes a look recipe for the kit, in the
+    format of the stock looks, so the film is rebuilt in the reference's style rather than a preset."""
+    _step(s, "plan", "Studying the reference video", 0.01)
+    ref = s["reference"]
+    content = []
+    for key, label in (("sheet_scenes", "The reference, middle frame of every shot:"), ("sheet_1fps", "The reference, one frame per second:")):
+        if ref["files"].get(key):
+            img = await _image_from_url(ref["files"][key])
+            if img:
+                content += [{"type": "text", "text": label}, img]
+    example = (studio_styles.look_md(s["template"], st_.get("look") or "vox-explainer") if st_.get("looks")
+               else studio_styles._read(s["template"], "STYLE.md"))
+    kit = studio_styles._read(s["template"], "KIT.md")
+    content.append({"type": "text", "text": "Measurements:\n" + json.dumps(ref["report"], ensure_ascii=False)[:9000]
+                    + "\n\nBreakdown:\n" + json.dumps(ref["breakdown"], ensure_ascii=False)[:6000]})
+    content.append({"type": "text", "text": "WHAT THE KIT CAN BUILD:\n" + kit[:12000]})
+    content.append({"type": "text", "text": "AN EXAMPLE LOOK RECIPE (format only; write yours for THIS reference):\n" + example[:9000]})
+    if st_.get("looks"):
+        content.append({"type": "text", "text": f"The stock look ids: {', '.join(st_['looks'])}."})
+    if st_.get("art_source") == "mixed":
+        content.append({"type": "text", "text": "THIS ENGINE: every shot is a generated still (layer A, made from your image_style + "
+                        "the shot's subject, then moved with camera pushes / pans), real archive footage (layer B), or a full-frame "
+                        "graphic built in code (layer G); all words, numbers and marks are typography animated in code over them. "
+                        "Your recipe covers both the pictures and the code-built typography / graphics."})
+    system = ("You are a motion designer who rebuilds a video's style in code. From the reference's frames and measurements, "
+              "write a look recipe (essence, materials and rendering, colour logic with its real hex codes, type, motion "
+              "quality, camera grammar, sound palette, native shot types, pitfalls, pace) that makes a NEW film look and move "
+              "like the reference: same palette, framing, type treatment, density, camera habits and cutting rhythm. Everything "
+              "must be buildable with the kit (shapes, 2D/3D geometry, type, charts, figures, textures): when the reference uses "
+              "live footage or photos, translate it into the closest drawn equivalent and say how. Never copy its logos, "
+              "characters, mascots or watermark; describe a style, not its content.")
+    res = await _claude(s["id"], system, content, 7000, "reference_look", REF_LOOK_TOOL)
+    recipe = str(res.get("recipe") or "").strip()
+    if len(recipe) < 300:
+        raise ValueError("the reference look came back empty: resume to try again")
+    ref.update(look_md=recipe[:16000], look_name=str(res.get("name") or "From your reference")[:60],
+               image_style=str(res.get("image_style") or "").strip()[:500] or None, mix=str(res.get("mix") or "").strip()[:500] or None,
+               closest_look=res.get("closest_look") if res.get("closest_look") in (st_.get("looks") or {}) else None)
+    try:
+        ref["shot_seconds"] = round(max(0.8, min(12.0, float(res.get("shot_seconds")))), 1)
+    except (TypeError, ValueError):
+        pass
+    s["look_name"] = ref["look_name"]
+
+
 def with_look(st_: dict, s: dict) -> dict:
-    """A template with looks (Cinecode Film): the project's look recipe joins the style rules."""
+    """A template with looks (Cinecode Film): the project's look recipe joins the style rules. A remake of an analysed
+    video uses the look Claude wrote from the reference instead, and the reference's pace and structure join the plan."""
+    ref = s.get("reference") or {}
+    if ref.get("look_md"):
+        st = dict(st_)
+        st.update(look_id="reference", look_name=ref.get("look_name") or "From your reference",
+                  style_md=st_["style_md"] + "\n\nTHE LOOK RECIPE (written from the reference video; binding):\n" + ref["look_md"],
+                  plan_md=st_["plan_md"] + "\n\n" + reference_plan_md(ref))
+        return st
     if not st_.get("looks"):
         return st_
     look = s.get("look") if s.get("look") in st_["looks"] else st_["look"]
@@ -861,8 +991,10 @@ async def run(pid: str):
         try:
             if not s:
                 return
-            st_ = with_look(studio_styles.style(s["template"]), s)
             s["error"] = None
+            if s["status"] == "planning" and s.get("reference") and not s["reference"].get("look_md"):
+                await _reference_look(studio_styles.style(s["template"]), s); save(s)
+            st_ = with_look(studio_styles.style(s["template"]), s)
             if s["status"] == "planning":
                 await _plan(st_, s); save(s); return
             if s["status"] != "producing":
@@ -901,9 +1033,11 @@ async def run(pid: str):
 
 
 def create(template: str, topic: str, minutes: int, voice: str | None, notes: str | None, uploads: list | None = None,
-           look: str | None = None) -> dict:
+           look: str | None = None, reference: dict | None = None) -> dict:
     st_ = studio_styles.style(template)
     lo, hi = st_.get("minutes", (2, 12))
+    if reference:
+        lo = 1                                  # a remake of a short reel can stay short
     s = {"id": str(uuid.uuid4()), "template": template, "template_name": st_["name"], "created": time.time(),
          "topic": (topic or "").strip()[:300], "notes": (notes or "").strip()[:600], "minutes": max(lo, min(hi, int(minutes or 5))),
          "voice": voice if voice in (st_.get("voices") or []) else st_["voice"], "status": "planning", "stage": "plan",
@@ -912,6 +1046,11 @@ def create(template: str, topic: str, minutes: int, voice: str | None, notes: st
     if st_.get("looks"):
         s["look"] = look if look in st_["looks"] else st_["look"]
         s["look_name"] = st_["looks"][s["look"]]
+    if reference:
+        s["reference"] = reference
+        s["look_name"] = "From your reference"
+        if reference.get("same_topic") and not s["topic"]:
+            s["topic"] = "The same subject as the reference video (see the plan rules)"
     save(s)
     return s
 
@@ -942,6 +1081,9 @@ LOCK = ("Cinematic editorial illustration for a documentary analysis video, mute
         "composition with negative space on one side for on-screen text, 16:9. ")
 NEG = (" No text, no letters, no numbers, no logos, no watermark, no UI, no frames or borders, no collage, no photorealistic "
        "news-photo look, no identifiable real person's face (people as silhouettes or from behind).")
+# remakes: the reference decides realism; text, logos and real people's faces stay out (the overlays carry all words)
+REF_NEG = (" No text, no letters, no numbers, no logos, no watermark, no UI, no frames or borders, no identifiable real "
+           "person or celebrity.")
 
 MIXED_PLAN_TOOL = {
     "name": "submit_plan",
@@ -960,13 +1102,13 @@ MIXED_PLAN_TOOL = {
                     "upload": {"type": "integer", "description": "layer B from the user's upload with this number (preferred whenever one fits)"},
                     "upload_at": {"type": "number", "description": "where to start inside that upload (seconds; see its contact sheet)"},
                     "line": {"type": "integer"}, "at": {"type": "string", "description": "the word the shot starts on"},
-                    "layer": {"type": "string", "enum": ["A", "B"]},
-                    "prompt": {"type": "string", "description": "layer A: the illustration's subject and composition (the style lock is added)"},
+                    "layer": {"type": "string", "enum": ["A", "B", "G"], "description": "A = a generated picture, B = real archive footage / photo, G = a full-frame explainer graphic built in code (diagram, map, chart, timeline, counter, comparison), no picture under it"},
+                    "prompt": {"type": "string", "description": "layer A: the picture's subject and composition (the style lock is added)"},
                     "search": {"type": "string", "description": "layer B: 2-5 words an archive would title it with"},
                     "alts": {"type": "array", "items": {"type": "string"}},
                     "kind": {"type": "string", "enum": ["video", "image"], "description": "layer B: video when motion matters"},
                     "lower": {"type": "object", "properties": {"title": {"type": "string"}, "sub": {"type": "string"}}, "description": "layer B: place / date for the lower third"},
-                    "overlay": {"type": "string", "description": "the typography and marks over this shot (title card / counter / quote / compare / timeline / ring / map pins), with their words"}},
+                    "overlay": {"type": "string", "description": "the typography and marks over this shot (title card / counter / quote / compare / timeline / ring / map pins), with their words; layer G: the whole graphic, what it shows and how it builds"}},
                     "required": ["line", "layer"]}}},
                 "required": ["title", "lines", "shots"]}},
         },
@@ -991,7 +1133,10 @@ def _clean_mixed_plan(res: dict) -> dict:
             except (TypeError, ValueError):
                 up = None
             layer = "B" if up is not None or (sh.get("layer") == "B" and str(sh.get("search") or "").strip()) else "A"
-            prompt = str(sh.get("prompt") or sh.get("search") or ("your upload " + str(up) if up is not None else "")).strip()[:600]
+            if up is None and sh.get("layer") == "G" and str(sh.get("overlay") or "").strip():
+                layer = "G"                     # nothing to find or draw: the animator builds it full-frame
+            prompt = str(sh.get("prompt") or sh.get("search") or ("your upload " + str(up) if up is not None else "")
+                         or (sh.get("overlay") if layer == "G" else "")).strip()[:600]
             if not prompt:
                 continue
             shots.append({"id": f"{sid}_s{j + 1}", "line": max(0, min(len(lines) - 1, int(sh.get("line") or 0))), "at": str(sh.get("at") or "")[:40],
@@ -1113,8 +1258,20 @@ async def _art_mixed(s: dict, tmp: str):
     """Every shot's picture: layer B from the open archives (falls back to a layer-A illustration of the same subject,
     never a wrong real picture), layer A generated with the style lock."""
     assets = s.setdefault("assets", {})
-    shots = [(sec, sh) for sec in s["plan"]["sections"] for sh in sec["shots"]]
+    shots = [(sec, sh) for sec in s["plan"]["sections"] for sh in sec["shots"] if sh.get("layer") != "G"]
     todo = [(sec, sh) for sec, sh in shots if sh["id"] not in assets]
+    ref = s.get("reference") or {}
+    remake = bool(ref.get("image_style"))
+    lock = (ref["image_style"].rstrip(". ") + ". ") if remake else LOCK
+    neg = REF_NEG if remake else NEG
+    # remakes: Nano Banana, and every still after the first is drawn with the first as its style reference, so the
+    # characters and the hand stay the same across the film (the first is the style master)
+    master = {"url": s.get("style_master"), "raw": None}
+    if remake and master["url"]:
+        try:
+            master["raw"] = await _fetch(master["url"])
+        except Exception:
+            master["url"] = None
     done = {"n": len(shots) - len(todo)}
     sem = asyncio.Semaphore(4)
 
@@ -1128,9 +1285,11 @@ async def _art_mixed(s: dict, tmp: str):
                 got = await _footage(s, sh, said, tmp)
             if not got:
                 try:
-                    prompt = LOCK + (sh["prompt"] if sh["layer"] == "A" else f"An illustration of {sh['prompt']}") + "." + NEG
-                    raw = await long_art.make(prompt, "16:9")
+                    prompt = lock + (sh["prompt"] if sh["layer"] == "A" else f"A picture of {sh['prompt']}") + "." + neg
+                    raw = await long_art.make(prompt, "16:9", ref=master["raw"], ref_url=master["url"], nano=remake)
                     url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.png", raw, "image/png")
+                    if remake and not master["url"]:
+                        master.update(url=url, raw=raw); s["style_master"] = url
                     got = {"url": url, "kind": "image", "layer": "A", "shows": sh["prompt"][:120]}
                 except Exception as e:
                     print(f"[long] art {sh['id']} failed: {e!r}")
@@ -1140,8 +1299,13 @@ async def _art_mixed(s: dict, tmp: str):
             done["n"] += 1
             _step(s, "art", f"Finding the footage and drawing the scenes ({done['n']}/{len(shots)})", 0.1 + 0.15 * done["n"] / len(shots))
             save(s)
+    if remake and not master["url"]:
+        first = next(((sec, sh) for sec, sh in todo if sh["layer"] == "A" and sh.get("upload") is None), None)
+        if first:
+            await one(*first)                 # the style master, alone, before the rest use it
+            todo = [x for x in todo if x[1]["id"] != first[1]["id"]]
     await asyncio.gather(*[one(sec, sh) for sec, sh in todo])
-    if len(assets) < len(shots) * .6:
+    if shots and sum(1 for _, sh in shots if sh["id"] in assets) < len(shots) * .6:
         raise RuntimeError("too many shots have no picture yet: resume to try them again")
 
 
@@ -1177,8 +1341,10 @@ async def _part_mixed(s, st, k, sec, part, timing, wav, d, base, span, n):
             if not os.path.exists(path):
                 open(path, "wb").write(await _fetch(a["url"]))
             plate_shots.append({"t0": t0, "t1": t1, "kind": a["kind"], "path": path, "src": 0.0, "fit": "full"})
-        shots.append({"t0": round(t0, 3), "t1": round(t1, 3), "layer": (a or {}).get("layer", "A"), "kind": (a or {}).get("kind"),
-                      "shows": (a or {}).get("shows", ""), "credit": (a or {}).get("credit"), "lower": sh.get("lower"), "overlay": sh.get("overlay", "")})
+        g = sh.get("layer") == "G"
+        shots.append({"t0": round(t0, 3), "t1": round(t1, 3), "layer": "G" if g else (a or {}).get("layer", "A"), "kind": None if g else (a or {}).get("kind"),
+                      "shows": "NOTHING in the plate: build this whole shot full-frame in code (its own background)" if g else (a or {}).get("shows", ""),
+                      "credit": None if g else (a or {}).get("credit"), "lower": sh.get("lower"), "overlay": sh.get("overlay", "")})
     timing["shots"] = shots
     plate = os.path.join(d, "plate.mp4")
     if not os.path.exists(plate):

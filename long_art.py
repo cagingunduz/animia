@@ -30,6 +30,16 @@ GREEN = (" Full body, the whole figure inside the frame with a margin, standing 
 OBJECT = " A single object, whole, isolated on a solid flat chroma green background (#00B140), nothing green on the object."
 
 
+# Remakes pin Nano Banana (Gemini 2.5 Flash Image, ~$0.039/image; Google lists 2027-03-15 as its earliest shutdown) on
+# every provider, whatever the LONG_/FAL_/REPLICATE_ model overrides say. Successor when it retires:
+# gemini-3.1-flash-lite-image (set REMAKE_GEMINI_IMAGE_MODEL etc.).
+NANO = {"gemini": os.environ.get("REMAKE_GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
+        "fal": os.environ.get("REMAKE_FAL_IMAGE_MODEL", "fal-ai/gemini-25-flash-image"),
+        "replicate": os.environ.get("REMAKE_REPLICATE_IMAGE_MODEL", "google/nano-banana")}
+REMAKE_REF = ("Use the reference picture ONLY for its art style (medium, line work, texture, palette, light, and exactly how "
+              "the characters' heads, faces and bodies are drawn). Do NOT copy its layout, objects or composition: draw "
+              "something completely different, exactly as described: ")
+
 REF = ("Use the reference picture ONLY for its art style (flat shapes, palette, shading, how faces look). Do NOT copy its "
        "layout, furniture, objects or composition: draw something completely different, exactly as described: ")
 
@@ -49,14 +59,14 @@ def provider() -> str:
     return ps[0] if ps else ""
 
 
-async def _gemini(prompt: str, aspect: str, ref: bytes | None) -> bytes:
+async def _gemini(prompt: str, aspect: str, ref: bytes | None, model: str | None = None, ref_text: str = REF) -> bytes:
     parts = [{"text": prompt}]
     if ref:
         parts = [{"inline_data": {"mime_type": "image/png", "data": base64.b64encode(ref).decode()}},
-                 {"text": REF + prompt}]
+                 {"text": ref_text + prompt}]
     body = {"contents": [{"parts": parts}], "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}}
     async with httpx.AsyncClient(timeout=180) as c:
-        r = await c.post(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        r = await c.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model or GEMINI_MODEL}:generateContent",
                          headers={"x-goog-api-key": GEMINI_KEY}, json=body)
     r.raise_for_status()
     for cand in r.json().get("candidates") or []:
@@ -66,35 +76,37 @@ async def _gemini(prompt: str, aspect: str, ref: bytes | None) -> bytes:
     raise RuntimeError(f"no image: {str(r.json())[:200]}")
 
 
-async def _fal(prompt: str, aspect: str, ref_url: str | None) -> bytes:
+async def _fal(prompt: str, aspect: str, ref_url: str | None, model: str | None = None, ref_text: str = REF) -> bytes:
     import fal_client
-    model = os.environ.get("FAL_IMAGE_MODEL", "fal-ai/gemini-25-flash-image")
+    model = model or os.environ.get("FAL_IMAGE_MODEL", "fal-ai/gemini-25-flash-image")
     args = {"prompt": prompt, "aspect_ratio": aspect, "output_format": "png", "num_images": 1}
     if ref_url:
         model = model if model.endswith("/edit") else model + "/edit"
-        args = {"prompt": REF + prompt, "image_urls": [ref_url], "output_format": "png", "num_images": 1, "aspect_ratio": aspect}
+        args = {"prompt": ref_text + prompt, "image_urls": [ref_url], "output_format": "png", "num_images": 1, "aspect_ratio": aspect}
     out = await fal_client.run_async(model, arguments=args)
     url = (out.get("images") or [{}])[0].get("url")
     async with httpx.AsyncClient(timeout=120) as c:
         r = await c.get(url); r.raise_for_status(); return r.content
 
 
-async def _replicate(prompt: str, aspect: str, ref_url: str | None) -> bytes:
+async def _replicate(prompt: str, aspect: str, ref_url: str | None, model: str | None = None, ref_text: str = REF) -> bytes:
     import replicate
     cl = replicate.Client(api_token=REPLICATE_TOKEN)
-    inp = {"prompt": (REF if ref_url else "") + prompt, "aspect_ratio": aspect, "output_format": "png"}
+    inp = {"prompt": (ref_text if ref_url else "") + prompt, "aspect_ratio": aspect, "output_format": "png"}
     if ref_url:
         inp["image_input"] = [ref_url]
-    out = await asyncio.to_thread(cl.run, os.environ.get("REPLICATE_IMAGE_MODEL", "google/nano-banana"), input=inp)
+    out = await asyncio.to_thread(cl.run, model or os.environ.get("REPLICATE_IMAGE_MODEL", "google/nano-banana"), input=inp)
     out = out[0] if isinstance(out, list) else out
     url = str(getattr(out, "url", out))
     async with httpx.AsyncClient(timeout=120) as c:
         r = await c.get(url); r.raise_for_status(); return r.content
 
 
-async def make(prompt: str, aspect: str, ref: bytes | None = None, ref_url: str | None = None) -> bytes:
+async def make(prompt: str, aspect: str, ref: bytes | None = None, ref_url: str | None = None, nano: bool = False) -> bytes:
     """One picture: Replicate first, then fal, then Gemini (LONG_IMAGE_PROVIDERS), whichever works right now. A provider
-    that fails hard (no credit, bad key) is skipped for 10 minutes; transient errors are retried."""
+    that fails hard (no credit, bad key) is skipped for 10 minutes; transient errors are retried.
+    nano=True (remakes): Nano Banana on every provider (NANO), the reference read with REMAKE_REF."""
+    rt = REMAKE_REF if nano else REF
     import time
     ps = providers()
     if not ps:
@@ -104,11 +116,12 @@ async def make(prompt: str, aspect: str, ref: bytes | None = None, ref_url: str 
         for p in ps:
             for attempt in range(2):
                 try:
+                    m = NANO[p] if nano else None
                     if p == "gemini":
-                        return await _gemini(prompt, aspect, ref)
+                        return await _gemini(prompt, aspect, ref, m, rt)
                     if p == "fal":
-                        return await _fal(prompt, aspect, ref_url)
-                    return await _replicate(prompt, aspect, ref_url)
+                        return await _fal(prompt, aspect, ref_url, m, rt)
+                    return await _replicate(prompt, aspect, ref_url, m, rt)
                 except Exception as e:
                     last = e
                     msg = str(e).lower()

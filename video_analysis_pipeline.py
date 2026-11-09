@@ -18,13 +18,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 import anthropic
 
 from jobs import job_store
 from motion_pipeline import THINK_ROOM, BillingError, _anthropic, _record_usage
-from storybook_pipeline import upload_bytes_to_r2
+from storybook_pipeline import R2_BUCKET, R2_PUBLIC_BASE, get_r2_client, upload_bytes_to_r2
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ANALYZE = os.path.join(HERE, "video_analysis", "analyze.py")
@@ -32,7 +33,7 @@ MODEL = os.environ.get("ANALYSIS_MODEL", os.environ.get("PROMPT_MODEL", "claude-
 EFFORT = os.environ.get("ANALYSIS_EFFORT", "medium")
 MAX_SECONDS = int(os.environ.get("ANALYSIS_MAX_SECONDS", "1200"))     # longer references are refused (CPU time)
 TIMEOUT = int(os.environ.get("ANALYSIS_TIMEOUT", "1800"))
-STEPS = 3
+STEPS = 4
 _slots = asyncio.Semaphore(int(os.environ.get("ANALYSIS_CONCURRENCY", "2")))   # analyze.py uses every core
 
 LANGS = {"tr": "Turkish", "en": "English"}
@@ -40,8 +41,8 @@ LANGS = {"tr": "Turkish", "en": "English"}
 
 def new_job(source: str, brief: str, lang: str) -> dict:
     return {
-        "kind": "analysis", "status": "queued", "stage": "queued", "step": 0, "total_steps": STEPS, "message": "Queued",
-        "source": source, "brief": brief, "lang": lang, "report": None, "breakdown": None, "files": {},
+        "kind": "analysis", "created": time.time(), "status": "queued", "stage": "queued", "step": 0, "total_steps": STEPS, "message": "Queued",
+        "source": source, "brief": brief, "lang": lang, "report": None, "breakdown": None, "transcript": None, "files": {},
         "error": None, "traceback": None, "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
     }
 
@@ -204,13 +205,67 @@ def _image_block(path: str):
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(data).decode()}}
 
 
-async def _describe(job_id: str, out: str, summary: dict, brief: str, lang: str) -> dict:
+def _transcribe(out: str) -> dict | None:
+    """What is said in the reference (Whisper, segment timestamps), so "same topic" remakes know the subject and its
+    order. None when there's no usable sound or no OPENAI_API_KEY. ~$0.006 per minute."""
+    wav = os.path.join(out, "audio.wav")
+    if not os.environ.get("OPENAI_API_KEY") or not os.path.isfile(wav):
+        return None
+    mp3 = os.path.join(out, "speech.mp3")
+    _run(["ffmpeg", "-v", "error", "-y", "-i", wav, "-ac", "1", "-ar", "16000", "-b:a", "32k", mp3], 300)
+    if not os.path.isfile(mp3) or os.path.getsize(mp3) > 24 * 1024 * 1024:
+        return None
+    from openai import OpenAI
+    with open(mp3, "rb") as f:
+        tr = OpenAI(api_key=os.environ["OPENAI_API_KEY"]).audio.transcriptions.create(
+            model="whisper-1", file=f, response_format="verbose_json", timestamp_granularities=["segment"])
+    segs = [{"start": round(float(x.start), 1), "end": round(float(x.end), 1), "text": str(x.text).strip()}
+            for x in (getattr(tr, "segments", None) or []) if str(getattr(x, "text", "")).strip()]
+    text = str(getattr(tr, "text", "") or "").strip()
+    if len(text.split()) < 8:          # music only / a few stray words: nothing to retell
+        return None
+    return {"language": getattr(tr, "language", None), "text": text[:20000], "segments": segs[:600]}
+
+
+def _snapshot_key(job_id: str) -> str:
+    return f"analysis/{job_id}/job.json"
+
+
+SNAPSHOT_KEYS = ("kind", "status", "stage", "step", "total_steps", "message", "source", "brief", "lang", "report", "breakdown",
+                 "breakdown_error", "transcript", "files", "usage", "error", "created")
+
+
+def save_snapshot(job_id: str):
+    """Analyses outlive a restart: the finished job is kept in R2 and /analysis/{id} falls back to it."""
+    job = {k: job_store[job_id].get(k) for k in SNAPSHOT_KEYS}
+    get_r2_client().put_object(Bucket=R2_BUCKET, Key=_snapshot_key(job_id), Body=json.dumps(job, ensure_ascii=False).encode(),
+                               ContentType="application/json", CacheControl="no-cache")
+
+
+def load_snapshot(job_id: str) -> dict | None:
+    """The analysis from memory, or from R2 after a restart (None if unknown)."""
+    if job_id in job_store and job_store[job_id].get("kind") == "analysis":
+        return job_store[job_id]
+    import re
+    if not re.fullmatch(r"[0-9a-f-]{36}", job_id or ""):
+        return None
+    try:
+        obj = get_r2_client().get_object(Bucket=R2_BUCKET, Key=_snapshot_key(job_id))
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return None
+
+
+async def _describe(job_id: str, out: str, summary: dict, brief: str, lang: str, transcript: dict | None = None) -> dict:
     content = []
     for name, label in [("sheet_1fps.jpg", "Contact sheet, one frame per second:"), ("sheet_scenes.jpg", "Middle frame of each shot:")]:
         img = _image_block(os.path.join(out, name))
         if img:
             content += [{"type": "text", "text": label}, img]
     content.append({"type": "text", "text": "Measurements:\n" + json.dumps(summary, ensure_ascii=False)})
+    if transcript:
+        content.append({"type": "text", "text": "What is said (transcript, for structure and tone; never quote it at length):\n"
+                                                + "\n".join(f"[{x['start']:.0f}s] {x['text']}" for x in transcript["segments"])[:12000]})
     if brief:
         content.append({"type": "text", "text": f"The user wants to make: {brief}\nAim the 'recreate' rules at that."})
     content.append({"type": "text", "text": f"Write every text field in {LANGS.get(lang, 'English')}. "
@@ -250,13 +305,22 @@ async def run_analysis(job_id: str, file_path: str | None, url: str | None, brie
         job_store[job_id]["report"] = summary
         _log(job_id, 2, "publishing", "Saving contact sheets")
         job_store[job_id]["files"] = await asyncio.to_thread(_publish, job_id, out)
-        _log(job_id, 3, "describing", "Writing the style breakdown")
+        _log(job_id, 3, "transcribing", "Listening to what is said")
+        try:
+            job_store[job_id]["transcript"] = await asyncio.to_thread(_transcribe, out)
+        except Exception as e:
+            print(f"[analysis {job_id}] transcript skipped: {e}")
+        _log(job_id, 4, "describing", "Writing the style breakdown")
         try:   # the measurements are already useful on their own: a failed write-up doesn't fail the job
-            job_store[job_id]["breakdown"] = await _describe(job_id, out, summary, brief, lang)
+            job_store[job_id]["breakdown"] = await _describe(job_id, out, summary, brief, lang, job_store[job_id].get("transcript"))
         except Exception as e:
             job_store[job_id]["breakdown_error"] = str(e)[:300]
             print(f"[analysis {job_id}] breakdown skipped: {e}")
         job_store[job_id].update(status="completed", stage="done", step=STEPS, message="Done")
+        try:
+            await asyncio.to_thread(save_snapshot, job_id)
+        except Exception as e:
+            print(f"[analysis {job_id}] snapshot not saved: {e}")
     except Exception as e:
         job_store[job_id].update(status="failed", stage="failed", error=str(e)[:400], traceback=traceback.format_exc()[-3000:],
                                  message="Failed")
