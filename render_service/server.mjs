@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { glyphCheck } from './glyphs.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -262,8 +263,14 @@ const handleCheck = body => withProject(body, async (dir, unknown) => {
       || (f.section === 'layout' && ['content_overlap', 'text_occluded', 'text_box_overflow'].includes(f.code) && held);
     (isBlocking ? blocking : hints).push({ ...slim(f), section: f.section });
   }
+  // letter-level problems HyperFrames can't see (touching letters, glyphs from a fallback font); never breaks QA
+  try {
+    const browser = await puppeteer.launch({ executablePath: await chromePath(), headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--allow-file-access-from-files'] });
+    try { blocking.push(...await glyphCheck(browser, dir)); } finally { await browser.close().catch(() => {}); }
+  } catch (e) { hints.push({ code: 'glyph_check_skipped', severity: 'info', message: String(e && e.message || e).slice(0, 300) }); }
   const seen = new Set();
-  const dedupe = list => list.filter(f => { const k = `${f.code}|${f.selector}|${f.containerSelector}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  const dedupe = list => list.filter(f => { const k = `${f.code}|${f.selector}|${f.containerSelector}|${f.text || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
   const b = dedupe(blocking);
   return { status: 200, json: { ok: b.length === 0, blocking: b.slice(0, 25), hints: dedupe(hints).filter(h => h.code !== 'canvas_overflow').slice(0, 15) } };
 });

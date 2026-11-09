@@ -27,7 +27,7 @@ ENV HYPERFRAMES_CHROME_PATH=/opt/chrome/chrome-headless-shell \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY server.mjs kit.js kit.css ./
+COPY server.mjs glyphs.mjs kit.js kit.css ./
 COPY yard ./yard
 COPY explainer ./explainer
 COPY block ./block
