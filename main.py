@@ -746,7 +746,7 @@ class LongCreate(BaseModel):
     notes: Optional[str] = Field(None, max_length=600)
     uploads: Optional[List[str]] = Field(None, max_length=20)        # the user's own clips / photos (/studio/upload)
     look: Optional[str] = Field(None, max_length=40)                 # Cinecode Film: one of its looks
-    analysis_id: Optional[str] = Field(None, max_length=40)          # remake of an analysed video (Cinecode Film)
+    analysis_id: Optional[str] = Field(None, max_length=40)          # remake of an analysed video (doc-analysis engine)
     same_topic: bool = False                                          # the remake retells the reference's subject
 
 
@@ -792,8 +792,8 @@ async def long_create(req: LongCreate, x_studio_key: str = Header("")):
         raise HTTPException(status_code=400, detail="Uploads must come from /studio/upload.")
     reference = None
     if req.analysis_id:
-        if req.template != "cinecode-film":
-            raise HTTPException(status_code=400, detail="Remakes are made with Cinecode Film")
+        if req.template != "doc-analysis":
+            raise HTTPException(status_code=400, detail="Remakes are made with the Documentary Analysis engine")
         job = await asyncio.to_thread(video_analysis_pipeline.load_snapshot, req.analysis_id)
         if not job or job.get("status") != "completed":
             raise HTTPException(status_code=404, detail="That analysis was not found (or isn't finished). Analyse the video again.")

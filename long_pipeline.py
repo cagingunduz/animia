@@ -430,7 +430,9 @@ REF_LOOK_TOOL = {
             "name": {"type": "string", "description": "a 2-4 word name for this look"},
             "recipe": {"type": "string", "description": "the look recipe in markdown, same sections as the example recipe"},
             "shot_seconds": {"type": "number", "description": "how often a new shot or step should land, in seconds, matching the reference"},
-            "closest_look": {"type": "string", "description": "the id of the stock look it is closest to"},
+            "closest_look": {"type": "string", "description": "the id of the stock look it is closest to (if the template has looks)"},
+            "image_style": {"type": "string", "description": "ONE line every generated picture starts with, so the stills look like the reference's pictures: medium (photo / 3D render / illustration), realism, era, palette, light, lens, grain, composition with room for text"},
+            "mix": {"type": "string", "description": "how the reference's shots split between generated pictures (A), real footage (B) and full-frame code graphics (G), with rough shares and when each is used"},
         },
     },
 }
@@ -459,6 +461,10 @@ def reference_plan_md(ref: dict) -> str:
            f"Its structure, scaled to this film's length:\n{beats}" if beats else "",
            f"Its on-screen text: {b.get('text_and_graphics', '')}",
            f"Its camera: {b.get('camera', '')}",
+           f"Its picture mix (follow it with layers A / B / G): {ref['mix']}" if ref.get("mix") else "",
+           "LAYER G (besides A and B): a full-frame explainer graphic the animator builds entirely in code (a diagram, map, "
+           "chart, timeline, counter, comparison); put the whole graphic and how it builds in `overlay`. Use it where the "
+           "reference cuts to explainer graphics.",
            "Its rules: " + "; ".join(b.get("recreate") or []) if b.get("recreate") else ""]
     tr = ref.get("transcript")
     if ref.get("same_topic") and tr and tr.get("segments"):
@@ -495,13 +501,20 @@ async def _reference_look(st_: dict, s: dict):
             img = await _image_from_url(ref["files"][key])
             if img:
                 content += [{"type": "text", "text": label}, img]
-    example = studio_styles.look_md(s["template"], st_.get("look") or "vox-explainer")
+    example = (studio_styles.look_md(s["template"], st_.get("look") or "vox-explainer") if st_.get("looks")
+               else studio_styles._read(s["template"], "STYLE.md"))
     kit = studio_styles._read(s["template"], "KIT.md")
     content.append({"type": "text", "text": "Measurements:\n" + json.dumps(ref["report"], ensure_ascii=False)[:9000]
                     + "\n\nBreakdown:\n" + json.dumps(ref["breakdown"], ensure_ascii=False)[:6000]})
     content.append({"type": "text", "text": "WHAT THE KIT CAN BUILD:\n" + kit[:12000]})
     content.append({"type": "text", "text": "AN EXAMPLE LOOK RECIPE (format only; write yours for THIS reference):\n" + example[:9000]})
-    content.append({"type": "text", "text": f"The stock look ids: {', '.join(st_.get('looks') or {})}."})
+    if st_.get("looks"):
+        content.append({"type": "text", "text": f"The stock look ids: {', '.join(st_['looks'])}."})
+    if st_.get("art_source") == "mixed":
+        content.append({"type": "text", "text": "THIS ENGINE: every shot is a generated still (layer A, made from your image_style + "
+                        "the shot's subject, then moved with camera pushes / pans), real archive footage (layer B), or a full-frame "
+                        "graphic built in code (layer G); all words, numbers and marks are typography animated in code over them. "
+                        "Your recipe covers both the pictures and the code-built typography / graphics."})
     system = ("You are a motion designer who rebuilds a video's style in code. From the reference's frames and measurements, "
               "write a look recipe (essence, materials and rendering, colour logic with its real hex codes, type, motion "
               "quality, camera grammar, sound palette, native shot types, pitfalls, pace) that makes a NEW film look and move "
@@ -514,6 +527,7 @@ async def _reference_look(st_: dict, s: dict):
     if len(recipe) < 300:
         raise ValueError("the reference look came back empty: resume to try again")
     ref.update(look_md=recipe[:16000], look_name=str(res.get("name") or "From your reference")[:60],
+               image_style=str(res.get("image_style") or "").strip()[:500] or None, mix=str(res.get("mix") or "").strip()[:500] or None,
                closest_look=res.get("closest_look") if res.get("closest_look") in (st_.get("looks") or {}) else None)
     try:
         ref["shot_seconds"] = round(max(0.8, min(12.0, float(res.get("shot_seconds")))), 1)
@@ -526,7 +540,7 @@ def with_look(st_: dict, s: dict) -> dict:
     """A template with looks (Cinecode Film): the project's look recipe joins the style rules. A remake of an analysed
     video uses the look Claude wrote from the reference instead, and the reference's pace and structure join the plan."""
     ref = s.get("reference") or {}
-    if st_.get("looks") and ref.get("look_md"):
+    if ref.get("look_md"):
         st = dict(st_)
         st.update(look_id="reference", look_name=ref.get("look_name") or "From your reference",
                   style_md=st_["style_md"] + "\n\nTHE LOOK RECIPE (written from the reference video; binding):\n" + ref["look_md"],
@@ -1067,6 +1081,9 @@ LOCK = ("Cinematic editorial illustration for a documentary analysis video, mute
         "composition with negative space on one side for on-screen text, 16:9. ")
 NEG = (" No text, no letters, no numbers, no logos, no watermark, no UI, no frames or borders, no collage, no photorealistic "
        "news-photo look, no identifiable real person's face (people as silhouettes or from behind).")
+# remakes: the reference decides realism; text, logos and real people's faces stay out (the overlays carry all words)
+REF_NEG = (" No text, no letters, no numbers, no logos, no watermark, no UI, no frames or borders, no identifiable real "
+           "person or celebrity.")
 
 MIXED_PLAN_TOOL = {
     "name": "submit_plan",
@@ -1085,13 +1102,13 @@ MIXED_PLAN_TOOL = {
                     "upload": {"type": "integer", "description": "layer B from the user's upload with this number (preferred whenever one fits)"},
                     "upload_at": {"type": "number", "description": "where to start inside that upload (seconds; see its contact sheet)"},
                     "line": {"type": "integer"}, "at": {"type": "string", "description": "the word the shot starts on"},
-                    "layer": {"type": "string", "enum": ["A", "B"]},
-                    "prompt": {"type": "string", "description": "layer A: the illustration's subject and composition (the style lock is added)"},
+                    "layer": {"type": "string", "enum": ["A", "B", "G"], "description": "A = a generated picture, B = real archive footage / photo, G = a full-frame explainer graphic built in code (diagram, map, chart, timeline, counter, comparison), no picture under it"},
+                    "prompt": {"type": "string", "description": "layer A: the picture's subject and composition (the style lock is added)"},
                     "search": {"type": "string", "description": "layer B: 2-5 words an archive would title it with"},
                     "alts": {"type": "array", "items": {"type": "string"}},
                     "kind": {"type": "string", "enum": ["video", "image"], "description": "layer B: video when motion matters"},
                     "lower": {"type": "object", "properties": {"title": {"type": "string"}, "sub": {"type": "string"}}, "description": "layer B: place / date for the lower third"},
-                    "overlay": {"type": "string", "description": "the typography and marks over this shot (title card / counter / quote / compare / timeline / ring / map pins), with their words"}},
+                    "overlay": {"type": "string", "description": "the typography and marks over this shot (title card / counter / quote / compare / timeline / ring / map pins), with their words; layer G: the whole graphic, what it shows and how it builds"}},
                     "required": ["line", "layer"]}}},
                 "required": ["title", "lines", "shots"]}},
         },
@@ -1116,7 +1133,10 @@ def _clean_mixed_plan(res: dict) -> dict:
             except (TypeError, ValueError):
                 up = None
             layer = "B" if up is not None or (sh.get("layer") == "B" and str(sh.get("search") or "").strip()) else "A"
-            prompt = str(sh.get("prompt") or sh.get("search") or ("your upload " + str(up) if up is not None else "")).strip()[:600]
+            if up is None and sh.get("layer") == "G" and str(sh.get("overlay") or "").strip():
+                layer = "G"                     # nothing to find or draw: the animator builds it full-frame
+            prompt = str(sh.get("prompt") or sh.get("search") or ("your upload " + str(up) if up is not None else "")
+                         or (sh.get("overlay") if layer == "G" else "")).strip()[:600]
             if not prompt:
                 continue
             shots.append({"id": f"{sid}_s{j + 1}", "line": max(0, min(len(lines) - 1, int(sh.get("line") or 0))), "at": str(sh.get("at") or "")[:40],
@@ -1238,8 +1258,11 @@ async def _art_mixed(s: dict, tmp: str):
     """Every shot's picture: layer B from the open archives (falls back to a layer-A illustration of the same subject,
     never a wrong real picture), layer A generated with the style lock."""
     assets = s.setdefault("assets", {})
-    shots = [(sec, sh) for sec in s["plan"]["sections"] for sh in sec["shots"]]
+    shots = [(sec, sh) for sec in s["plan"]["sections"] for sh in sec["shots"] if sh.get("layer") != "G"]
     todo = [(sec, sh) for sec, sh in shots if sh["id"] not in assets]
+    ref = s.get("reference") or {}
+    lock = (ref["image_style"].rstrip(". ") + ". ") if ref.get("image_style") else LOCK
+    neg = REF_NEG if ref.get("image_style") else NEG
     done = {"n": len(shots) - len(todo)}
     sem = asyncio.Semaphore(4)
 
@@ -1253,7 +1276,7 @@ async def _art_mixed(s: dict, tmp: str):
                 got = await _footage(s, sh, said, tmp)
             if not got:
                 try:
-                    prompt = LOCK + (sh["prompt"] if sh["layer"] == "A" else f"An illustration of {sh['prompt']}") + "." + NEG
+                    prompt = lock + (sh["prompt"] if sh["layer"] == "A" else f"A picture of {sh['prompt']}") + "." + neg
                     raw = await long_art.make(prompt, "16:9")
                     url = await asyncio.to_thread(_put, s["id"], f"art/{sh['id']}.png", raw, "image/png")
                     got = {"url": url, "kind": "image", "layer": "A", "shows": sh["prompt"][:120]}
@@ -1266,7 +1289,7 @@ async def _art_mixed(s: dict, tmp: str):
             _step(s, "art", f"Finding the footage and drawing the scenes ({done['n']}/{len(shots)})", 0.1 + 0.15 * done["n"] / len(shots))
             save(s)
     await asyncio.gather(*[one(sec, sh) for sec, sh in todo])
-    if len(assets) < len(shots) * .6:
+    if shots and sum(1 for _, sh in shots if sh["id"] in assets) < len(shots) * .6:
         raise RuntimeError("too many shots have no picture yet: resume to try them again")
 
 
@@ -1302,8 +1325,10 @@ async def _part_mixed(s, st, k, sec, part, timing, wav, d, base, span, n):
             if not os.path.exists(path):
                 open(path, "wb").write(await _fetch(a["url"]))
             plate_shots.append({"t0": t0, "t1": t1, "kind": a["kind"], "path": path, "src": 0.0, "fit": "full"})
-        shots.append({"t0": round(t0, 3), "t1": round(t1, 3), "layer": (a or {}).get("layer", "A"), "kind": (a or {}).get("kind"),
-                      "shows": (a or {}).get("shows", ""), "credit": (a or {}).get("credit"), "lower": sh.get("lower"), "overlay": sh.get("overlay", "")})
+        g = sh.get("layer") == "G"
+        shots.append({"t0": round(t0, 3), "t1": round(t1, 3), "layer": "G" if g else (a or {}).get("layer", "A"), "kind": None if g else (a or {}).get("kind"),
+                      "shows": "NOTHING in the plate: build this whole shot full-frame in code (its own background)" if g else (a or {}).get("shows", ""),
+                      "credit": None if g else (a or {}).get("credit"), "lower": sh.get("lower"), "overlay": sh.get("overlay", "")})
     timing["shots"] = shots
     plate = os.path.join(d, "plate.mp4")
     if not os.path.exists(plate):
