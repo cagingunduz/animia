@@ -2,7 +2,7 @@ import os
 import uuid
 import asyncio
 import tempfile
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
@@ -25,6 +25,7 @@ import recipe_pipeline
 from survival_pipeline import run_survival_pipeline
 from studio_pipeline import run_studio_pipeline
 import studio_styles
+import video_analysis_pipeline
 
 app = FastAPI(title="Animave API v3")
 
@@ -901,6 +902,54 @@ async def studio_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["style", "status", "stage", "step", "total_steps", "message", "title", "script", "post", "duration",
             "final_video_url", "thumbnail_url", "usage", "review", "sound", "error"]
+    return {"job_id": job_id, **{k: job.get(k) for k in keys}}
+
+
+ANALYSIS_UPLOAD_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
+
+
+@app.post("/analyze-video")
+async def analyze_video(file: Optional[UploadFile] = File(None), url: Optional[str] = Form(None), brief: str = Form(""),
+                        lang: str = Form("tr"), x_upload_token: str = Header("")):
+    """Video Analysis: a reference reel (upload or link) -> shots, pacing, camera, look, tempo, contact sheets and a written
+    style breakdown. The browser posts here directly (big files) with the site's short-lived upload token."""
+    if not os.environ.get("STUDIO_UPLOAD_SECRET"):
+        raise HTTPException(status_code=503, detail="Uploads are not configured (STUDIO_UPLOAD_SECRET).")
+    if not _upload_token_ok(x_upload_token):
+        raise HTTPException(status_code=401, detail="Upload token missing or expired. Refresh the page and try again.")
+    url = (url or "").strip()
+    if bool(file) == bool(url):
+        raise HTTPException(status_code=400, detail="Send either a video file or a link")
+    if url and not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="The link must start with http:// or https://")
+    path = None
+    if file:
+        ext = ANALYSIS_UPLOAD_TYPES.get((file.content_type or "").split(";")[0].lower())
+        if not ext:
+            raise HTTPException(status_code=400, detail="Only MP4 / MOV / WebM / MKV videos")
+        fd, path = tempfile.mkstemp(prefix="analysis-upload-", suffix=f".{ext}")
+        size, limit = 0, 300 * 1024 * 1024
+        with os.fdopen(fd, "wb") as f:
+            while chunk := await file.read(1 << 20):
+                size += len(chunk)
+                if size > limit:
+                    f.close(); os.remove(path)
+                    raise HTTPException(status_code=413, detail="File is larger than 300 MB")
+                f.write(chunk)
+    job_id = str(uuid.uuid4())
+    job_store[job_id] = video_analysis_pipeline.new_job(url or (file.filename or "upload"), brief[:400],
+                                                        lang if lang in video_analysis_pipeline.LANGS else "en")
+    asyncio.create_task(video_analysis_pipeline.run_analysis(job_id, path, url or None, brief[:400], job_store[job_id]["lang"]))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/analysis/{job_id}")
+async def analysis_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job or job.get("kind") != "analysis":
+        raise HTTPException(status_code=404, detail="Job bulunamadi")
+    keys = ["status", "stage", "step", "total_steps", "message", "source", "brief", "report", "breakdown", "breakdown_error",
+            "files", "usage", "error"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 
