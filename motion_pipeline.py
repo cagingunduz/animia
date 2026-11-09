@@ -766,11 +766,50 @@ async def _direct(job_id: str, p: dict, ref_images: list[bytes], ref_sheets: lis
     total = float(p.get("duration_seconds", 15))
     plan = await _claude(job_id, DIRECTOR_SYSTEM, content, max_tokens=_director_max_out(total), role="director",
                          tool=PLAN_TOOL, optional=optional, mandatory_slot=mandatory_slot)
+    if not _plan_shots(plan):
+        # the plan came back without a usable shot list (cut short, or shaped oddly): ask once more
+        print(f"[motion] director returned no shots (keys: {sorted(plan) if isinstance(plan, dict) else type(plan).__name__}); asking again")
+        _record_error(job_id, "director returned no shots; asked again")
+        plan = await _claude(job_id, DIRECTOR_SYSTEM, [*content, {"type": "text", "text": (
+            "Your last answer had no usable `shots` list. Answer again with the complete plan: `shots` must be a "
+            "JSON array of shot objects, not a string.")}], max_tokens=int(_director_max_out(total) * 1.5), role="director",
+            tool=PLAN_TOOL)
     return _normalise_plan(plan, total)
 
 
+def _as_list(v):
+    """A list the model may have sent as a JSON string, or wrapped in an object."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except (ValueError, TypeError):
+            return []
+    if isinstance(v, dict):
+        v = next((x for x in v.values() if isinstance(x, list)), [])
+    return v if isinstance(v, list) else []
+
+
+def _plan_shots(plan) -> list[dict]:
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(plan, dict):
+        return []
+    src = plan.get("shots")
+    if src is None and isinstance(plan.get("plan"), (dict, str)):          # the whole plan nested one level down
+        return _plan_shots(plan["plan"])
+    return [s for s in _as_list(src) if isinstance(s, dict)][:24]
+
+
 def _normalise_plan(plan: dict, total: float) -> dict:
-    shots = [s for s in plan.get("shots", []) if isinstance(s, dict)][:24]
+    if isinstance(plan, str):
+        plan = json.loads(plan)
+    if isinstance(plan.get("plan"), (dict, str)) and plan.get("shots") is None:
+        inner = plan["plan"]
+        plan = json.loads(inner) if isinstance(inner, str) else inner
+    shots = _plan_shots(plan)
     if not shots:
         raise ValueError("director returned no shots")
     for s in shots:
