@@ -63,15 +63,54 @@ def _duration(path: str) -> float:
         raise ValueError("this file could not be read as a video")
 
 
+BOT_CHECK = ("confirm you're not a bot", "confirm you\u2019re not a bot", "sign in to confirm", "use --cookies", "login required",
+             "rate-limit reached", "http error 429")
+
+
+def _cookie_file(out: str) -> str | None:
+    """YTDLP_COOKIES: a Netscape cookies.txt (raw text or base64) from a logged-in browser. Datacenter IPs get YouTube's
+    "confirm you're not a bot" wall without it. Written into the job's temp folder (yt-dlp rewrites the file)."""
+    raw = os.environ.get("YTDLP_COOKIES", "").strip()
+    if not raw:
+        return None
+    if not raw.startswith(("#", ".")) and "\t" not in raw:
+        try:
+            raw = base64.b64decode(raw).decode("utf-8")
+        except Exception:
+            print("[analysis] YTDLP_COOKIES is neither cookies.txt text nor base64; ignored")
+            return None
+    path = os.path.join(out, "cookies.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(raw if raw.endswith("\n") else raw + "\n")
+    return path
+
+
 def _download(url: str, out: str) -> str:
-    """yt-dlp at ≤720p, refusing anything longer than MAX_SECONDS before it is downloaded."""
-    r = _run([sys.executable, "-m", "yt_dlp", "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
-              "--match-filter", f"duration <= {MAX_SECONDS}", "--no-playlist", "-o", os.path.join(out, "input.%(ext)s"), url],
-             600)
+    """yt-dlp at ≤720p, refusing anything longer than MAX_SECONDS before it is downloaded.
+    Optional: YTDLP_COOKIES (see _cookie_file) and YTDLP_PROXY (e.g. a residential proxy URL)."""
+    cmd = [sys.executable, "-m", "yt_dlp", "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
+           "--match-filter", f"duration <= {MAX_SECONDS}", "--no-playlist", "-o", os.path.join(out, "input.%(ext)s")]
+    cookies = _cookie_file(out)
+    if cookies:
+        cmd += ["--cookies", cookies]
+    if os.environ.get("YTDLP_PROXY"):
+        cmd += ["--proxy", os.environ["YTDLP_PROXY"]]
+    r = _run(cmd + [url], 600)
+    if cookies:
+        try:
+            os.remove(cookies)
+        except OSError:
+            pass
     files = [f for f in os.listdir(out) if f.startswith("input.")]
     if not files:
-        if "does not pass filter" in r.stdout + r.stderr:
+        log = (r.stdout + r.stderr).lower()
+        if "does not pass filter" in log:
             raise ValueError(f"the video is longer than {MAX_SECONDS // 60} minutes")
+        if any(k in log for k in BOT_CHECK):
+            print(f"[analysis] link blocked by the site (cookies={'yes' if cookies else 'no'}, "
+                  f"proxy={'yes' if os.environ.get('YTDLP_PROXY') else 'no'}): {(r.stderr or r.stdout)[-300:]}")
+            raise ValueError("this site blocked our server from downloading the video. Download it on your device "
+                             "and upload the file instead.")
         tail = (r.stderr or r.stdout).strip().splitlines()[-1:] or ["no file"]
         raise ValueError("download failed: " + tail[0][:240])
     return os.path.join(out, files[0])
