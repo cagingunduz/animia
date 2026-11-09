@@ -746,6 +746,8 @@ class LongCreate(BaseModel):
     notes: Optional[str] = Field(None, max_length=600)
     uploads: Optional[List[str]] = Field(None, max_length=20)        # the user's own clips / photos (/studio/upload)
     look: Optional[str] = Field(None, max_length=40)                 # Cinecode Film: one of its looks
+    analysis_id: Optional[str] = Field(None, max_length=40)          # remake of an analysed video (Cinecode Film)
+    same_topic: bool = False                                          # the remake retells the reference's subject
 
 
 class LongPitch(BaseModel):
@@ -788,7 +790,20 @@ async def long_create(req: LongCreate, x_studio_key: str = Header("")):
     from storybook_pipeline import R2_PUBLIC_BASE
     if any(not str(u).startswith(f"{R2_PUBLIC_BASE}/studio-uploads/") for u in (req.uploads or [])):
         raise HTTPException(status_code=400, detail="Uploads must come from /studio/upload.")
-    s = await asyncio.to_thread(long_pipeline.create, req.template, req.topic or "", req.minutes, req.voice, req.notes, req.uploads, req.look)
+    reference = None
+    if req.analysis_id:
+        if req.template != "cinecode-film":
+            raise HTTPException(status_code=400, detail="Remakes are made with Cinecode Film")
+        job = await asyncio.to_thread(video_analysis_pipeline.load_snapshot, req.analysis_id)
+        if not job or job.get("status") != "completed":
+            raise HTTPException(status_code=404, detail="That analysis was not found (or isn't finished). Analyse the video again.")
+        if req.same_topic and not (job.get("transcript") or {}).get("segments"):
+            raise HTTPException(status_code=400, detail="Nothing is said in that video, so there's no subject to retell. Write a topic instead.")
+        if not req.same_topic and not (req.topic or "").strip():
+            raise HTTPException(status_code=400, detail="Write the topic of your video")
+        reference = long_pipeline.reference_from_analysis(job, req.same_topic)
+    s = await asyncio.to_thread(long_pipeline.create, req.template, req.topic or "", req.minutes, req.voice, req.notes, req.uploads,
+                                req.look, reference)
     asyncio.create_task(long_pipeline.run(s["id"]))
     return long_pipeline.public(s)
 
@@ -945,11 +960,11 @@ async def analyze_video(file: Optional[UploadFile] = File(None), url: Optional[s
 
 @app.get("/analysis/{job_id}")
 async def analysis_status(job_id: str):
-    job = job_store.get(job_id)
-    if not job or job.get("kind") != "analysis":
+    job = await asyncio.to_thread(video_analysis_pipeline.load_snapshot, job_id)   # memory, or R2 after a restart
+    if not job:
         raise HTTPException(status_code=404, detail="Job bulunamadi")
     keys = ["status", "stage", "step", "total_steps", "message", "source", "brief", "report", "breakdown", "breakdown_error",
-            "files", "usage", "error"]
+            "transcript", "files", "usage", "error", "created"]
     return {"job_id": job_id, **{k: job.get(k) for k in keys}}
 
 

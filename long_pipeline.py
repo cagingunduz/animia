@@ -67,7 +67,11 @@ def save(st: dict):
 
 def public(st: dict) -> dict:
     """What the site sees (no internal paths, no film code)."""
-    out = {k: v for k, v in st.items() if k not in ("film",)}
+    out = {k: v for k, v in st.items() if k not in ("film", "reference")}
+    if st.get("reference"):
+        r = st["reference"]
+        out["reference"] = {"source": r.get("source"), "same_topic": r.get("same_topic"), "look_name": r.get("look_name"),
+                            "sheet": (r.get("files") or {}).get("sheet_scenes"), "duration": r.get("duration")}
     out["running"] = st["id"] in _running
     if st.get("status") in ("planning", "producing") and not out["running"]:
         out["status_note"] = "paused"          # the server restarted mid-way: resume continues from the last finished step
@@ -414,8 +418,120 @@ def _clean_code_plan(res: dict) -> dict:
             "places": [], "cast": [], "props": [], "sections": sections}
 
 
+# ─────────────────────────── remakes of an analysed video ───────────────────────────
+
+REF_LOOK_TOOL = {
+    "name": "submit_look",
+    "description": "Submit the look recipe that rebuilds the reference video's style in the Cinecode kit.",
+    "input_schema": {
+        "type": "object",
+        "required": ["name", "recipe", "shot_seconds"],
+        "properties": {
+            "name": {"type": "string", "description": "a 2-4 word name for this look"},
+            "recipe": {"type": "string", "description": "the look recipe in markdown, same sections as the example recipe"},
+            "shot_seconds": {"type": "number", "description": "how often a new shot or step should land, in seconds, matching the reference"},
+            "closest_look": {"type": "string", "description": "the id of the stock look it is closest to"},
+        },
+    },
+}
+
+
+def reference_from_analysis(job: dict, same_topic: bool) -> dict:
+    """What a remake keeps from an analysis (the snapshot can change or vanish later; the project carries its own copy)."""
+    rep = job.get("report") or {}
+    tr = job.get("transcript") or {}
+    return {"source": str(job.get("source") or "")[:300], "same_topic": bool(same_topic),
+            "duration": (rep.get("video") or {}).get("duration"), "report": {k: rep.get(k) for k in ("video", "pacing", "look_summary", "audio", "flashes", "motion", "shots")},
+            "breakdown": job.get("breakdown") or {}, "files": job.get("files") or {},
+            "transcript": {"language": tr.get("language"), "segments": (tr.get("segments") or [])[:600]} if tr else None}
+
+
+def reference_plan_md(ref: dict) -> str:
+    """The reference's pace and structure as plan rules (they override the template's defaults where they differ)."""
+    b, rep = ref.get("breakdown") or {}, ref.get("report") or {}
+    dur = float(ref.get("duration") or 0) or 1.0
+    beats = "\n".join(f"  - {100 * float(x.get('start', 0)) / dur:.0f}-{100 * float(x.get('end', 0)) / dur:.0f} % of the film: {x.get('beat', '')}"
+                      for x in (b.get("structure") or []))
+    out = [f"THE REFERENCE THIS FILM REMAKES (binding where it differs from the rules above). It is {dur:.0f} s long, "
+           f"{(rep.get('pacing') or {}).get('count') or 1} shots, a new shot every ~{ref.get('shot_seconds') or (rep.get('pacing') or {}).get('mean_shot_s') or 4} s: keep that pace.",
+           f"Its kind: {b.get('format', '')}. {b.get('summary', '')}",
+           f"Its hook: {b.get('hook', '')}",
+           f"Its structure, scaled to this film's length:\n{beats}" if beats else "",
+           f"Its on-screen text: {b.get('text_and_graphics', '')}",
+           f"Its camera: {b.get('camera', '')}",
+           "Its rules: " + "; ".join(b.get("recreate") or []) if b.get("recreate") else ""]
+    tr = ref.get("transcript")
+    if ref.get("same_topic") and tr and tr.get("segments"):
+        out.append("THE SUBJECT: the same as the reference. Below is what the reference says, for the subject, the facts and their "
+                   "order ONLY. Retell it in entirely your own words: never reuse its sentences, phrases, jokes or title; keep only "
+                   "claims that are true; you may tighten or reorder. Write in the reference's language "
+                   f"({tr.get('language') or 'as spoken'}) unless the creator's notes ask for another.\n"
+                   + "\n".join(f"[{x['start']:.0f}s] {x['text']}" for x in tr["segments"])[:14000])
+    return "\n".join(x for x in out if x)
+
+
+async def _image_from_url(url: str) -> dict | None:
+    try:
+        data = await _fetch(url)
+    except Exception:
+        return None
+    if len(data) > 3_500_000:
+        import cv2, numpy as np
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        img = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2))
+        data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+    import base64
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(data).decode()}}
+
+
+async def _reference_look(st_: dict, s: dict):
+    """Claude studies the reference (contact sheets, measurements, breakdown) and writes a look recipe for the kit, in the
+    format of the stock looks, so the film is rebuilt in the reference's style rather than a preset."""
+    _step(s, "plan", "Studying the reference video", 0.01)
+    ref = s["reference"]
+    content = []
+    for key, label in (("sheet_scenes", "The reference, middle frame of every shot:"), ("sheet_1fps", "The reference, one frame per second:")):
+        if ref["files"].get(key):
+            img = await _image_from_url(ref["files"][key])
+            if img:
+                content += [{"type": "text", "text": label}, img]
+    example = studio_styles.look_md(s["template"], st_.get("look") or "vox-explainer")
+    kit = studio_styles._read(s["template"], "KIT.md")
+    content.append({"type": "text", "text": "Measurements:\n" + json.dumps(ref["report"], ensure_ascii=False)[:9000]
+                    + "\n\nBreakdown:\n" + json.dumps(ref["breakdown"], ensure_ascii=False)[:6000]})
+    content.append({"type": "text", "text": "WHAT THE KIT CAN BUILD:\n" + kit[:12000]})
+    content.append({"type": "text", "text": "AN EXAMPLE LOOK RECIPE (format only; write yours for THIS reference):\n" + example[:9000]})
+    content.append({"type": "text", "text": f"The stock look ids: {', '.join(st_.get('looks') or {})}."})
+    system = ("You are a motion designer who rebuilds a video's style in code. From the reference's frames and measurements, "
+              "write a look recipe (essence, materials and rendering, colour logic with its real hex codes, type, motion "
+              "quality, camera grammar, sound palette, native shot types, pitfalls, pace) that makes a NEW film look and move "
+              "like the reference: same palette, framing, type treatment, density, camera habits and cutting rhythm. Everything "
+              "must be buildable with the kit (shapes, 2D/3D geometry, type, charts, figures, textures): when the reference uses "
+              "live footage or photos, translate it into the closest drawn equivalent and say how. Never copy its logos, "
+              "characters, mascots or watermark; describe a style, not its content.")
+    res = await _claude(s["id"], system, content, 7000, "reference_look", REF_LOOK_TOOL)
+    recipe = str(res.get("recipe") or "").strip()
+    if len(recipe) < 300:
+        raise ValueError("the reference look came back empty: resume to try again")
+    ref.update(look_md=recipe[:16000], look_name=str(res.get("name") or "From your reference")[:60],
+               closest_look=res.get("closest_look") if res.get("closest_look") in (st_.get("looks") or {}) else None)
+    try:
+        ref["shot_seconds"] = round(max(0.8, min(12.0, float(res.get("shot_seconds")))), 1)
+    except (TypeError, ValueError):
+        pass
+    s["look_name"] = ref["look_name"]
+
+
 def with_look(st_: dict, s: dict) -> dict:
-    """A template with looks (Cinecode Film): the project's look recipe joins the style rules."""
+    """A template with looks (Cinecode Film): the project's look recipe joins the style rules. A remake of an analysed
+    video uses the look Claude wrote from the reference instead, and the reference's pace and structure join the plan."""
+    ref = s.get("reference") or {}
+    if st_.get("looks") and ref.get("look_md"):
+        st = dict(st_)
+        st.update(look_id="reference", look_name=ref.get("look_name") or "From your reference",
+                  style_md=st_["style_md"] + "\n\nTHE LOOK RECIPE (written from the reference video; binding):\n" + ref["look_md"],
+                  plan_md=st_["plan_md"] + "\n\n" + reference_plan_md(ref))
+        return st
     if not st_.get("looks"):
         return st_
     look = s.get("look") if s.get("look") in st_["looks"] else st_["look"]
@@ -861,8 +977,10 @@ async def run(pid: str):
         try:
             if not s:
                 return
-            st_ = with_look(studio_styles.style(s["template"]), s)
             s["error"] = None
+            if s["status"] == "planning" and s.get("reference") and not s["reference"].get("look_md"):
+                await _reference_look(studio_styles.style(s["template"]), s); save(s)
+            st_ = with_look(studio_styles.style(s["template"]), s)
             if s["status"] == "planning":
                 await _plan(st_, s); save(s); return
             if s["status"] != "producing":
@@ -901,9 +1019,11 @@ async def run(pid: str):
 
 
 def create(template: str, topic: str, minutes: int, voice: str | None, notes: str | None, uploads: list | None = None,
-           look: str | None = None) -> dict:
+           look: str | None = None, reference: dict | None = None) -> dict:
     st_ = studio_styles.style(template)
     lo, hi = st_.get("minutes", (2, 12))
+    if reference:
+        lo = 1                                  # a remake of a short reel can stay short
     s = {"id": str(uuid.uuid4()), "template": template, "template_name": st_["name"], "created": time.time(),
          "topic": (topic or "").strip()[:300], "notes": (notes or "").strip()[:600], "minutes": max(lo, min(hi, int(minutes or 5))),
          "voice": voice if voice in (st_.get("voices") or []) else st_["voice"], "status": "planning", "stage": "plan",
@@ -912,6 +1032,11 @@ def create(template: str, topic: str, minutes: int, voice: str | None, notes: st
     if st_.get("looks"):
         s["look"] = look if look in st_["looks"] else st_["look"]
         s["look_name"] = st_["looks"][s["look"]]
+    if reference:
+        s["reference"] = reference
+        s["look_name"] = "From your reference"
+        if reference.get("same_topic") and not s["topic"]:
+            s["topic"] = "The same subject as the reference video (see the plan rules)"
     save(s)
     return s
 
